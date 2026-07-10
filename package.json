@@ -1,0 +1,23 @@
+{
+  "name": "taletrek",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Free, open-source reading companion — turn any ebook into an audiobook with on-device TTS. By l1br3.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.31.0",
+  "scripts": {
+    "dev": "pnpm -C web dev",
+    "build": "pnpm -C web build",
+    "preview": "pnpm -C web preview",
+    "typecheck": "pnpm -C web typecheck",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
+    "test": "pnpm -C web test",
+    "test:watch": "pnpm -C web test:watch",
+    "verify": "biome check && pnpm -C web typecheck && pnpm -C web test && pnpm -C web build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.3"
+  }
+}

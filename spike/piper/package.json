@@ -1,0 +1,19 @@
+{
+  "name": "taletrek-spike-piper",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5174",
+    "build": "vite build",
+    "preview": "vite preview --port 4174"
+  },
+  "dependencies": {
+    "@mintplex-labs/piper-tts-web": "1.0.4",
+    "onnxruntime-web": "1.18.0"
+  },
+  "devDependencies": {
+    "vite": "8.1.4",
+    "vite-plugin-cross-origin-isolation": "0.1.6"
+  }
+}
