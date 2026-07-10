@@ -1,0 +1,15 @@
+# TaleTrek
+
+> Every story is a journey.
+
+Free, open-source reading companion by l1br3. Turn any ebook (PDF, EPUB, MOBI, TXT) into an audiobook with on-device neural text-to-speech (Piper). Progressive Web App — no cloud, no subscription.
+
+## Docs
+
+- [Vision](https://github.com/l1br3/taletrek/blob/master/docs/VISION.md)
+- [Roadmap](https://github.com/l1br3/taletrek/blob/master/docs/ROADMAP.md)
+- [M0 Foundation PRD](https://github.com/l1br3/taletrek/blob/master/docs/prds/M0-foundation.md)
+
+## License
+
+MIT for TaleTrek source; Piper TTS engine is GPL-3.0.

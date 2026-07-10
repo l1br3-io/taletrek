@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+
+# build output
+web/dist/
+web/.vite/
+
+# generated PWA
+web/dev-dist/
+web/public/icons/generated/
+
+# typescript
+*.tsbuildinfo
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# env
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*

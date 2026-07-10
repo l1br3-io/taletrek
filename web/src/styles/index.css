@@ -1,0 +1,70 @@
+@import 'tailwindcss';
+
+/*
+ * Semantic palette tokens. Each maps to a --tt-* variable that the
+ * SettingsProvider overrides per theme (dark default, sepia alt). Tailwind
+ * generates utilities from the --color-* names: bg-bg, bg-surface, bg-elevated,
+ * text-fg, text-muted, text-accent, border-line, etc.
+ */
+@theme {
+  --color-bg: var(--tt-bg);
+  --color-surface: var(--tt-surface);
+  --color-elevated: var(--tt-elevated);
+  --color-fg: var(--tt-fg);
+  --color-muted: var(--tt-muted);
+  --color-line: var(--tt-line);
+  --color-accent: var(--tt-accent);
+  --color-accent-soft: var(--tt-accent-soft);
+  --font-reader: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+}
+
+/* Dark — default. */
+:root {
+  --tt-bg: #0b1120;
+  --tt-surface: #111827;
+  --tt-elevated: #1f2937;
+  --tt-fg: #e5e7eb;
+  --tt-muted: #9ca3af;
+  --tt-line: #1f2937;
+  --tt-accent: #4ade80;
+  --tt-accent-soft: rgba(74, 222, 128, 0.18);
+  --font-scale: 1;
+}
+
+/* Sepia — warm, paper-like. */
+:root[data-theme='sepia'] {
+  --tt-bg: #f4ecd8;
+  --tt-surface: #ece2c9;
+  --tt-elevated: #e0d4b4;
+  --tt-fg: #3d2f1f;
+  --tt-muted: #6a5538;
+  --tt-line: #ddcfac;
+  --tt-accent: #8a5a2b;
+  --tt-accent-soft: rgba(138, 90, 43, 0.16);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+/* Reader text scale — used by the reader view and the settings preview. */
+.tt-reader-text {
+  font-family: var(--font-reader);
+  font-size: calc(1.125rem * var(--font-scale));
+  line-height: 1.7;
+}
