@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { PlayerBar } from '../components/PlayerBar'
 import { ReaderView } from '../components/ReaderView'
 import { UploadButton } from '../components/UploadButton'
 import { useSettings } from '../context/settings'
 import { useMediaSession } from '../hooks/useMediaSession'
 import { useParagraphPlayer } from '../hooks/useParagraphPlayer'
+import { cleanChapters } from '../lib/clean'
 import { getChaptersByBook, getMostRecentBook, putBook, putBookFile, putChapters } from '../lib/db'
 import { parseInWorker } from '../lib/parse/client'
 import { formatForFile } from '../lib/parse/util'
@@ -24,8 +25,12 @@ type UploadState =
 /** Playback view for a loaded book — owns the player hook (keyed by book.id). */
 function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
   const { settings, update } = useSettings()
+  const cleanedChapters = useMemo(
+    () => cleanChapters(chapters, settings.cleaning),
+    [chapters, settings.cleaning],
+  )
   const player = useParagraphPlayer({
-    chapters,
+    chapters: cleanedChapters,
     voiceId: settings.voiceId,
     playbackRate: settings.playbackRate,
     engine: ttsClient,
@@ -33,14 +38,14 @@ function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
   useMediaSession({
     player,
     bookTitle: book.title,
-    chapters,
+    chapters: cleanedChapters,
     playbackRate: settings.playbackRate,
   })
   return (
     <div className="space-y-6">
       <ReaderView
         book={book}
-        chapters={chapters}
+        chapters={cleanedChapters}
         currentParagraphId={player.currentParagraphId}
         onSeekParagraph={player.seekToParagraph}
       />

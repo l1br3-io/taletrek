@@ -1,196 +1,201 @@
-# M3 — Jog Mode · Plan
+# M4 — Clean Reading · Plan
 
-> Per-task detail for [`todo.md`](./todo.md). Spec: [`docs/prds/M3-jog.md`](../docs/prds/M3-jog.md).
-> Ordering: T1 → T2 → T3 → (T4 ∥ T5) → T6.
+> Per-task detail for [`todo.md`](./todo.md). Spec:
+> [`docs/prds/M4-clean-reading.md`](../docs/prds/M4-clean-reading.md).
+> Ordering: T1 → T2 → T3 → T4 → T5.
 
 ## Resuming
 
-**As of 2026-07-11 (M3 complete):** M3 — Jog Mode is **complete.**
-`pnpm verify` green — lint ✅, typecheck ✅, test ✅ (**161 tests / 19 files**,
-up from 120/17 in M2), build ✅ (97 modules, PWA generated). Browser-verified
-via chrome-devtools MCP on the production preview build: uploaded a 3-"chapter"
-TXT → Play → gapless playback through all paragraphs with the pre-render queue
-synthesizing ahead (6 distinct blob URLs + repeated phonemize synth calls =
-N=3 look-ahead confirmed), Media Session metadata wired (title=test-book,
-artist=TaleTrek, album=chapter, artwork=app icon) + `playbackState` tracking
-transitions (playing → none on natural end), chapter-skip buttons rendering,
-all 4 iOS meta tags present, zero console errors (one benign ORT `numThreads`
-warn — M2 deviation #2), zero cdnjs/jsdelivr calls.
+**As of 2026-07-12 (M4 complete):** M4 — Clean Reading is **complete.**
+`pnpm verify` green — lint ✅, typecheck ✅, test ✅ (**216 tests / 22 files**,
+up from 161/19 in M3), build ✅ (100 modules, up from 97, PWA generated).
+Browser-verified via chrome-devtools MCP on the production preview build:
+uploaded a 6-paragraph TXT with URLs, `[1]`/`[12]` footnote markers, and
+standalone `42`/`page 7` page-number lines → display showed exactly 4 cleaned
+paragraphs (footnotes stripped, URL stripped, page-number paragraphs dropped,
+clean paragraph untouched). Navigated to Settings → toggled the URLs filter off
++ added a `hero`→`HERO` pronunciation entry → returned to Reader → display now
+showed `https://example.com` (URL filter off) AND "The HERO walked into the
+tavern." (pronunciation applied, case-insensitive whole-word). All four
+remaining filters stayed active. Zero console errors, zero cdnjs calls.
 
-**Working tree:** the M3 implementation is **uncommitted** — run
-`git status --porcelain` for the live count. Land the work before starting M4.
-Last commit: `16660a6 update M2`.
+**Working tree:** the M4 implementation is **uncommitted** — run
+`git status --porcelain` for the live count. Land the work before starting M5.
+Last commit: `e977801 finish M3`.
 
-**Real-iPhone background-playback gate (gotcha #5) is still OPEN** — desktop MCP
-verified Media Session wiring + tab-background continuity, but a locked-screen
-run on real iOS hardware is required before claiming background playback works.
-See "Real-iPhone manual gate" below for the checklist.
+**Shipped this milestone:** pure `lib/clean/` module (`types.ts`, `filters.ts`
+with `stripUrls`/`stripImages`/`stripFootnoteRefs`/`isPageNumberLine`/
+`cleanText`, `pronunciation.ts` with `applyPronunciation` regex-escaped
+whole-word case-insensitive, `index.ts` with `cleanParagraphs`/`cleanChapters`
+dropping empties + `enabled:false` passthrough); `CleaningConfig` on `Settings`
++ `DEFAULT_CLEANING` (additive — zero migration, no `DB_VERSION` bump);
+`reader.tsx` derives `cleanedChapters` via `useMemo` → both player + ReaderView;
+`useParagraphPlayer` invalidates the queue on paragraphs-reference change;
+settings UI with master toggle + four filter rows + pronunciation editor
+(add/edit/delete, `crypto.randomUUID` keys).
 
-**Shipped this milestone:** look-ahead pre-render queue in `useParagraphPlayer`
-(N=3, play-current-first, gapless advance from buffer, invalidate-on-seek,
-voice-change buffer clear, back-pressure, `nextChapter`/`prevChapter`,
-`seekBy`/`seekTo`/`getAudioPosition`); extended `AudioController` boundary
-(`seekBy`/`seekTo`/`currentTime`/`duration`); `lib/media-session.ts` module
-(`setMediaMetadata`/`setMediaSessionHandlers`/`setMediaPlaybackState`/
-`setMediaPositionState`/`clearMediaSession`, all guarded); `useMediaSession`
-hook (registers handlers once via refs, metadata on book/chapter change,
-playback+position state on transitions); PlayerBar chapter-skip buttons +
-buffering-ahead indicator; `playsinline` + iOS meta tags for background readiness.
+**Real-iPhone background-playback gate (gotcha #5) is still OPEN** from M3 —
+desktop MCP verified tab-backgrounding + Media Session wiring, but a
+locked-screen run on real iOS hardware is required before claiming background
+playback works. Unchanged by M4 (M4 does not touch playback behavior).
 
 ---
 
 ## Tasks
 
-### T1 — Pre-render queue in `useParagraphPlayer`
-- **Detail:** Add a look-ahead buffer to the existing hook. Internally keep a
-  `Map<paragraphId, RenderedChunk { blob, url }>` of pre-rendered audio. On
-  `play`, synthesize the **current** paragraph first and play it as soon as it
-  resolves (do NOT block on a full prime); concurrently kick off look-ahead
-  synth for the next N=3 paragraphs (serialized through the worker, but
-  overlapping with playback so warm ≈1s synth completes during the multi-second
-  audio). On `ended`, advance the pointer and **play the already-buffered next
-  chunk** (gapless), then top-up the queue by one. On any pointer move
-  (`seekToParagraph`/`next`/`prev`/`stop`), **invalidate the queue**: revoke all
-  queued Blob URLs and re-prime around the new position. Back-pressure: never
-  synth beyond N ahead. Add `nextChapter()`/`prevChapter()` that jump the
-  pointer to the first paragraph whose `chapterIndex` is ±1. Extend
-  `AudioController` with `seekBy(delta)`/`seekTo(seconds)`/`currentTime`/
-  `duration` getters (needed by T3 for Media Session seek + position state);
-  the real impl wraps `HTMLAudioElement.currentTime`/`.duration`/`.pause()`+seek.
-  Reuse the existing token-cancellation so stale look-ahead results are dropped.
-  Keep the M2 `ended`-handler `playing`-status guard (deviation #4).
-- **Depends on:** M2 (worker client + `useParagraphPlayer`).
-- **Acceptance:** gapless advance from the buffer (no synth for the
-  immediately-next paragraph on `ended`); queue invalidated + URLs revoked on
-  seek; back-pressure honored (≤N synth calls outstanding); `nextChapter`/
-  `prevChapter` land on the right paragraph; **every queued Blob URL is
-  revoked** on consume/invalidate/unmount.
-- **Verify:** `hooks/useParagraphPlayer.test.ts` (extended) — extend `FakeAudio`
-  with the new boundary methods; assert queue fill/advance/invalidate/
-  back-pressure + chapter skip.
-- **Files:** `web/src/hooks/useParagraphPlayer.ts`, `useParagraphPlayer.test.ts`.
+### T1 — Cleaning module (`lib/clean/`)
+- **Detail:** Create a pure, side-effect-free module (no React/IDB/DOM) under
+  `web/src/lib/clean/`. `types.ts` holds `CleaningFilters`,
+  `PronunciationEntry`, `CleaningConfig`. `filters.ts` holds four pure
+  `string → string` (or predicate) functions: (a) `stripUrls` — drop bare
+  `https?://\S+` and `www\.\S+`, rewrite markdown `[text](url)` → keep `text`;
+  (b) `stripImages` — drop `![alt](url)` entirely, drop `[Image: …]` /
+  `[Figure: …]` markers; (c) `stripFootnoteRefs` — drop inline `[\d{1,3}]`,
+  drop `[n]:` definitions, drop superscript unicode digits `¹²³`; **do not**
+  match `(\d+)` (catches years like `(1984)`); (d) `isPageNumberLine` —
+  predicate true when the *whole* paragraph is `^\s*\d{1,4}\s*$` or
+  `^\s*page\s+\d+\s*$` (case-insensitive). `pronunciation.ts` holds
+  `applyPronunciation(text, entries)`: build a single alternation regex from
+  the `find` strings, **each regex-escaped**, matched whole-word
+  (`\bescaped\b`) and case-insensitive; empty `find` entries skipped; first
+  match wins per position; replace via the corresponding `replace`. `index.ts`
+  composes: `cleanText(text, filters)` runs the active structural filters in
+  order; `cleanParagraphs(paragraphs, config)` returns `config.enabled ?
+  paragraphs.map(p => applyPronunciation(cleanText(p, config.filters),
+  config.pronunciation)).filter(nonEmpty) : paragraphs` (returns the **same
+  reference** when disabled); `cleanChapters(chapters, config)` maps over
+  chapters, preserving `title`/`index`/`id` and rewriting only `paragraphs`.
+  Page-number filter drops the whole paragraph (via `isPageNumberLine`)
+  *before* the structural-in-paragraph filters run on the survivors.
+- **Depends on:** — (foundation; T2/T3 consume it).
+- **Acceptance:** all four filters transform representative strings correctly
+  (incl. the `(1984)` negative); markdown link keeps its text; pronunciation is
+  whole-word + case-insensitive + regex-escaped (`C++` doesn't crash); empties
+  dropped; `enabled:false` returns the input reference unchanged; `cleanChapters`
+  preserves all chapter fields except `paragraphs`.
+- **Verify:** `lib/clean/{filters,pronunciation,index}.test.ts`.
+- **Files:** `web/src/lib/clean/types.ts`, `filters.ts`, `pronunciation.ts`,
+  `index.ts`, `filters.test.ts`, `pronunciation.test.ts`, `index.test.ts`.
 
-Checkpoint A — Pre-render proven (gapless playback through a chapter) · ☐
+Checkpoint A — Cleaning module pure + tested · ☐
 
-### T2 — Media Session module
-- **Detail:** Extend `lib/media-session.ts` (currently a capability probe) with
-  four pure, guarded functions: `setMediaMetadata({title, artist, album,
-  artworkUrl})` → constructs `new MediaMetadata({...})` and assigns it;
-  `setMediaSessionHandlers(handlers)` → registers all seven actions
-  (`play`/`pause`/`seekbackward`/`seekforward`/`seekto`/`nexttrack`/
-  `previoustrack`) and returns an unsubscribe that nulls them;
-  `setPlaybackState('playing'|'paused'|'none')`; `setPositionState({duration,
-  position, playbackRate})`. Every call no-ops gracefully when
-  `!isMediaSessionSupported()` (the existing probe). No React, no DOM — pure
-  platform-API wrappers.
-- **Depends on:** — (foundation; T3 consumes it).
-- **Acceptance:** all four functions call through correctly when supported and
-  are no-ops when not; handler cleanup removes all seven handlers.
-- **Verify:** `lib/media-session.test.ts` — mock `navigator.mediaSession` +
-  `MediaMetadata` (jsdom has neither); assert metadata fields, handler
-  registration + cleanup, playback/position state, and the unsupported no-op.
-- **Files:** `web/src/lib/media-session.ts`, `media-session.test.ts`.
+### T2 — Settings additions
+- **Detail:** Add `CleaningConfig` (imported from `lib/clean/types`) to the
+  `Settings` interface in `context/settings.tsx`. Add a `cleaning` field to
+  `DEFAULT_SETTINGS`: `{ enabled: true, filters: { urls: true, images: true,
+  footnotes: true, pageNumbers: true }, pronunciation: [] }`. The existing
+  spread-merge hydration (`{ ...DEFAULT_SETTINGS, ...stored }`) fills the new
+  field for existing users automatically — **no migration code, no
+  `DB_VERSION` bump**. No other changes to the provider.
+- **Depends on:** T1 (for the `CleaningConfig` type).
+- **Acceptance:** a stored `Settings` record lacking `cleaning` hydrates with
+  the full default; `useSetting('cleaning')` returns the tuple; a round-trip
+  (`update({cleaning: x})` → reload → read) preserves the value.
+- **Verify:** extend `context/settings` coverage or assert via `getSetting('app')`
+  in a settings test.
+- **Files:** `web/src/context/settings.tsx`.
 
-### T3 — Wire Media Session into `/reader`
-- **Detail:** The container registers Media Session handlers **once on mount**
-  (via `useEffect`) that delegate to **refs** holding the latest player
-  functions — so handlers never go stale and we avoid re-registration churn on
-  every status change. Handlers map: `play`→`player.play`, `pause`→`player.pause`,
-  `seekbackward`→`player.seekBy(-15)`, `seekforward`→`player.seekBy(15)`,
-  `seekto`→`player.seekTo`, `nexttrack`→`player.nextChapter`,
-  `previoustrack`→`player.prevChapter`. A separate effect updates
-  `setMediaMetadata` whenever the **book** or **current chapter** changes
-  (derive chapter from `currentParagraphId` → `ParagraphRef.chapterIndex`).
-  Update `setPlaybackState` + `setPositionState` on status transitions
-  (`'playing'`/`'paused'`/`'ended'`/`'idle'`). Cleanup on unmount. Expose a thin
-  injectable boundary so the reader test doesn't need a real `mediaSession`.
-- **Depends on:** T1 (player chapter-skip + `seekBy`/`seekTo`/position), T2 (module).
-- **Acceptance:** metadata reflects book title + current chapter; handlers
-  invoke the correct player method; playback/position state tracks transitions;
-  zero handler re-registration across re-renders.
-- **Verify:** `routes/reader.test.tsx` (extended) — spy the media-session module
-  or inject a fake; assert metadata + handler dispatch.
-- **Files:** `web/src/routes/reader.tsx`, `reader.test.tsx`.
+### T3 — Wire cleaning into reader + player invalidation
+- **Detail:** In `routes/reader.tsx`, derive `cleanedChapters` via `useMemo`
+  keyed on `[load.chapters, settings.cleaning]`: when
+  `settings.cleaning.enabled`, call `cleanChapters(load.chapters,
+  settings.cleaning)`; otherwise return `load.chapters` unchanged. Pass
+  `cleanedChapters` (not `load.chapters`) to **both** `useParagraphPlayer` and
+  `ReaderView`. In `hooks/useParagraphPlayer.ts`, add an effect (or extend the
+  existing generation-token mechanism) that detects a **reference change** to
+  the `chapters` argument: on change, bump the generation token, revoke all
+  queued Blob URLs, clear the queue, and re-prime from the current paragraph
+  index. This mirrors the existing voice-change invalidation. Preserve the
+  current playback position (chapterIndex + paragraphIndex) across the
+  re-prime. Guard: if the hook is idle (not yet played), just re-flatten.
+- **Depends on:** T1 (module), T2 (settings).
+- **Acceptance:** rendered reader text and synthesized text are identical and
+  both reflect cleaning; a URL/noise paragraph is absent from display + audio;
+  toggling a filter mid-playback invalidates the queue and re-primes within one
+  synth cycle; `seekToParagraph` still lands on the right paragraph (ids are
+  consistent within the cleaned array).
+- **Verify:** `routes/reader.test.tsx` (cleaned-text assertion + synth `calls`),
+  `hooks/useParagraphPlayer.test.ts` (chapters-change → queue invalidated).
+- **Files:** `web/src/routes/reader.tsx`, `web/src/hooks/useParagraphPlayer.ts`,
+  `routes/reader.test.tsx`, `hooks/useParagraphPlayer.test.ts`.
 
-Checkpoint B — Media Session wired (metadata + lock-screen handlers active) · ☐
+Checkpoint B — Wired: display + audio reflect cleaning; mid-playback toggle re-primes · ☐
 
-### T4 — Background-audio readiness
-- **Detail:** Add `playsinline` + `preload="auto"` to the audio element in
-  `createAudioController` (iOS background-audio prerequisites — without
-  `playsinline`, iOS pauses on background). Add iOS meta tags to `index.html`:
-  `apple-mobile-web-app-capable=yes` and `apple-mobile-web-app-status-bar-style`
-  (the manifest's `display:standalone` handles Android; these supplement iOS).
-  **Verify via MCP:** play a book, switch the tab to `visibilityState === 'hidden'`,
-  confirm audio keeps playing with zero console errors. Document the
-  **real-iPhone manual gate** (gotcha #5) as a tracked risk — desktop MCP cannot
-  simulate a locked screen; a real-device run is required before claiming iOS
-  background playback works.
-- **Depends on:** T1–T3 (full playback + media session).
-- **Acceptance:** `playsinline` + meta tags present; MCP tab-background run
-  shows continuous audio + zero errors.
-- **Verify:** chrome-devtools MCP — visibility change + console/network clean.
-- **Files:** `web/src/hooks/useParagraphPlayer.ts`, `web/index.html`.
+### T4 — Settings UI
+- **Detail:** Add a cleaning section to `routes/settings.tsx` (props-only UI;
+  reads via `useSetting('cleaning')`). Three parts: (a) a master `enabled`
+  toggle (card-button with `aria-pressed`, mirroring the theme toggle pattern);
+  (b) four filter toggle rows (denser list, each an `aria-pressed` button or
+  checkbox-style row for `urls`/`images`/`footnotes`/`pageNumbers`); (c) a
+  pronunciation-dictionary editor — a list of entries each with `find` + input,
+  `replace` + input, and a delete button, plus an "Add entry" button that
+  appends `{ id: crypto.randomUUID(), find: '', replace: '' }`. All writes go
+  through `update({ cleaning: { ...cleaning, filters: {…} } })` (shallow nested
+  merge — the provider's `update` is a one-level spread, so the settings UI must
+  spread the nested objects explicitly). The section is disabled/hidden when
+  the master toggle is off (except the master toggle itself). Empty `find`
+  entries are allowed in the UI (the cleaning module skips them at apply time).
+- **Depends on:** T2 (settings field).
+- **Acceptance:** master toggle persists across reload; each filter toggle
+  persists; add/edit/delete a pronunciation entry round-trips through IDB;
+  the UI is presentational (no direct IDB calls — all via `useSetting`).
+- **Verify:** `routes/settings.test.tsx` (extended).
+- **Files:** `web/src/routes/settings.tsx`, `web/src/routes/settings.test.tsx`.
 
-### T5 — PlayerBar/UX
-- **Detail:** Surface a "buffering ahead" / "pre-rendering next…" affordance
-  from the hook's look-ahead status (the `'buffering'` flag on `'loading'`,
-  distinct from the cold-current synth state). Add **chapter-skip** buttons to
-  `PlayerBar` so the in-app UX mirrors the lock-screen chapter semantics
-  (existing next/prev stay paragraph-level; new ⏮⏭-style buttons jump chapters).
-  `PlayerBar` stays **presentational** — new `onNextChapter`/`onPrevChapter` +
-  a buffered-ahead indicator prop. Wire the new props in `reader.tsx`.
-- **Depends on:** T1 (chapter skip + buffering flag). Parallel to T4.
-- **Acceptance:** "buffering ahead" renders correctly; chapter-skip buttons
-  call the right callbacks; PlayerBar remains props-only.
-- **Verify:** `components/PlayerBar.test.tsx` (extended).
-- **Files:** `web/src/components/PlayerBar.tsx`, `PlayerBar.test.tsx`, `routes/reader.tsx`.
+Checkpoint C — Settings UI complete · ☐
 
-Checkpoint C — Background-ready + UX complete · ☐
-
-### T6 — End-to-end + browser verify
-- **Detail:** Upload a book → play → gapless through a chapter with the queue
-  pre-rendering ahead (no synth stall between paragraphs); seek mid-paragraph →
-  queue invalidates + re-primes; skip chapter via lock-screen-equivalent →
-  jumps to the chapter start; ±15s seek works; `navigator.mediaSession.metadata`
-  reflects book + chapter; tab-backgrounding keeps audio playing; zero console
-  errors; zero cdnjs calls; `pnpm verify` green. Write the real-iPhone
-  verification checklist into the Deviations section below (and the PRD risks).
-- **Depends on:** T1–T5 (full slice).
-- **Acceptance:** `pnpm verify` green; chrome-devtools MCP run clean; iPhone
-  gate documented.
-- **Verify:** full `pnpm verify` green; MCP browser run.
+### T5 — End-to-end + browser verify
+- **Detail:** Upload a TXT containing URLs, `[1]`-style markers, and standalone
+  page-number lines → confirm the reader omits them and the synthesized audio
+  omits them (assert via stub engine or MCP audio check). Toggle `urls` off
+  mid-playback → the queue invalidates and re-primes, URL reappears. Add a
+  pronunciation entry `{find: 'foo', replace: 'bar'}` → the spoken/displayed
+  text changes. Add a regex-special `find` (`C++`) → no crash. Zero console
+  errors; zero cdnjs calls; `pnpm verify` green. Document any deviations below.
+- **Depends on:** T1–T4 (full slice).
+- **Acceptance:** `pnpm verify` green; chrome-devtools MCP run clean.
+- **Verify:** full `pnpm verify` + chrome-devtools MCP.
 - **Files:** wiring + minor fixes across the slice.
 
-Checkpoint D — Jog slice shipped & `pnpm verify` green · ☐
+Checkpoint D — Clean Reading shipped & `pnpm verify` green · ☐
 
 ---
 
 ## Deviations
 
-1. **`useMediaSession` hook extracted (T3), not inlined in `reader.tsx`.** The
-   PRD lists T3's wiring under `routes/reader.tsx`, but extracting the Media
-   Session effects into a dedicated `hooks/useMediaSession.ts` made the wiring
-   unit-testable with a stub player (mirrors the repo's hook-based style) and
-   kept `ReaderPane` thin. The reader calls `useMediaSession({ player, ... })`;
-   the hook owns handler registration (once, via refs), metadata updates, and
-   playback/position state. No behavior change vs. the PRD; just a cleaner
-   seam. Tests: `hooks/useMediaSession.test.ts` (13 tests).
+1. **Filter execution order is images → urls → footnotes (not urls → images).**
+   The PRD listed filters as urls/images/footnotes conceptually, but
+   `cleanText` runs `stripImages` before `stripUrls` because the `stripUrls`
+   markdown-link regex (`[text](url)`) would otherwise match the `[img](url)`
+   portion of a markdown image `![img](url)`, leaving a stray `!img`. Running
+   images first removes the full image syntax cleanly. No behavior difference
+   for the user; just internal ordering. Caught by the T1 unit tests.
 
-2. **`upload_file` MCP tool can't seed the file input in `--isolated` mode.**
-   The tool creates a filesystem-backed `File` whose handle the isolated
-   browser profile can't re-read — `file.arrayBuffer()` rejects with
-   `NotFoundError` ("A requested file or directory could not be found"). Not a
-   code bug (the parse path is correct per gotcha #8); it's an environment
-   limitation. T6's browser run worked around it by constructing an in-memory
-   `File` via page-side JS and dispatching the `change` event. No production
-   impact — real users drag/drop or pick via the native file picker, which
-   yields a readable `File`.
+2. **Settings test hydration pattern (`renderHydrated` helper).** The
+   SettingsProvider's async hydration (`getSetting().then(setSettings)`) can
+   overwrite an optimistic UI update if a test clicks before hydration
+   resolves. The existing theme test solved this by pre-seeding a value and
+   using `findByRole({pressed: ...})` to wait. The cleaning tests adopt the
+   same pattern via a `renderHydrated()` helper that pre-seeds
+   `{fontScale: 1.25}` as a sentinel and waits for the `×1.25` marker (which
+   only appears post-hydration) before interacting. Also added
+   `_clearDBForTests()` to the settings `beforeEach` for test isolation. No
+   production impact — in real usage hydration completes in milliseconds.
 
-## Real-iPhone manual gate (gotcha #5)
+3. **`prevParagraphsRef` invalidation in `useParagraphPlayer` (T3).** The PRD
+   described chapters-change invalidation abstractly; the implementation keys
+   on the `paragraphs` memo reference (which changes when `chapters` changes),
+   mirroring the existing voice-change effect exactly (`genRef++`,
+   `queueRef.clear()`, `syncBufferedAhead()`). No playback interruption — the
+   current paragraph finishes; the next advance re-synthesizes with the new
+   cleaning config. The "brief re-synth" is the cleared buffer re-filling on
+   advance, same class as a voice change.
+
+## Real-iPhone manual gate (gotcha #5 — carried from M3)
 
 Desktop MCP cannot simulate a locked screen or true app-backgrounding on iOS.
-Before M3 is considered "done" for the product's core promise, verify on a real
-iPhone (installed to home screen, standalone mode):
+Before the read-aloud core is considered "done" for the product's core promise,
+verify on a real iPhone (installed to home screen, standalone mode):
 
 1. Start playback → lock the screen → audio continues.
 2. Lock-screen controls render (▶/⏸, ⏮/⏭ chapter skip, ±15s, seekbar).
@@ -198,6 +203,5 @@ iPhone (installed to home screen, standalone mode):
 4. Background the browser fully → audio continues for ≥30s.
 5. Re-open → playback state is intact.
 
-If iOS fails any step, record the deviation here and adjust (e.g. a visible
-`<audio>` element, a wake-lock, or scope the background claim to Android until
-fixed). Do **not** publicly claim iOS background playback works without this run.
+M4 does not change playback behavior, so this gate is unchanged from M3. Do
+**not** publicly claim iOS background playback works without this run.

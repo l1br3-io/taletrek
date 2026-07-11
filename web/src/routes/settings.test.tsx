@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsProvider } from '../context/settings'
-import { _resetDBForTests, getSetting, setSetting } from '../lib/db'
+import { _clearDBForTests, _resetDBForTests, getSetting, setSetting } from '../lib/db'
 import { type VoiceId, voiceId } from '../types'
 import { Settings } from './settings'
 
@@ -24,8 +24,9 @@ function withProviders(node: React.ReactElement) {
   )
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   _resetDBForTests()
+  await _clearDBForTests()
   isStoredMock.mockReset()
   downloadMock.mockReset()
   isStoredMock.mockResolvedValue(false)
@@ -73,5 +74,81 @@ describe('Settings view', () => {
     fireEvent.click(screen.getByText(/Ryan/))
     const stored = await getSetting<{ voiceId: VoiceId }>('app')
     expect(stored?.voiceId).toBe(voiceId('en_US-ryan-medium'))
+  })
+})
+
+async function renderHydrated() {
+  await setSetting('app', { fontScale: 1.25 })
+  render(withProviders(<Settings />))
+  await screen.findByText('×1.25')
+}
+
+describe('Settings — text cleaning', () => {
+  it('renders the master toggle and four filter rows when enabled', async () => {
+    await renderHydrated()
+    expect(
+      screen.getByRole('button', { name: /toggle text cleaning/i, pressed: true }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /links & urls/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /image markers/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /footnote references/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /page numbers/i })).toBeInTheDocument()
+  })
+
+  it('toggles a filter and persists it to IndexedDB', async () => {
+    await renderHydrated()
+    const urls = screen.getByRole('button', { name: /links & urls/i })
+    expect(urls).toHaveAttribute('aria-pressed', 'true')
+    await act(async () => {
+      fireEvent.click(urls)
+    })
+    expect(urls).toHaveAttribute('aria-pressed', 'false')
+    const stored = await getSetting<{ cleaning: { filters: { urls: boolean } } }>('app')
+    expect(stored?.cleaning.filters.urls).toBe(false)
+  })
+
+  it('disables the master toggle and hides the filter rows', async () => {
+    await renderHydrated()
+    const master = screen.getByRole('button', { name: /toggle text cleaning/i })
+    await act(async () => {
+      fireEvent.click(master)
+    })
+    expect(master).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByRole('button', { name: /links & urls/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('Settings — pronunciation dictionary', () => {
+  it('adds, edits, and persists a pronunciation entry', async () => {
+    await renderHydrated()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /add word/i }))
+    })
+    const findInput = screen.getByLabelText(/word to replace/i)
+    const replaceInput = screen.getByLabelText(/^replacement$/i)
+    await act(async () => {
+      fireEvent.change(findInput, { target: { value: 'Siobhan' } })
+    })
+    await act(async () => {
+      fireEvent.change(replaceInput, { target: { value: 'shi-vawn' } })
+    })
+    const stored = await getSetting<{
+      cleaning: { pronunciation: { find: string; replace: string }[] }
+    }>('app')
+    expect(stored?.cleaning.pronunciation).toEqual([
+      expect.objectContaining({ find: 'Siobhan', replace: 'shi-vawn' }),
+    ])
+  })
+
+  it('deletes a pronunciation entry', async () => {
+    await renderHydrated()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /add word/i }))
+    })
+    expect(screen.getByLabelText(/word to replace/i)).toBeInTheDocument()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /remove entry/i }))
+    })
+    expect(screen.queryByLabelText(/word to replace/i)).not.toBeInTheDocument()
   })
 })

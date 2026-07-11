@@ -1,30 +1,29 @@
-# M3 — Jog Mode · Task checklist
+# M4 — Clean Reading · Task checklist
 
 > Source of truth for `/status` and `/build`. Task detail + dependencies live in
-> [`plan.md`](./plan.md); spec in [`docs/prds/M3-jog.md`](../docs/prds/M3-jog.md).
-> Checkpoints gate phases: A pre-render → B media session → C background + UX → D milestone verified.
+> [`plan.md`](./plan.md); spec in [`docs/prds/M4-clean-reading.md`](../docs/prds/M4-clean-reading.md).
+> Checkpoints gate phases: A cleaning module → B wired → C settings UI → D shipped.
 
-## Phase 1 — Pre-render engine
-- [x] T1 — Pre-render queue in `useParagraphPlayer` (look-ahead N=3, gapless advance, chapter skip, `AudioController` extension)
+## Phase 1 — Cleaning module
+- [x] T1 — `lib/clean/` pure transforms: `cleanText` (4 filters), `applyPronunciation`, `cleanParagraphs`, `cleanChapters`; empties dropped; `enabled:false` passthrough
 
-Checkpoint A — Pre-render proven (gapless playback through a chapter) · ✅
+Checkpoint A — Cleaning module pure + tested · ✅
 
-## Phase 2 — Media Session
-- [x] T2 — Media Session module (`setMediaMetadata`, `setMediaSessionHandlers`, `setPlaybackState`, `setPositionState`)
-- [x] T3 — Wire Media Session into `/reader` (metadata on book/chapter change, handlers → player refs)
+## Phase 2 — Settings + wiring
+- [x] T2 — `CleaningConfig` on `Settings` + `DEFAULT_SETTINGS`; spread-merge fills defaults for existing users (no migration, no `DB_VERSION` bump)
+- [x] T3 — `reader.tsx` derives `cleanedChapters` (`useMemo`) → player + `ReaderView`; `useParagraphPlayer` invalidates queue on chapters-reference change
 
-Checkpoint B — Media Session wired (metadata + lock-screen handlers active) · ✅
+Checkpoint B — Wired: display + audio reflect cleaning; mid-playback toggle re-primes · ✅
 
-## Phase 3 — Background + UX
-- [x] T4 — Background-audio readiness (`playsinline`, iOS meta tags, tab-background MCP verify)
-- [x] T5 — PlayerBar/UX ("buffering ahead" state, chapter-skip buttons)
+## Phase 3 — Settings UI
+- [x] T4 — Cleaning section in `settings.tsx`: master toggle, four filter rows, pronunciation editor (add/edit/delete); all persist
 
-Checkpoint C — Background-ready + UX complete · ✅
+Checkpoint C — Settings UI complete · ✅
 
 ## Phase 4 — End-to-end verify
-- [x] T6 — E2E + browser verify (gapless, media-session verified, tab-background continuity, zero console errors, `pnpm verify` green; iPhone gate documented)
+- [x] T5 — E2E + browser verify (display + audio cleaned, mid-playback re-prime, pronunciation changes speech, zero console errors, zero cdnjs, `pnpm verify` green)
 
-Checkpoint D — Jog slice shipped & `pnpm verify` green · ✅
+Checkpoint D — Clean Reading shipped & `pnpm verify` green · ✅
 
 ---
 

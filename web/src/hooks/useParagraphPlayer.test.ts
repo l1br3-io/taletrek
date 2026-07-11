@@ -502,6 +502,33 @@ describe('useParagraphPlayer — pre-render queue (lookahead=3)', () => {
       expect(result.current.bufferedAhead).toBe(0)
     })
   })
+
+  it('invalidates the buffer when the chapters reference changes', async () => {
+    const engine = stubEngine()
+    const audio = new FakeAudio()
+    const { result, rerender } = renderPlayer(oneChapter(['A.', 'B.', 'C.']), {
+      engine,
+      audio,
+      lookahead: 3,
+    })
+    await act(async () => {
+      result.current.play()
+    })
+    await waitFor(() => {
+      expect(result.current.bufferedAhead).toBe(2)
+    })
+    rerender({
+      chapters: oneChapter(['A-clean.', 'B-clean.', 'C-clean.']),
+      voiceId: VOICE,
+      rate: 1,
+      engine,
+      audio,
+      lookahead: 3,
+    })
+    await waitFor(() => {
+      expect(result.current.bufferedAhead).toBe(0)
+    })
+  })
 })
 
 // Chapter-skip tests (multi-chapter books).

@@ -348,6 +348,18 @@ export function useParagraphPlayer({
     syncBufferedAhead()
   }, [voiceId, syncBufferedAhead])
 
+  // Chapters change (e.g. cleaning toggled): invalidate the buffer so stale
+  // chunks synthesized from the old text are not served. Playback is not
+  // interrupted; the next advance re-synthesizes with the new text.
+  const prevParagraphsRef = useRef(paragraphs)
+  useEffect(() => {
+    if (prevParagraphsRef.current === paragraphs) return
+    prevParagraphsRef.current = paragraphs
+    genRef.current++
+    queueRef.current.clear()
+    syncBufferedAhead()
+  }, [paragraphs, syncBufferedAhead])
+
   // Cleanup on unmount.
   useEffect(() => {
     return () => {

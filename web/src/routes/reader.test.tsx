@@ -89,4 +89,25 @@ describe('Reader', () => {
     })
     expect(await screen.findByText(/boom/)).toBeInTheDocument()
   })
+
+  it('cleans noise from the displayed text (urls, footnotes, page numbers)', async () => {
+    parseInWorker.mockResolvedValue({
+      title: 'Cleaned',
+      chapters: [
+        {
+          title: 'Cleaned',
+          paragraphs: ['see [1] note', '42', 'visit https://x.io end'],
+        },
+      ],
+    })
+    render(withProviders(<Reader />))
+    await screen.findByText(/No book loaded yet/i)
+    fireEvent.change(fileInput(), {
+      target: { files: [new File(['x'], 'cleaned.txt', { type: 'text/plain' })] },
+    })
+    await screen.findByRole('heading', { name: 'Cleaned' })
+    expect(await screen.findByText('see note')).toBeInTheDocument()
+    expect(screen.queryByText('42')).not.toBeInTheDocument()
+    expect(screen.getByText('visit end')).toBeInTheDocument()
+  })
 })

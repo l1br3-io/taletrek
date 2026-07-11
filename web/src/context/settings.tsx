@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react'
+import type { CleaningConfig } from '../lib/clean/types'
 import { getSetting, setSetting } from '../lib/db'
 import { DEFAULT_VOICE_ID } from '../lib/tts/voices'
 import type { VoiceId } from '../types'
@@ -14,6 +15,14 @@ export interface Settings {
   voiceId: VoiceId
   /** Audio playback speed (0.5–2×); applied via `audio.playbackRate`. */
   playbackRate: number
+  /** Text-cleaning pipeline config (M4). */
+  cleaning: CleaningConfig
+}
+
+export const DEFAULT_CLEANING: CleaningConfig = {
+  enabled: true,
+  filters: { urls: true, images: true, footnotes: true, pageNumbers: true },
+  pronunciation: [],
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -21,6 +30,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fontScale: 1,
   voiceId: DEFAULT_VOICE_ID,
   playbackRate: 1,
+  cleaning: DEFAULT_CLEANING,
 }
 
 const SETTINGS_KEY = 'app'
