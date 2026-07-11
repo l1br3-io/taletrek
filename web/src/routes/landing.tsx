@@ -1,3 +1,5 @@
+import { Link } from 'react-router'
+
 export function Landing() {
   return (
     <div className="space-y-8">
@@ -12,6 +14,12 @@ export function Landing() {
         <p className="text-sm text-muted">
           A free, open-source reading companion by <span className="text-fg">l1br3</span>.
         </p>
+        <Link
+          to="/reader"
+          className="inline-block rounded-lg border border-accent bg-accent-soft px-5 py-2.5 font-medium text-accent transition-colors hover:bg-elevated"
+        >
+          Upload a book
+        </Link>
       </section>
 
       <section className="rounded-lg border border-line bg-surface p-6">
