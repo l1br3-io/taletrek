@@ -1,17 +1,17 @@
 ---
-description: Snapshot of project state — milestone, task progress, resume notes, working tree, with the next task front and center. Add "verify" to also run cargo test + build.
+description: Snapshot of project state — milestone, task progress, resume notes, working tree, with the next task front and center. Add "verify" to also run pnpm verify (typecheck + test + lint + build).
 ---
 
 # /status
 
-Produce a read-only snapshot of where the Castify project is right now. The
+Produce a read-only snapshot of where the TaleTrek project is right now. The
 **next task** is the hero of the output — everything else is context for it.
 
 ## Modes
 
 - `/status` — parse docs + git only. Fast (~1s). Default.
-- `/status verify` — additionally run `cargo test`, `cargo check`, and the
-  frontend build. Slower, but exposes stale "done" checkboxes. Treat `verify`
+- `/status verify` — additionally run `pnpm verify` (typecheck + test + lint +
+  build). Slower, but exposes stale "done" checkboxes. Treat `verify`
   (canonical) as the verify mode; anything else (or empty) is the default.
 
 ## What to read, in order
@@ -38,7 +38,7 @@ Produce a read-only snapshot of where the Castify project is right now. The
 ## Output template
 
 ```markdown
-## Castify status — <M# Milestone> (<theme>)
+## TaleTrek status — <M# Milestone> (<theme>)
 
 ### ▶ Next task
 **<T#> — <title>**
@@ -66,9 +66,10 @@ template with a one-line pass/fail for each command:
 
 ```markdown
 ### Verification
-- `cargo check --workspace`: ✅
-- `cargo test --workspace`: ✅ (N tests)
-- `npm run build` (frontend): ✅
+- `pnpm lint`: ✅
+- `pnpm typecheck`: ✅
+- `pnpm test`: ✅ (N tests)
+- `pnpm build`: ✅
 ```
 
 ## Rules

@@ -8,7 +8,7 @@
 | --------- | ----- | ---- |
 | M0 — Foundation | ✅ **Done** (commit `e9bdd61`) | [`docs/prds/M0-foundation.md`](docs/prds/M0-foundation.md) |
 | Piper spike | ✅ Done (thesis proven in-browser) | [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) |
-| M1 — Upload & Read | ⬜ **Next** | see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| M1 — Upload & Read | ✅ **Done** (PDF/EPUB/TXT slice; MOBI = T8 spike pending) | [`docs/prds/M1-upload-read.md`](docs/prds/M1-upload-read.md) |
 | M2–M5 | Planned | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 **Read first:** [`docs/VISION.md`](docs/VISION.md) (the why) → [`docs/ROADMAP.md`](docs/ROADMAP.md) (milestones) → [`docs/prds/M0-foundation.md`](docs/prds/M0-foundation.md) (what shipped, patterns, conventions).
@@ -61,6 +61,9 @@ spike/piper/   throwaway Piper TTS validation app
 3. **Dev SW caches stale bundles** — when verifying source changes in-browser, unregister the SW or test via `pnpm preview` (production build) + hard reload.
 4. **License: fully MIT** (ADR-0002). The GPL option (ADR-0001) is fallback-only. Do not re-litigate unless the MIT package breaks.
 5. **iOS lock-screen background playback is NOT yet verified on real hardware** — the desktop MCP can't test it. Validate on a real iPhone before M3 commits to it.
+6. **Web Workers have no `DOMParser`.** The EPUB parser runs inside the parse worker, so it uses `fast-xml-parser` (worker-safe), not the DOM. Any future parsing that needs a DOM must stay on the main thread or use a worker-safe parser. Unit tests can't catch this (jsdom has DOMParser) — only a real browser run does.
+7. **`pdfjs-dist` is lazy-imported inside `parse()`** — importing it at module top-level pulls `DOMMatrix` at load, which crashes jsdom. Keep the dynamic `await import('pdfjs-dist')` in `pdf.ts`.
+8. **Send file *bytes*, not the `File`, to a worker.** `parseInWorker` reads `file.arrayBuffer()` on the main thread and transfers the `ArrayBuffer`; the worker reconstructs the `File`. Cloning a `File` across the worker boundary can fail for files backed by a filesystem path.
 
 ## How to resume (in a new session)
 
