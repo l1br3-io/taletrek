@@ -1,31 +1,30 @@
-# M2 — Speak · Task checklist
+# M3 — Jog Mode · Task checklist
 
 > Source of truth for `/status` and `/build`. Task detail + dependencies live in
-> [`plan.md`](./plan.md); spec in [`docs/prds/M2-speak.md`](../docs/prds/M2-speak.md).
-> Checkpoints gate phases: A engine+worker → B playback engine → C read-along UI → D milestone verified.
+> [`plan.md`](./plan.md); spec in [`docs/prds/M3-jog.md`](../docs/prds/M3-jog.md).
+> Checkpoints gate phases: A pre-render → B media session → C background + UX → D milestone verified.
 
-## Phase 1 — Engine + worker
-- [x] T1 — Deps + local WASM mirror (pin ORT 1.18.0, zero cdnjs)
-- [x] T2 — TTS types + curated voice catalog
-- [x] T3 — TTS Worker + client (verify OPFS-from-worker)
+## Phase 1 — Pre-render engine
+- [x] T1 — Pre-render queue in `useParagraphPlayer` (look-ahead N=3, gapless advance, chapter skip, `AudioController` extension)
 
-Checkpoint A — Engine + worker proven (synthesize WAV from worker, offline-ready) · ✅
+Checkpoint A — Pre-render proven (gapless playback through a chapter) · ✅
 
-## Phase 2 — Playback engine
-- [x] T4 — `useParagraphPlayer` hook (play/pause/next/prev/seek, auto-advance, Blob-URL revocation)
+## Phase 2 — Media Session
+- [x] T2 — Media Session module (`setMediaMetadata`, `setMediaSessionHandlers`, `setPlaybackState`, `setPositionState`)
+- [x] T3 — Wire Media Session into `/reader` (metadata on book/chapter change, handlers → player refs)
 
-Checkpoint B — Playback engine works (play a book, auto-advance through paragraphs) · ✅
+Checkpoint B — Media Session wired (metadata + lock-screen handlers active) · ✅
 
-## Phase 3 — Read-along UI
-- [x] T5 — Reader read-along (highlight, tap-to-seek, PlayerBar)
-- [x] T6 — Settings: voice picker + speed slider
+## Phase 3 — Background + UX
+- [x] T4 — Background-audio readiness (`playsinline`, iOS meta tags, tab-background MCP verify)
+- [x] T5 — PlayerBar/UX ("buffering ahead" state, chapter-skip buttons)
 
-Checkpoint C — Full slice: upload → read → play → read-along, voice + speed wired · ✅
+Checkpoint C — Background-ready + UX complete · ✅
 
 ## Phase 4 — End-to-end verify
-- [x] T7 — E2E + browser verify (play through chapter, voice switch, speed, offline, 0 console errors)
+- [x] T6 — E2E + browser verify (gapless, media-session verified, tab-background continuity, zero console errors, `pnpm verify` green; iPhone gate documented)
 
-Checkpoint D — Speak slice shipped & `pnpm verify` green · ✅
+Checkpoint D — Jog slice shipped & `pnpm verify` green · ✅
 
 ---
 

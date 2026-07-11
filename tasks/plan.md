@@ -1,127 +1,203 @@
-# M2 — Speak · Plan
+# M3 — Jog Mode · Plan
 
-> Per-task detail for [`todo.md`](./todo.md). Spec: [`docs/prds/M2-speak.md`](../docs/prds/M2-speak.md).
-> Ordering: T1 → T2 → T3 → T4 → (T5 ∥ T6) → T7.
+> Per-task detail for [`todo.md`](./todo.md). Spec: [`docs/prds/M3-jog.md`](../docs/prds/M3-jog.md).
+> Ordering: T1 → T2 → T3 → (T4 ∥ T5) → T6.
 
 ## Resuming
 
-**As of 2026-07-11:** M2 — Speak is **complete.** `pnpm verify` green this
-session — lint ✅, typecheck ✅, test ✅ (120 tests / 17 files), build ✅
-(95 modules, PWA generated). Browser-verified via chrome-devtools MCP:
-per-paragraph playback with monotonic auto-advance + read-along highlight,
-tap-to-seek, voice download/selection, speed persistence, book-reopens-after-
-reload, zero console errors (one benign ORT `numThreads` warn — deviation #2),
-zero cdnjs/jsdelivr calls (wasm served from local mirror).
+**As of 2026-07-11 (M3 complete):** M3 — Jog Mode is **complete.**
+`pnpm verify` green — lint ✅, typecheck ✅, test ✅ (**161 tests / 19 files**,
+up from 120/17 in M2), build ✅ (97 modules, PWA generated). Browser-verified
+via chrome-devtools MCP on the production preview build: uploaded a 3-"chapter"
+TXT → Play → gapless playback through all paragraphs with the pre-render queue
+synthesizing ahead (6 distinct blob URLs + repeated phonemize synth calls =
+N=3 look-ahead confirmed), Media Session metadata wired (title=test-book,
+artist=TaleTrek, album=chapter, artwork=app icon) + `playbackState` tracking
+transitions (playing → none on natural end), chapter-skip buttons rendering,
+all 4 iOS meta tags present, zero console errors (one benign ORT `numThreads`
+warn — M2 deviation #2), zero cdnjs/jsdelivr calls.
 
-**Shipped:** Piper TTS engine (`@mintplex-labs/piper-tts-web@1.0.4` +
-`onnxruntime-web@1.18.0` pinned) wrapping `TtsSession` with local wasm-path
-overrides; a TTS Web Worker + promise-wrapping client (mirrors the M1 parse
-worker pattern); the `useParagraphPlayer` hook (per-paragraph synth, auto-
-advance, Blob-URL revocation, token-based cancellation); `PlayerBar` +
-`ReaderView` read-along highlight/tap-to-seek; `VoicePicker` (curated 8-voice
-catalog, OPFS download/stored states); `voiceId` + `playbackRate` in settings.
+**Working tree:** the M3 implementation is **uncommitted** — run
+`git status --porcelain` for the live count. Land the work before starting M4.
+Last commit: `16660a6 update M2`.
 
-**Working tree:** the M2 implementation is **uncommitted** — run
-`git status --porcelain` for the live count. Last commit: `71a642b finished M1`.
-Land the work before starting the next milestone (M3).
+**Real-iPhone background-playback gate (gotcha #5) is still OPEN** — desktop MCP
+verified Media Session wiring + tab-background continuity, but a locked-screen
+run on real iOS hardware is required before claiming background playback works.
+See "Real-iPhone manual gate" below for the checklist.
 
-**4 deviations on record** — read before continuing (see Deviations below):
-broken piper-wasm URL workaround, benign ORT numThreads warn, the removed
-throwaway smoke route, and the `ended`-handler `playing`-status guard.
+**Shipped this milestone:** look-ahead pre-render queue in `useParagraphPlayer`
+(N=3, play-current-first, gapless advance from buffer, invalidate-on-seek,
+voice-change buffer clear, back-pressure, `nextChapter`/`prevChapter`,
+`seekBy`/`seekTo`/`getAudioPosition`); extended `AudioController` boundary
+(`seekBy`/`seekTo`/`currentTime`/`duration`); `lib/media-session.ts` module
+(`setMediaMetadata`/`setMediaSessionHandlers`/`setMediaPlaybackState`/
+`setMediaPositionState`/`clearMediaSession`, all guarded); `useMediaSession`
+hook (registers handlers once via refs, metadata on book/chapter change,
+playback+position state on transitions); PlayerBar chapter-skip buttons +
+buffering-ahead indicator; `playsinline` + iOS meta tags for background readiness.
 
 ---
 
 ## Tasks
 
-### T1 — Deps + local WASM mirror
-- **Detail:** Install `@mintplex-labs/piper-tts-web@1.0.4` + `onnxruntime-web@1.18.0` (exact pin). Mirror the ORT wasm binaries + piper-phonemize data into `web/public/wasm/`. Configure the engine so `ort.env.wasm.wasmPaths` points at the local mirror (overriding the package's cdnjs default). Verify the dev server loads the package and the network tab shows **zero `cdnjs.cloudflare.com` requests**.
-- **Depends on:** — (foundation; no code depends on it yet).
-- **Acceptance:** both deps installed with exact versions; `public/wasm/` populated; engine configured; browser network tab clean of cdnjs during a smoke load.
-- **Verify:** manual browser check (dev server) — no cdnjs requests.
-- **Files:** `web/package.json`, `web/public/wasm/*`, engine config wiring.
+### T1 — Pre-render queue in `useParagraphPlayer`
+- **Detail:** Add a look-ahead buffer to the existing hook. Internally keep a
+  `Map<paragraphId, RenderedChunk { blob, url }>` of pre-rendered audio. On
+  `play`, synthesize the **current** paragraph first and play it as soon as it
+  resolves (do NOT block on a full prime); concurrently kick off look-ahead
+  synth for the next N=3 paragraphs (serialized through the worker, but
+  overlapping with playback so warm ≈1s synth completes during the multi-second
+  audio). On `ended`, advance the pointer and **play the already-buffered next
+  chunk** (gapless), then top-up the queue by one. On any pointer move
+  (`seekToParagraph`/`next`/`prev`/`stop`), **invalidate the queue**: revoke all
+  queued Blob URLs and re-prime around the new position. Back-pressure: never
+  synth beyond N ahead. Add `nextChapter()`/`prevChapter()` that jump the
+  pointer to the first paragraph whose `chapterIndex` is ±1. Extend
+  `AudioController` with `seekBy(delta)`/`seekTo(seconds)`/`currentTime`/
+  `duration` getters (needed by T3 for Media Session seek + position state);
+  the real impl wraps `HTMLAudioElement.currentTime`/`.duration`/`.pause()`+seek.
+  Reuse the existing token-cancellation so stale look-ahead results are dropped.
+  Keep the M2 `ended`-handler `playing`-status guard (deviation #4).
+- **Depends on:** M2 (worker client + `useParagraphPlayer`).
+- **Acceptance:** gapless advance from the buffer (no synth for the
+  immediately-next paragraph on `ended`); queue invalidated + URLs revoked on
+  seek; back-pressure honored (≤N synth calls outstanding); `nextChapter`/
+  `prevChapter` land on the right paragraph; **every queued Blob URL is
+  revoked** on consume/invalidate/unmount.
+- **Verify:** `hooks/useParagraphPlayer.test.ts` (extended) — extend `FakeAudio`
+  with the new boundary methods; assert queue fill/advance/invalidate/
+  back-pressure + chapter skip.
+- **Files:** `web/src/hooks/useParagraphPlayer.ts`, `useParagraphPlayer.test.ts`.
 
-### T2 — TTS types + curated voice catalog
-- **Detail:** Branded `VoiceId` + `Voice`/`VoiceQuality`/`SynthesisRequest`/`SynthesisResult` types (interface-first). Define the `TtsEngine` interface **before** the concrete engine. Build the curated catalog: filter `tts.voices()` for English (`language.code` starts with `en`), `medium` quality, hand-pick ~8 across locales + perceived gender; capture real IDs (do not hardcode unverified names). Provide display names + size estimates.
-- **Depends on:** T1 (package installed so `tts.voices()` is callable to capture IDs).
-- **Acceptance:** `TtsEngine` interface defined; catalog non-empty, deduped, all English + medium; snapshot test pins the curated IDs.
-- **Verify:** `lib/tts/voices.test.ts`.
-- **Files:** `web/src/types.ts` (additions), `web/src/lib/tts/{types,voices}.ts`, `web/src/lib/tts/voices.test.ts`.
+Checkpoint A — Pre-render proven (gapless playback through a chapter) · ☐
 
-### T3 — TTS Worker + client
-- **Detail:** `workers/tts.worker.ts` wraps `tts.predict()` with the model resident in the worker; `lib/tts/client.ts` is a promise wrapper with a typed protocol (mirrors `lib/parse/{client,protocol}.ts`). The worker returns `SynthesisResult.audio` (WAV Blob). **Verify OPFS works from inside the worker** — call `tts.download()` + `tts.stored()` from the worker and confirm a model lands in OPFS. If worker-OPFS breaks, fall back to a main-thread engine behind the same `TtsEngine` interface and record the deviation here.
-- **Depends on:** T1, T2 (types + package).
-- **Acceptance:** client resolves on success, rejects on error path; manual smoke: synth one sentence from the dev server and hear real audio; OPFS-from-worker confirmed (or deviation recorded).
-- **Verify:** `lib/tts/client.test.ts` (mocked worker); manual dev-server synth.
-- **Files:** `web/src/workers/tts.worker.ts`, `web/src/lib/tts/{client,protocol}.ts`, `web/src/lib/tts/client.test.ts`.
+### T2 — Media Session module
+- **Detail:** Extend `lib/media-session.ts` (currently a capability probe) with
+  four pure, guarded functions: `setMediaMetadata({title, artist, album,
+  artworkUrl})` → constructs `new MediaMetadata({...})` and assigns it;
+  `setMediaSessionHandlers(handlers)` → registers all seven actions
+  (`play`/`pause`/`seekbackward`/`seekforward`/`seekto`/`nexttrack`/
+  `previoustrack`) and returns an unsubscribe that nulls them;
+  `setPlaybackState('playing'|'paused'|'none')`; `setPositionState({duration,
+  position, playbackRate})`. Every call no-ops gracefully when
+  `!isMediaSessionSupported()` (the existing probe). No React, no DOM — pure
+  platform-API wrappers.
+- **Depends on:** — (foundation; T3 consumes it).
+- **Acceptance:** all four functions call through correctly when supported and
+  are no-ops when not; handler cleanup removes all seven handlers.
+- **Verify:** `lib/media-session.test.ts` — mock `navigator.mediaSession` +
+  `MediaMetadata` (jsdom has neither); assert metadata fields, handler
+  registration + cleanup, playback/position state, and the unsupported no-op.
+- **Files:** `web/src/lib/media-session.ts`, `media-session.test.ts`.
 
-Checkpoint A — Engine + worker proven (synthesize WAV from worker, offline-ready) · ☐
+### T3 — Wire Media Session into `/reader`
+- **Detail:** The container registers Media Session handlers **once on mount**
+  (via `useEffect`) that delegate to **refs** holding the latest player
+  functions — so handlers never go stale and we avoid re-registration churn on
+  every status change. Handlers map: `play`→`player.play`, `pause`→`player.pause`,
+  `seekbackward`→`player.seekBy(-15)`, `seekforward`→`player.seekBy(15)`,
+  `seekto`→`player.seekTo`, `nexttrack`→`player.nextChapter`,
+  `previoustrack`→`player.prevChapter`. A separate effect updates
+  `setMediaMetadata` whenever the **book** or **current chapter** changes
+  (derive chapter from `currentParagraphId` → `ParagraphRef.chapterIndex`).
+  Update `setPlaybackState` + `setPositionState` on status transitions
+  (`'playing'`/`'paused'`/`'ended'`/`'idle'`). Cleanup on unmount. Expose a thin
+  injectable boundary so the reader test doesn't need a real `mediaSession`.
+- **Depends on:** T1 (player chapter-skip + `seekBy`/`seekTo`/position), T2 (module).
+- **Acceptance:** metadata reflects book title + current chapter; handlers
+  invoke the correct player method; playback/position state tracks transitions;
+  zero handler re-registration across re-renders.
+- **Verify:** `routes/reader.test.tsx` (extended) — spy the media-session module
+  or inject a fake; assert metadata + handler dispatch.
+- **Files:** `web/src/routes/reader.tsx`, `reader.test.tsx`.
 
-### T4 — `useParagraphPlayer` hook
-- **Detail:** The chunk-queue predecessor to M3's pre-rendering. Flattens the book's chapters into a paragraph list with stable IDs; keeps a pointer; on `play` synthesizes the current paragraph via the worker client, creates a Blob URL, sets it on a single `<audio>` element, and plays. On `ended`, advances the pointer and synthesizes the next. Exposes `play`/`pause`/`stop`/`next`/`prev`/`seekToParagraph`, `currentParagraphId`, and a status variant `{ idle | loading | playing | paused | ended | error }`. **Revokes the prior Blob URL on every advance and on unmount.** Audio-element interaction is abstracted behind an injectable boundary so unit tests don't need a real `<audio>`.
-- **Depends on:** T3 (worker client).
-- **Acceptance:** pointer advancement correct; auto-advance on `ended`; `seekToParagraph` jumps; prev/next cross chapter boundaries; **no Blob URL leak** (revocation asserted); status-variant transitions correct.
-- **Verify:** `hooks/useParagraphPlayer.test.ts` (stubbed synth fn + fake audio boundary).
-- **Files:** `web/src/hooks/useParagraphPlayer.ts`, `web/src/hooks/useParagraphPlayer.test.ts`.
+Checkpoint B — Media Session wired (metadata + lock-screen handlers active) · ☐
 
-Checkpoint B — Playback engine works (play a book, auto-advance through paragraphs) · ☐
+### T4 — Background-audio readiness
+- **Detail:** Add `playsinline` + `preload="auto"` to the audio element in
+  `createAudioController` (iOS background-audio prerequisites — without
+  `playsinline`, iOS pauses on background). Add iOS meta tags to `index.html`:
+  `apple-mobile-web-app-capable=yes` and `apple-mobile-web-app-status-bar-style`
+  (the manifest's `display:standalone` handles Android; these supplement iOS).
+  **Verify via MCP:** play a book, switch the tab to `visibilityState === 'hidden'`,
+  confirm audio keeps playing with zero console errors. Document the
+  **real-iPhone manual gate** (gotcha #5) as a tracked risk — desktop MCP cannot
+  simulate a locked screen; a real-device run is required before claiming iOS
+  background playback works.
+- **Depends on:** T1–T3 (full playback + media session).
+- **Acceptance:** `playsinline` + meta tags present; MCP tab-background run
+  shows continuous audio + zero errors.
+- **Verify:** chrome-devtools MCP — visibility change + console/network clean.
+- **Files:** `web/src/hooks/useParagraphPlayer.ts`, `web/index.html`.
 
-### T5 — Reader read-along UI
-- **Detail:** Wire `useParagraphPlayer` into the `/reader` container; the container owns playback state (variant types). `ReaderView` gains a `currentParagraphId` prop to highlight the spoken paragraph and an `onSeekParagraph(id)` callback for tap-to-seek — stays presentational. New `PlayerBar` (presentational): play/pause, prev/next, and the speed control (read from settings). Show a "loading voice…" / synthesizing state for cold first-synth (~4.3s) and brief inter-paragraph synth (~1s warm).
-- **Depends on:** T4 (hook).
-- **Acceptance:** component tests cover play/pause/advance/highlight/seek; `ReaderView` + `PlayerBar` remain props-only.
-- **Verify:** component tests.
-- **Files:** `web/src/routes/reader.tsx`, `web/src/components/{ReaderView,PlayerBar}.tsx`, tests.
+### T5 — PlayerBar/UX
+- **Detail:** Surface a "buffering ahead" / "pre-rendering next…" affordance
+  from the hook's look-ahead status (the `'buffering'` flag on `'loading'`,
+  distinct from the cold-current synth state). Add **chapter-skip** buttons to
+  `PlayerBar` so the in-app UX mirrors the lock-screen chapter semantics
+  (existing next/prev stay paragraph-level; new ⏮⏭-style buttons jump chapters).
+  `PlayerBar` stays **presentational** — new `onNextChapter`/`onPrevChapter` +
+  a buffered-ahead indicator prop. Wire the new props in `reader.tsx`.
+- **Depends on:** T1 (chapter skip + buffering flag). Parallel to T4.
+- **Acceptance:** "buffering ahead" renders correctly; chapter-skip buttons
+  call the right callbacks; PlayerBar remains props-only.
+- **Verify:** `components/PlayerBar.test.tsx` (extended).
+- **Files:** `web/src/components/PlayerBar.tsx`, `PlayerBar.test.tsx`, `routes/reader.tsx`.
 
-### T6 — Settings: voice + speed
-- **Detail:** Add `voiceId` + `playbackRate` to `Settings` (default: first catalog voice, rate 1); persist via `SettingsProvider` (low-frequency → Context is correct). New `VoicePicker` (presentational): curated voice list, per-voice download with progress %, and a "downloaded" badge from `isStored`. Speed slider 0.5×–2× bound to `playbackRate`. `Settings` route renders both.
-- **Depends on:** T2 (catalog), T3 (engine for `download`/`isStored`). Parallel to T5.
-- **Acceptance:** settings test persists voice + rate across reload (fake-indexeddb); `VoicePicker` download flow tested with a mocked engine.
-- **Verify:** `routes/settings.test.tsx` (extended), `components/VoicePicker.test.tsx`.
-- **Files:** `web/src/context/settings.tsx`, `web/src/routes/settings.tsx`, `web/src/components/VoicePicker.tsx`, tests.
+Checkpoint C — Background-ready + UX complete · ☐
 
-Checkpoint C — Full slice: upload → read → play → read-along, voice + speed wired · ☐
-
-### T7 — End-to-end + browser verify
-- **Detail:** Upload a book → play → auto-advances through a chapter with the highlight following; tap a paragraph → seeks; download a second voice → switch → voice changes; adjust speed → applies live; reload → voice + speed persist; go offline after the model is cached → playback still works. Zero console errors; zero cdnjs network requests.
-- **Depends on:** T1–T6 (full slice).
-- **Acceptance:** `pnpm verify` green; chrome-devtools MCP run clean (zero console errors, zero cdnjs, offline playback after model cached).
+### T6 — End-to-end + browser verify
+- **Detail:** Upload a book → play → gapless through a chapter with the queue
+  pre-rendering ahead (no synth stall between paragraphs); seek mid-paragraph →
+  queue invalidates + re-primes; skip chapter via lock-screen-equivalent →
+  jumps to the chapter start; ±15s seek works; `navigator.mediaSession.metadata`
+  reflects book + chapter; tab-backgrounding keeps audio playing; zero console
+  errors; zero cdnjs calls; `pnpm verify` green. Write the real-iPhone
+  verification checklist into the Deviations section below (and the PRD risks).
+- **Depends on:** T1–T5 (full slice).
+- **Acceptance:** `pnpm verify` green; chrome-devtools MCP run clean; iPhone
+  gate documented.
 - **Verify:** full `pnpm verify` green; MCP browser run.
 - **Files:** wiring + minor fixes across the slice.
 
-Checkpoint D — Speak slice shipped & `pnpm verify` green · ☐
+Checkpoint D — Jog slice shipped & `pnpm verify` green · ☐
 
 ---
 
 ## Deviations
 
-1. **`@mintplex-labs/piper-tts-web` references a broken piper-wasm URL.** The
-   package defaults `WASM_BASE` to `@diffusion-studio/piper-wasm@1.0.0`
-   (hyphenated) on jsdelivr, which 404s — the real package is
-   `@diffusionstudio/piper-wasm` (no hyphen). The spike likely worked via
-   browser cache. T1's `wasm-paths.ts` overrides all three paths
-   (`onnxWasm`/`piperWasm`/`piperData`) to the local mirror, fully bypassing
-   both cdnjs and the broken jsdelivr reference. Verified: zero cdnjs + zero
-   jsdelivr calls in the network tab.
+1. **`useMediaSession` hook extracted (T3), not inlined in `reader.tsx`.** The
+   PRD lists T3's wiring under `routes/reader.tsx`, but extracting the Media
+   Session effects into a dedicated `hooks/useMediaSession.ts` made the wiring
+   unit-testable with a stub player (mirrors the repo's hook-based style) and
+   kept `ReaderPane` thin. The reader calls `useMediaSession({ player, ... })`;
+   the hook owns handler registration (once, via refs), metadata updates, and
+   playback/position state. No behavior change vs. the PRD; just a cleaner
+   seam. Tests: `hooks/useMediaSession.test.ts` (13 tests).
 
-2. **Benign ORT `numThreads` warning.** The package sets
-   `ort.env.wasm.numThreads = navigator.hardwareConcurrency` unconditionally.
-   Without cross-origin isolation (our default), ORT logs a `warn` ("numThreads
-   set to N, but crossOriginIsolated not enabled") and falls back to
-   single-threaded — which is our target. Synthesis works (loaded
-   `ort-wasm-simd.wasm`, the single-threaded variant). Benign, like M1's pdf.js
-   warns; documented here, not a blocker. Suppression would require forking the
-   package (not worth it for a `warn`).
+2. **`upload_file` MCP tool can't seed the file input in `--isolated` mode.**
+   The tool creates a filesystem-backed `File` whose handle the isolated
+   browser profile can't re-read — `file.arrayBuffer()` rejects with
+   `NotFoundError` ("A requested file or directory could not be found"). Not a
+   code bug (the parse path is correct per gotcha #8); it's an environment
+   limitation. T6's browser run worked around it by constructing an in-memory
+   `File` via page-side JS and dispatching the `change` event. No production
+   impact — real users drag/drop or pick via the native file picker, which
+   yields a readable `File`.
 
-3. **Throwaway `/tts-smoke` route added for T1/T3 browser verification.**
-   `web/src/routes/tts-smoke.tsx` (+ route in `App.tsx`) exercises `TtsClient`
-   end-to-end (download / stored / synth / play). **Removed at T5** once the
-   real reader integration (`useParagraphPlayer` + `PlayerBar`) landed.
+## Real-iPhone manual gate (gotcha #5)
 
-4. **`useParagraphPlayer` `ended` handler guards on `playing` status.** The
-   audio element emits a spurious `ended` event when a new `src` is set
-   mid-loading (the browser fires a stale event for the old media). Without a
-   guard this caused erratic pointer movement (highlight jumped backwards /
-   skipped paragraphs). Fix: the `onEnded` handler returns early unless
-   `statusRef.current.type === 'playing'`. Verified in the browser: highlight
-   now advances monotonically (2→3→4→Finished) and terminates correctly.
-   Unit tests cover the guarded path.
+Desktop MCP cannot simulate a locked screen or true app-backgrounding on iOS.
+Before M3 is considered "done" for the product's core promise, verify on a real
+iPhone (installed to home screen, standalone mode):
+
+1. Start playback → lock the screen → audio continues.
+2. Lock-screen controls render (▶/⏸, ⏮/⏭ chapter skip, ±15s, seekbar).
+3. Switch to another app → audio continues.
+4. Background the browser fully → audio continues for ≥30s.
+5. Re-open → playback state is intact.
+
+If iOS fails any step, record the deviation here and adjust (e.g. a visible
+`<audio>` element, a wake-lock, or scope the background claim to Android until
+fixed). Do **not** publicly claim iOS background playback works without this run.

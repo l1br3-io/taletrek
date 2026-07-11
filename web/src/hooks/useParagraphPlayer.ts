@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TtsEngine } from '../lib/tts/types'
 import type { Chapter, VoiceId } from '../types'
 
+/** Default look-ahead depth: paragraphs pre-rendered ahead of the pointer. */
+const DEFAULT_LOOKAHEAD = 3
+
 /** A flattened, stable reference to a single paragraph within a book. */
 export interface ParagraphRef {
   /** `${chapterId}:${paragraphIndex}` — stable across renders. */
@@ -20,6 +23,13 @@ export type PlaybackStatus =
   | { type: 'ended' }
   | { type: 'error'; message: string }
 
+/** A pre-rendered audio chunk cached ahead of the playback pointer. */
+interface PrerenderedChunk {
+  blob: Blob
+  /** Flat index into the paragraph list (for pruning + depth accounting). */
+  index: number
+}
+
 /**
  * Injectable audio boundary so the hook (and its tests) never touch a real
  * `<audio>` element directly. The production impl wraps `new Audio()`.
@@ -32,12 +42,22 @@ export interface AudioController {
   setPlaybackRate(rate: number): void
   /** Register an `ended` handler; returns an unsubscribe. */
   onEnded(handler: () => void): () => void
+  /** Seek relatively within the current media (clamped to [0, duration]). */
+  seekBy(deltaSeconds: number): void
+  /** Seek to an absolute time within the current media. */
+  seekTo(seconds: number): void
+  /** Current playback position within the current media, in seconds. */
+  readonly currentTime: number
+  /** Duration of the current media, in seconds (0 if unknown). */
+  readonly duration: number
 }
 
 /** Create a real `AudioController` backed by an off-DOM `HTMLAudioElement`. */
 export function createAudioController(): AudioController {
   const el = new Audio()
   el.preservesPitch = true
+  el.preload = 'auto'
+  el.setAttribute('playsinline', '')
   return {
     async loadAndPlay(src: string) {
       el.src = src
@@ -61,6 +81,20 @@ export function createAudioController(): AudioController {
       el.addEventListener('ended', handler)
       return () => el.removeEventListener('ended', handler)
     },
+    seekBy(deltaSeconds: number) {
+      const max = Number.isFinite(el.duration) ? el.duration : Infinity
+      el.currentTime = Math.max(0, Math.min(max, el.currentTime + deltaSeconds))
+    },
+    seekTo(seconds: number) {
+      const max = Number.isFinite(el.duration) ? el.duration : seconds
+      el.currentTime = Math.max(0, Math.min(max, seconds))
+    },
+    get currentTime() {
+      return el.currentTime || 0
+    },
+    get duration() {
+      return Number.isFinite(el.duration) ? el.duration : 0
+    },
   }
 }
 
@@ -69,6 +103,8 @@ export interface UseParagraphPlayerArgs {
   voiceId: VoiceId
   playbackRate: number
   engine: TtsEngine
+  /** Look-ahead depth (paragraphs pre-rendered ahead). Defaults to 3. */
+  lookahead?: number
   /** Test override; defaults to a real `AudioController`. */
   audio?: AudioController
 }
@@ -76,12 +112,26 @@ export interface UseParagraphPlayerArgs {
 export interface UseParagraphPlayerResult {
   status: PlaybackStatus
   currentParagraphId: string | null
+  /** Chunks currently buffered ahead of the pointer (0..lookahead). */
+  bufferedAhead: number
   play: () => void
   pause: () => void
   stop: () => void
+  /** Jump to the next paragraph (cancels in-flight pre-render). */
   next: () => void
+  /** Jump to the previous paragraph (cancels in-flight pre-render). */
   prev: () => void
+  /** Jump to the first paragraph of the next chapter. */
+  nextChapter: () => void
+  /** Jump to the first paragraph of the previous chapter. */
+  prevChapter: () => void
   seekToParagraph: (id: string) => void
+  /** Seek relatively within the current paragraph (Media Session ±15s). */
+  seekBy: (deltaSeconds: number) => void
+  /** Seek absolutely within the current paragraph (Media Session seekto). */
+  seekTo: (seconds: number) => void
+  /** Read the audio element's position (Media Session position state). */
+  getAudioPosition: () => { currentTime: number; duration: number }
 }
 
 /** Flatten chapters into a stable paragraph list (memoized by the caller). */
@@ -98,26 +148,34 @@ export function flattenParagraphs(chapters: readonly Chapter[]): ParagraphRef[] 
 }
 
 /**
- * Per-paragraph playback: synthesizes one paragraph at a time via `engine`,
- * plays it through a single `<audio>` element, and auto-advances on `ended`.
- * Exposes the currently-spoken paragraph id (for read-along highlight) and
- * tap-to-seek.
+ * Pre-rendering paragraph player. Synthesizes the current paragraph via
+ * `engine` and plays it through a single `<audio>` element, while
+ * pre-rendering `lookahead` paragraphs ahead into an in-memory queue so the
+ * next chunk is ready before the current one ends (gapless, background-safe).
+ *
+ * On any discontinuous pointer move (`next`/`prev`/`seekToParagraph`/
+ * `nextChapter`/`prevChapter`/`stop`), in-flight pre-rendering is cancelled
+ * and the queue is re-prime around the new position. Sequential `ended`
+ * advance pulls the next chunk from the buffer (no synth stall).
  *
  * The caller should mount this hook behind a `key={book.id}` so switching books
- * remounts and resets playback state (pointer, status, audio). Revokes every
- * Blob URL on advance and unmount — no leaks.
+ * remounts and resets playback state. Revokes the live Blob URL on advance and
+ * unmount; prunes queued Blobs outside the look-ahead window.
  */
 export function useParagraphPlayer({
   chapters,
   voiceId,
   playbackRate,
   engine,
+  lookahead = DEFAULT_LOOKAHEAD,
   audio,
 }: UseParagraphPlayerArgs): UseParagraphPlayerResult {
   const paragraphs = useMemo(() => flattenParagraphs(chapters), [chapters])
+  const la = Math.max(0, Math.trunc(lookahead))
 
   const [status, setStatus] = useState<PlaybackStatus>({ type: 'idle' })
   const [currentParagraphId, setCurrentParagraphId] = useState<string | null>(null)
+  const [bufferedAhead, setBufferedAhead] = useState(0)
 
   // Refs for values that must NOT trigger re-subscription when they change:
   // engine + voiceId affect only the *next* synthesis, not in-flight playback.
@@ -128,11 +186,13 @@ export function useParagraphPlayer({
 
   const pointerRef = useRef(0)
   const urlRef = useRef<string | null>(null)
-  const tokenRef = useRef(0) // bumped on every new synth request; stale results ignored
+  const tokenRef = useRef(0) // bumped on every play request; stale play results ignored
+  const genRef = useRef(0) // bumped on discontinuous moves; stale pre-render results ignored
   const statusRef = useRef<PlaybackStatus>({ type: 'idle' })
   statusRef.current = status
 
   const audioRef = useRef<AudioController>(audio ?? createAudioController())
+  const queueRef = useRef<Map<string, PrerenderedChunk>>(new Map())
 
   const revokeUrl = useCallback(() => {
     if (urlRef.current !== null) {
@@ -141,59 +201,152 @@ export function useParagraphPlayer({
     }
   }, [])
 
-  const synthAndPlay = useCallback(
+  const syncBufferedAhead = useCallback(() => {
+    const ptr = pointerRef.current
+    let count = 0
+    for (const chunk of queueRef.current.values()) {
+      if (chunk.index > ptr && chunk.index <= ptr + la) count++
+    }
+    setBufferedAhead(count)
+  }, [la])
+
+  // Drop queued chunks outside [fromIndex, fromIndex + lookahead].
+  const prune = useCallback(
+    (fromIndex: number) => {
+      const max = fromIndex + la
+      for (const [id, chunk] of queueRef.current) {
+        if (chunk.index < fromIndex || chunk.index > max) {
+          queueRef.current.delete(id)
+        }
+      }
+    },
+    [la],
+  )
+
+  // Pre-render paragraphs [fromIndex, fromIndex + lookahead) into the queue.
+  // Sequential; checks the generation token between synth calls so a
+  // discontinuous move cancels the remainder.
+  const primeAhead = useCallback(
+    async (fromIndex: number) => {
+      const gen = genRef.current
+      const to = Math.min(fromIndex + la, paragraphs.length)
+      for (let i = fromIndex; i < to; i++) {
+        if (gen !== genRef.current) return
+        const para = paragraphs[i]
+        if (!para || queueRef.current.has(para.id)) continue
+        try {
+          const result = await engineRef.current.synthesize({
+            text: para.text,
+            voiceId: voiceIdRef.current,
+          })
+          if (gen !== genRef.current) return
+          queueRef.current.set(para.id, { blob: result.audio, index: i })
+          syncBufferedAhead()
+        } catch {
+          // Pre-render failures are non-fatal: the chunk will be synthesized
+          // on demand when (if) the pointer reaches it.
+          if (gen !== genRef.current) return
+        }
+      }
+    },
+    [paragraphs, la, syncBufferedAhead],
+  )
+
+  // Synthesize (or pull from the buffer) the paragraph at `index` and play it.
+  const playIndex = useCallback(
     async (index: number) => {
       const para = paragraphs[index]
       if (!para) return
       const token = ++tokenRef.current
       pointerRef.current = index
       setCurrentParagraphId(para.id)
-      setStatus({ type: 'loading' })
+      prune(index)
+
+      const buffered = queueRef.current.get(para.id)
+      if (!buffered) {
+        setStatus({ type: 'loading' })
+        try {
+          const result = await engineRef.current.synthesize({
+            text: para.text,
+            voiceId: voiceIdRef.current,
+          })
+          if (token !== tokenRef.current) return
+          queueRef.current.set(para.id, { blob: result.audio, index })
+        } catch (error) {
+          if (token !== tokenRef.current) return
+          setStatus({
+            type: 'error',
+            message: error instanceof Error ? error.message : 'synthesis failed',
+          })
+          return
+        }
+      }
+
+      if (token !== tokenRef.current) return
+      const chunk = queueRef.current.get(para.id)
+      if (!chunk) return
+      revokeUrl()
+      const url = URL.createObjectURL(chunk.blob)
+      urlRef.current = url
       try {
-        const { audio: wav } = await engineRef.current.synthesize({
-          text: para.text,
-          voiceId: voiceIdRef.current,
-        })
-        // Ignore stale results (a newer seek/next superseded this request).
-        if (token !== tokenRef.current) return
-        const url = URL.createObjectURL(wav)
-        revokeUrl()
-        urlRef.current = url
         await audioRef.current.loadAndPlay(url)
-        if (token !== tokenRef.current) return
-        setStatus({ type: 'playing', paragraphId: para.id })
       } catch (error) {
         if (token !== tokenRef.current) return
         setStatus({
           type: 'error',
-          message: error instanceof Error ? error.message : 'synthesis failed',
+          message: error instanceof Error ? error.message : 'playback failed',
         })
+        return
       }
+      if (token !== tokenRef.current) return
+      setStatus({ type: 'playing', paragraphId: para.id })
+      syncBufferedAhead()
+      void primeAhead(index + 1)
     },
-    [paragraphs, revokeUrl],
+    [paragraphs, primeAhead, prune, revokeUrl, syncBufferedAhead],
+  )
+
+  // Discontinuous move: cancel in-flight pre-render, then play the target.
+  const jumpTo = useCallback(
+    (index: number) => {
+      genRef.current++
+      void playIndex(index)
+    },
+    [playIndex],
   )
 
   // Auto-advance on `ended`. Guarded: a spurious `ended` can fire when we set a
-  // new `src` mid-loading (the browser emits a stale event for the old media).
-  // Only advance from a genuine 'playing' state.
+  // new `src` mid-loading. Only advance from a genuine 'playing' state.
+  // Sequential advance does NOT bump the generation — the buffer is preserved.
   useEffect(() => {
     const unsubscribe = audioRef.current.onEnded(() => {
       if (statusRef.current.type !== 'playing') return
       const nextIndex = pointerRef.current + 1
       if (nextIndex < paragraphs.length) {
-        void synthAndPlay(nextIndex)
+        void playIndex(nextIndex)
       } else {
         revokeUrl()
         setStatus({ type: 'ended' })
       }
     })
     return unsubscribe
-  }, [paragraphs, synthAndPlay, revokeUrl])
+  }, [paragraphs, playIndex, revokeUrl])
 
   // Apply playbackRate live.
   useEffect(() => {
     audioRef.current.setPlaybackRate(playbackRate)
   }, [playbackRate])
+
+  // Voice change: invalidate the buffer (ahead chunks are the old voice) so the
+  // next paragraph synthesized uses the new voice. Playback is not interrupted.
+  const prevVoiceRef = useRef(voiceId)
+  useEffect(() => {
+    if (prevVoiceRef.current === voiceId) return
+    prevVoiceRef.current = voiceId
+    genRef.current++
+    queueRef.current.clear()
+    syncBufferedAhead()
+  }, [voiceId, syncBufferedAhead])
 
   // Cleanup on unmount.
   useEffect(() => {
@@ -201,6 +354,8 @@ export function useParagraphPlayer({
       audioRef.current.stop()
       if (urlRef.current !== null) URL.revokeObjectURL(urlRef.current)
       urlRef.current = null
+      queueRef.current.clear()
+      genRef.current++
       tokenRef.current++
     }
   }, [])
@@ -213,10 +368,10 @@ export function useParagraphPlayer({
       return
     }
     if (s.type === 'idle' || s.type === 'ended' || s.type === 'error') {
-      void synthAndPlay(pointerRef.current)
+      void playIndex(pointerRef.current)
     }
     // 'loading' / 'playing' → no-op
-  }, [synthAndPlay])
+  }, [playIndex])
 
   const pause = useCallback(() => {
     const s = statusRef.current
@@ -229,36 +384,73 @@ export function useParagraphPlayer({
   const stop = useCallback(() => {
     audioRef.current.stop()
     revokeUrl()
-    pointerRef.current = 0
+    queueRef.current.clear()
+    genRef.current++
     tokenRef.current++
+    pointerRef.current = 0
     setCurrentParagraphId(null)
     setStatus({ type: 'idle' })
+    setBufferedAhead(0)
   }, [revokeUrl])
 
   const next = useCallback(() => {
-    void synthAndPlay(pointerRef.current + 1)
-  }, [synthAndPlay])
+    jumpTo(pointerRef.current + 1)
+  }, [jumpTo])
 
   const prev = useCallback(() => {
-    void synthAndPlay(Math.max(0, pointerRef.current - 1))
-  }, [synthAndPlay])
+    jumpTo(Math.max(0, pointerRef.current - 1))
+  }, [jumpTo])
+
+  const nextChapter = useCallback(() => {
+    const cur = paragraphs[pointerRef.current]
+    if (!cur) return
+    const target = cur.chapterIndex + 1
+    const idx = paragraphs.findIndex((p) => p.chapterIndex === target)
+    if (idx >= 0) jumpTo(idx)
+  }, [paragraphs, jumpTo])
+
+  const prevChapter = useCallback(() => {
+    const cur = paragraphs[pointerRef.current]
+    if (!cur) return
+    const target = cur.chapterIndex - 1
+    const idx = paragraphs.findIndex((p) => p.chapterIndex === target)
+    if (idx >= 0) jumpTo(idx)
+  }, [paragraphs, jumpTo])
 
   const seekToParagraph = useCallback(
     (id: string) => {
       const index = paragraphs.findIndex((p) => p.id === id)
-      if (index >= 0) void synthAndPlay(index)
+      if (index >= 0) jumpTo(index)
     },
-    [paragraphs, synthAndPlay],
+    [paragraphs, jumpTo],
   )
+
+  const seekBy = useCallback((deltaSeconds: number) => {
+    audioRef.current.seekBy(deltaSeconds)
+  }, [])
+
+  const seekTo = useCallback((seconds: number) => {
+    audioRef.current.seekTo(seconds)
+  }, [])
+
+  const getAudioPosition = useCallback(() => {
+    return { currentTime: audioRef.current.currentTime, duration: audioRef.current.duration }
+  }, [])
 
   return {
     status,
     currentParagraphId,
+    bufferedAhead,
     play,
     pause,
     stop,
     next,
     prev,
+    nextChapter,
+    prevChapter,
     seekToParagraph,
+    seekBy,
+    seekTo,
+    getAudioPosition,
   }
 }

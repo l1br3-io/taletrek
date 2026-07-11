@@ -3,6 +3,7 @@ import { PlayerBar } from '../components/PlayerBar'
 import { ReaderView } from '../components/ReaderView'
 import { UploadButton } from '../components/UploadButton'
 import { useSettings } from '../context/settings'
+import { useMediaSession } from '../hooks/useMediaSession'
 import { useParagraphPlayer } from '../hooks/useParagraphPlayer'
 import { getChaptersByBook, getMostRecentBook, putBook, putBookFile, putChapters } from '../lib/db'
 import { parseInWorker } from '../lib/parse/client'
@@ -29,6 +30,12 @@ function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
     playbackRate: settings.playbackRate,
     engine: ttsClient,
   })
+  useMediaSession({
+    player,
+    bookTitle: book.title,
+    chapters,
+    playbackRate: settings.playbackRate,
+  })
   return (
     <div className="space-y-6">
       <ReaderView
@@ -40,11 +47,14 @@ function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
       <PlayerBar
         status={player.status}
         playbackRate={settings.playbackRate}
+        bufferedAhead={player.bufferedAhead}
         onPlay={player.play}
         onPause={player.pause}
         onStop={player.stop}
         onNext={player.next}
         onPrev={player.prev}
+        onNextChapter={player.nextChapter}
+        onPrevChapter={player.prevChapter}
         onRateChange={(rate) => void update({ playbackRate: rate })}
       />
     </div>

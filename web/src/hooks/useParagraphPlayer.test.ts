@@ -1,21 +1,24 @@
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TtsEngine } from '../lib/tts/types'
 import { bookId, type Chapter, type ChapterId, chapterId, type VoiceId, voiceId } from '../types'
 import { type AudioController, useParagraphPlayer } from './useParagraphPlayer'
 
 const VOICE = voiceId('en_US-hfc_female-medium')
+const VOICE_2 = voiceId('en_US-amy-medium')
 
-function makeChapters(paragraphs: string[]): Chapter[] {
-  return [
-    {
-      id: chapterId('c1') as ChapterId,
-      bookId: bookId('b1'),
-      index: 0,
-      title: 'Ch1',
-      paragraphs,
-    },
-  ]
+function makeChapters(paragraphsByChapter: { title: string; paragraphs: string[] }[]): Chapter[] {
+  return paragraphsByChapter.map((c, index) => ({
+    id: chapterId(`c${index + 1}`) as ChapterId,
+    bookId: bookId('b1'),
+    index,
+    title: c.title,
+    paragraphs: c.paragraphs,
+  }))
+}
+
+function oneChapter(paragraphs: string[]): Chapter[] {
+  return makeChapters([{ title: 'Ch1', paragraphs }])
 }
 
 /** A fake audio controller that records calls and lets tests trigger `ended`. */
@@ -25,8 +28,12 @@ class FakeAudio implements AudioController {
   pausedCount = 0
   stoppedCount = 0
   rates: number[] = []
+  seekByCalls: number[] = []
+  seekToCalls: number[] = []
   private endedHandler: (() => void) | null = null
   private playShouldThrow = false
+  private _currentTime = 0
+  private _duration = 0
 
   async loadAndPlay(src: string): Promise<void> {
     this.loadedSrcs.push(src)
@@ -55,6 +62,22 @@ class FakeAudio implements AudioController {
   }
   throwOnNextPlay(): void {
     this.playShouldThrow = true
+  }
+  seekBy(delta: number): void {
+    this.seekByCalls.push(delta)
+  }
+  seekTo(seconds: number): void {
+    this.seekToCalls.push(seconds)
+  }
+  get currentTime(): number {
+    return this._currentTime
+  }
+  get duration(): number {
+    return this._duration
+  }
+  setPosition(currentTime: number, duration = 0): void {
+    this._currentTime = currentTime
+    this._duration = duration
   }
 }
 
@@ -90,7 +113,14 @@ afterEach(() => {
   revokeSpy.mockRestore()
 })
 
-function renderPlayer(paragraphs: string[], opts?: { engine?: TtsEngine; audio?: FakeAudio }) {
+interface RenderOpts {
+  engine?: TtsEngine
+  audio?: FakeAudio
+  lookahead?: number
+  voiceId?: VoiceId
+}
+
+function renderPlayer(chapters: Chapter[], opts?: RenderOpts) {
   const engine = opts?.engine ?? stubEngine()
   const audio = opts?.audio ?? new FakeAudio()
   const result = renderHook(
@@ -100,6 +130,7 @@ function renderPlayer(paragraphs: string[], opts?: { engine?: TtsEngine; audio?:
       rate: number
       engine: TtsEngine
       audio: AudioController
+      lookahead: number
     }) =>
       useParagraphPlayer({
         chapters: args.chapters,
@@ -107,30 +138,34 @@ function renderPlayer(paragraphs: string[], opts?: { engine?: TtsEngine; audio?:
         playbackRate: args.rate,
         engine: args.engine,
         audio: args.audio,
+        lookahead: args.lookahead,
       }),
     {
       initialProps: {
-        chapters: makeChapters(paragraphs),
-        voiceId: VOICE,
+        chapters,
+        voiceId: opts?.voiceId ?? VOICE,
         rate: 1,
         engine,
         audio,
+        lookahead: opts?.lookahead ?? 0,
       },
     },
   )
   return { ...result, audio }
 }
 
-describe('useParagraphPlayer', () => {
+// Behavioral tests run at lookahead=0 (no pre-rendering) so pointer, advance,
+// revocation, and cancellation semantics are isolated from the queue.
+describe('useParagraphPlayer — playback (lookahead=0)', () => {
   it('flattens chapters into stable paragraph ids', () => {
-    const { result } = renderPlayer(['One.', 'Two.', 'Three.'])
+    const { result } = renderPlayer(oneChapter(['One.', 'Two.', 'Three.']))
     expect(result.current.currentParagraphId).toBeNull()
     expect(result.current.status.type).toBe('idle')
   })
 
   it('play synthesizes the first paragraph and enters playing state', async () => {
     const engine = stubEngine()
-    const { result, audio } = renderPlayer(['Hello.', 'World.'], { engine })
+    const { result, audio } = renderPlayer(oneChapter(['Hello.', 'World.']), { engine })
     await act(async () => {
       result.current.play()
     })
@@ -142,7 +177,7 @@ describe('useParagraphPlayer', () => {
 
   it('auto-advances to the next paragraph on ended', async () => {
     const engine = stubEngine()
-    const { result, audio } = renderPlayer(['One.', 'Two.', 'Three.'], { engine })
+    const { result, audio } = renderPlayer(oneChapter(['One.', 'Two.', 'Three.']), { engine })
     await act(async () => {
       result.current.play()
     })
@@ -156,7 +191,7 @@ describe('useParagraphPlayer', () => {
   })
 
   it('enters ended state after the last paragraph', async () => {
-    const { result, audio } = renderPlayer(['Only.'])
+    const { result, audio } = renderPlayer(oneChapter(['Only.']))
     await act(async () => {
       result.current.play()
     })
@@ -168,7 +203,7 @@ describe('useParagraphPlayer', () => {
 
   it('pause then play resumes without re-synthesizing', async () => {
     const engine = stubEngine()
-    const { result, audio } = renderPlayer(['Hello.'], { engine })
+    const { result, audio } = renderPlayer(oneChapter(['Hello.']), { engine })
     await act(async () => {
       result.current.play()
     })
@@ -181,12 +216,12 @@ describe('useParagraphPlayer', () => {
       result.current.play()
     })
     expect(result.current.status.type).toBe('playing')
-    expect(engine.calls.length).toBe(callsBefore) // no new synth
+    expect(engine.calls.length).toBe(callsBefore)
     expect(audio.playCount).toBeGreaterThan(0)
   })
 
   it('stop resets to idle at the start', async () => {
-    const { result } = renderPlayer(['One.', 'Two.'])
+    const { result } = renderPlayer(oneChapter(['One.', 'Two.']))
     await act(async () => {
       result.current.play()
     })
@@ -199,7 +234,7 @@ describe('useParagraphPlayer', () => {
 
   it('seekToParagraph jumps to the chosen paragraph', async () => {
     const engine = stubEngine()
-    const { result } = renderPlayer(['A.', 'B.', 'C.', 'D.'], { engine })
+    const { result } = renderPlayer(oneChapter(['A.', 'B.', 'C.', 'D.']), { engine })
     await act(async () => {
       result.current.seekToParagraph(`${chapterId('c1')}:2`)
     })
@@ -209,7 +244,7 @@ describe('useParagraphPlayer', () => {
 
   it('next and prev move the pointer', async () => {
     const engine = stubEngine()
-    const { result } = renderPlayer(['A.', 'B.', 'C.'], { engine })
+    const { result } = renderPlayer(oneChapter(['A.', 'B.', 'C.']), { engine })
     await act(async () => {
       result.current.play()
     })
@@ -225,7 +260,7 @@ describe('useParagraphPlayer', () => {
   })
 
   it('prev clamps at the first paragraph', async () => {
-    const { result } = renderPlayer(['A.', 'B.'])
+    const { result } = renderPlayer(oneChapter(['A.', 'B.']))
     await act(async () => {
       result.current.play()
     })
@@ -237,7 +272,6 @@ describe('useParagraphPlayer', () => {
 
   it('cancels a stale synthesis when a newer request supersedes it', async () => {
     const engine = stubEngine()
-    // Make the first synth slow; the second resolves first.
     let resolveFirst: (v: { audio: Blob; synthMs: number }) => void
     const slowSynth = new Promise<{ audio: Blob; synthMs: number }>((r) => {
       resolveFirst = r
@@ -251,16 +285,15 @@ describe('useParagraphPlayer', () => {
       }
       return originalSynthesize(req)
     }
-    const { result, audio } = renderPlayer(['A.', 'B.'], { engine })
+    const { result, audio } = renderPlayer(oneChapter(['A.', 'B.']), { engine })
     await act(async () => {
-      result.current.play() // starts slow synth of A
+      result.current.play()
     })
     await act(async () => {
-      result.current.seekToParagraph(`${chapterId('c1')}:1`) // supersede with B
+      result.current.seekToParagraph(`${chapterId('c1')}:1`)
     })
     expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:1`)
-    expect(audio.loadedSrcs).toEqual([expect.any(String)]) // only B's URL loaded
-    // Now resolve the stale A synth — must be ignored (no second load).
+    expect(audio.loadedSrcs).toEqual([expect.any(String)])
     await act(async () => {
       resolveFirst({ audio: new Blob([new Uint8Array([9])]), synthMs: 9 })
     })
@@ -269,21 +302,21 @@ describe('useParagraphPlayer', () => {
   })
 
   it('revokes the previous Blob URL on every advance', async () => {
-    const { result, audio } = renderPlayer(['A.', 'B.'])
+    const { result, audio } = renderPlayer(oneChapter(['A.', 'B.']))
     await act(async () => {
       result.current.play()
     })
     expect(audio.loadedSrcs).toHaveLength(1)
     expect(revokeSpy).not.toHaveBeenCalled()
     await act(async () => {
-      audio.emitEnded() // advance to B
+      audio.emitEnded()
     })
     expect(revokeSpy).toHaveBeenCalledTimes(1)
     expect(audio.loadedSrcs).toHaveLength(2)
   })
 
   it('revokes the Blob URL on stop', async () => {
-    const { result } = renderPlayer(['A.'])
+    const { result } = renderPlayer(oneChapter(['A.']))
     await act(async () => {
       result.current.play()
     })
@@ -299,7 +332,7 @@ describe('useParagraphPlayer', () => {
     engine.synthesize = async () => {
       throw new Error('model missing')
     }
-    const { result } = renderPlayer(['A.'], { engine })
+    const { result } = renderPlayer(oneChapter(['A.']), { engine })
     await act(async () => {
       result.current.play()
     })
@@ -308,15 +341,215 @@ describe('useParagraphPlayer', () => {
 
   it('applies playbackRate to the audio controller', async () => {
     const audio = new FakeAudio()
-    const { rerender } = renderPlayer(['A.'], { audio })
+    const { rerender } = renderPlayer(oneChapter(['A.']), { audio })
     expect(audio.rates).toContain(1)
     rerender({
-      chapters: makeChapters(['A.']),
+      chapters: oneChapter(['A.']),
       voiceId: VOICE,
       rate: 1.5,
       engine: stubEngine(),
       audio,
+      lookahead: 0,
     })
     expect(audio.rates).toContain(1.5)
+  })
+
+  it('seekBy / seekTo / getAudioPosition delegate to the audio controller', async () => {
+    const audio = new FakeAudio()
+    audio.setPosition(12, 40)
+    const { result } = renderPlayer(oneChapter(['A.']), { audio })
+    await act(async () => {
+      result.current.play()
+    })
+    result.current.seekBy(-15)
+    result.current.seekTo(5)
+    expect(audio.seekByCalls).toEqual([-15])
+    expect(audio.seekToCalls).toEqual([5])
+    expect(result.current.getAudioPosition()).toEqual({ currentTime: 12, duration: 40 })
+  })
+})
+
+// Pre-render queue tests at lookahead=3 (production default).
+describe('useParagraphPlayer — pre-render queue (lookahead=3)', () => {
+  it('pre-renders ahead after the current paragraph plays', async () => {
+    const engine = stubEngine()
+    const { result } = renderPlayer(oneChapter(['One.', 'Two.', 'Three.', 'Four.']), {
+      engine,
+      lookahead: 3,
+    })
+    await act(async () => {
+      result.current.play()
+    })
+    await waitFor(() => {
+      expect(engine.calls.map((c) => c.text)).toEqual(['One.', 'Two.', 'Three.', 'Four.'])
+    })
+    expect(result.current.status.type).toBe('playing')
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:0`)
+    expect(result.current.bufferedAhead).toBe(3)
+  })
+
+  it('advances gaplessly from the buffer on ended (no new synth)', async () => {
+    const engine = stubEngine()
+    const { result, audio } = renderPlayer(oneChapter(['One.', 'Two.', 'Three.']), {
+      engine,
+      lookahead: 3,
+    })
+    await act(async () => {
+      result.current.play()
+    })
+    await waitFor(() => {
+      expect(engine.calls).toHaveLength(3)
+    })
+    const callsBeforeEnded = engine.calls.length
+    await act(async () => {
+      audio.emitEnded()
+    })
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:1`)
+    expect(result.current.status.type).toBe('playing')
+    expect(engine.calls.length).toBe(callsBeforeEnded)
+  })
+
+  it('caps look-ahead at the configured depth (back-pressure)', async () => {
+    const engine = stubEngine()
+    const { result } = renderPlayer(oneChapter(['A.', 'B.', 'C.', 'D.', 'E.', 'F.']), {
+      engine,
+      lookahead: 3,
+    })
+    await act(async () => {
+      result.current.play()
+    })
+    await waitFor(() => {
+      expect(engine.calls).toHaveLength(4)
+    })
+    expect(engine.calls.length).toBe(4)
+    expect(result.current.bufferedAhead).toBe(3)
+  })
+
+  it('invalidates and re-primes on a discontinuous seek', async () => {
+    const engine = stubEngine()
+    const { result } = renderPlayer(oneChapter(['A.', 'B.', 'C.', 'D.', 'E.']), {
+      engine,
+      lookahead: 3,
+    })
+    await act(async () => {
+      result.current.play()
+    })
+    await waitFor(() => {
+      expect(engine.calls).toHaveLength(4)
+    })
+    await act(async () => {
+      result.current.seekToParagraph(`${chapterId('c1')}:4`)
+    })
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:4`)
+    await waitFor(() => {
+      expect(engine.calls.map((c) => c.text)).toContain('E.')
+    })
+  })
+
+  it('revokes the live Blob URL on every advance (queue active)', async () => {
+    const { result, audio } = renderPlayer(oneChapter(['A.', 'B.', 'C.']), { lookahead: 3 })
+    await act(async () => {
+      result.current.play()
+    })
+    await waitFor(() => {
+      expect(audio.loadedSrcs).toHaveLength(1)
+    })
+    expect(revokeSpy).not.toHaveBeenCalled()
+    await act(async () => {
+      audio.emitEnded()
+    })
+    expect(revokeSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears the buffer on stop', async () => {
+    const engine = stubEngine()
+    const { result } = renderPlayer(oneChapter(['A.', 'B.', 'C.']), { engine, lookahead: 3 })
+    await act(async () => {
+      result.current.play()
+    })
+    await waitFor(() => {
+      expect(result.current.bufferedAhead).toBe(2)
+    })
+    await act(async () => {
+      result.current.stop()
+    })
+    expect(result.current.status.type).toBe('idle')
+    expect(result.current.bufferedAhead).toBe(0)
+  })
+
+  it('invalidates the buffer when the voice changes', async () => {
+    const engine = stubEngine()
+    const { result, rerender } = renderPlayer(oneChapter(['A.', 'B.', 'C.']), {
+      engine,
+      lookahead: 3,
+      voiceId: VOICE,
+    })
+    await act(async () => {
+      result.current.play()
+    })
+    await waitFor(() => {
+      expect(result.current.bufferedAhead).toBe(2)
+    })
+    rerender({
+      chapters: oneChapter(['A.', 'B.', 'C.']),
+      voiceId: VOICE_2,
+      rate: 1,
+      engine,
+      audio: new FakeAudio(),
+      lookahead: 3,
+    })
+    await waitFor(() => {
+      expect(result.current.bufferedAhead).toBe(0)
+    })
+  })
+})
+
+// Chapter-skip tests (multi-chapter books).
+describe('useParagraphPlayer — chapter skip', () => {
+  const book = makeChapters([
+    { title: 'Ch1', paragraphs: ['1a.', '1b.'] },
+    { title: 'Ch2', paragraphs: ['2a.', '2b.'] },
+    { title: 'Ch3', paragraphs: ['3a.', '3b.'] },
+  ])
+
+  it('nextChapter jumps to the first paragraph of the next chapter', async () => {
+    const engine = stubEngine()
+    const { result } = renderPlayer(book, { engine, lookahead: 0 })
+    await act(async () => {
+      result.current.play()
+    })
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:0`)
+    await act(async () => {
+      result.current.nextChapter()
+    })
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c2')}:0`)
+    await act(async () => {
+      result.current.nextChapter()
+    })
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c3')}:0`)
+  })
+
+  it('prevChapter jumps to the first paragraph of the previous chapter', async () => {
+    const engine = stubEngine()
+    const { result } = renderPlayer(book, { engine, lookahead: 0 })
+    await act(async () => {
+      result.current.seekToParagraph(`${chapterId('c3')}:1`)
+    })
+    await act(async () => {
+      result.current.prevChapter()
+    })
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c2')}:0`)
+  })
+
+  it('nextChapter is a no-op on the last chapter', async () => {
+    const engine = stubEngine()
+    const { result } = renderPlayer(book, { engine, lookahead: 0 })
+    await act(async () => {
+      result.current.seekToParagraph(`${chapterId('c3')}:0`)
+    })
+    await act(async () => {
+      result.current.nextChapter()
+    })
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c3')}:0`)
   })
 })
