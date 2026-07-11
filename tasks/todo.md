@@ -1,38 +1,31 @@
-# M1 — Upload & Read · Task checklist
+# M2 — Speak · Task checklist
 
 > Source of truth for `/status` and `/build`. Task detail + dependencies live in
-> [`plan.md`](./plan.md); spec in [`docs/prds/M1-upload-read.md`](../docs/prds/M1-upload-read.md).
-> Checkpoints gate phases: A foundation → B parsers → C integrated → D milestone verified.
+> [`plan.md`](./plan.md); spec in [`docs/prds/M2-speak.md`](../docs/prds/M2-speak.md).
+> Checkpoints gate phases: A engine+worker → B playback engine → C read-along UI → D milestone verified.
 
-## Phase 1 — Foundation & data layer
-- [x] T1 — Types + DB v2
-- [x] T2 — Parser contract + TXT parser
+## Phase 1 — Engine + worker
+- [ ] T1 — Deps + local WASM mirror (pin ORT 1.18.0, zero cdnjs)
+- [ ] T2 — TTS types + curated voice catalog
+- [ ] T3 — TTS Worker + client (verify OPFS-from-worker)
 
-Checkpoint A — Foundation locked (types, DB v2, parser contract) · ✅
+Checkpoint A — Engine + worker proven (synthesize WAV from worker, offline-ready) · ☐
 
-## Phase 2 — Format parsers
-- [x] T3 — EPUB parser
-- [x] T4 — PDF parser + worker spike
+## Phase 2 — Playback engine
+- [ ] T4 — `useParagraphPlayer` hook (play/pause/next/prev/seek, auto-advance, Blob-URL revocation)
 
-Checkpoint B — All format parsers green · ✅
+Checkpoint B — Playback engine works (play a book, auto-advance through paragraphs) · ☐
 
-## Phase 3 — Worker integration
-- [x] T5 — Parse Worker + client
+## Phase 3 — Read-along UI
+- [ ] T5 — Reader read-along (highlight, tap-to-seek, PlayerBar)
+- [ ] T6 — Settings: voice picker + speed slider
 
-## Phase 4 — Reader UI
-- [x] T6 — Reader container + views + landing CTA
+Checkpoint C — Full slice: upload → read → play → read-along, voice + speed wired · ☐
 
-Checkpoint C — Worker + UI integrated end-to-end · ✅
+## Phase 4 — End-to-end verify
+- [ ] T7 — E2E + browser verify (play through chapter, voice switch, speed, offline, 0 console errors)
 
-## Phase 5 — End-to-end verify
-- [x] T7 — E2E + browser verify (3 formats, reload, offline, 0 console errors)
-
-Checkpoint D — Three-format slice shipped & `pnpm verify` green · ✅
-
----
-
-## Spike (deferred — independent after T2)
-- [x] T8 — MOBI spike (decision: minimal self-written KF7 parser shipped)
+Checkpoint D — Speak slice shipped & `pnpm verify` green · ☐
 
 ---
 
