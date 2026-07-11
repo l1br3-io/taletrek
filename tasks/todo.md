@@ -5,27 +5,27 @@
 > Checkpoints gate phases: A engine+worker → B playback engine → C read-along UI → D milestone verified.
 
 ## Phase 1 — Engine + worker
-- [ ] T1 — Deps + local WASM mirror (pin ORT 1.18.0, zero cdnjs)
-- [ ] T2 — TTS types + curated voice catalog
-- [ ] T3 — TTS Worker + client (verify OPFS-from-worker)
+- [x] T1 — Deps + local WASM mirror (pin ORT 1.18.0, zero cdnjs)
+- [x] T2 — TTS types + curated voice catalog
+- [x] T3 — TTS Worker + client (verify OPFS-from-worker)
 
-Checkpoint A — Engine + worker proven (synthesize WAV from worker, offline-ready) · ☐
+Checkpoint A — Engine + worker proven (synthesize WAV from worker, offline-ready) · ✅
 
 ## Phase 2 — Playback engine
-- [ ] T4 — `useParagraphPlayer` hook (play/pause/next/prev/seek, auto-advance, Blob-URL revocation)
+- [x] T4 — `useParagraphPlayer` hook (play/pause/next/prev/seek, auto-advance, Blob-URL revocation)
 
-Checkpoint B — Playback engine works (play a book, auto-advance through paragraphs) · ☐
+Checkpoint B — Playback engine works (play a book, auto-advance through paragraphs) · ✅
 
 ## Phase 3 — Read-along UI
-- [ ] T5 — Reader read-along (highlight, tap-to-seek, PlayerBar)
-- [ ] T6 — Settings: voice picker + speed slider
+- [x] T5 — Reader read-along (highlight, tap-to-seek, PlayerBar)
+- [x] T6 — Settings: voice picker + speed slider
 
-Checkpoint C — Full slice: upload → read → play → read-along, voice + speed wired · ☐
+Checkpoint C — Full slice: upload → read → play → read-along, voice + speed wired · ✅
 
 ## Phase 4 — End-to-end verify
-- [ ] T7 — E2E + browser verify (play through chapter, voice switch, speed, offline, 0 console errors)
+- [x] T7 — E2E + browser verify (play through chapter, voice switch, speed, offline, 0 console errors)
 
-Checkpoint D — Speak slice shipped & `pnpm verify` green · ☐
+Checkpoint D — Speak slice shipped & `pnpm verify` green · ✅
 
 ---
 

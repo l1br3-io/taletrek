@@ -5,27 +5,29 @@
 
 ## Resuming
 
-**As of 2026-07-11:** M1 — Upload & Read is **shipped** at commit `71a642b finished M1`
-(includes the T8 MOBI spike). `pnpm verify` green at M1 close: lint ✅, typecheck ✅,
-test ✅ (64 tests / 10 files), build ✅. Clean working tree.
+**As of 2026-07-11:** M2 — Speak is **complete.** `pnpm verify` green this
+session — lint ✅, typecheck ✅, test ✅ (120 tests / 17 files), build ✅
+(95 modules, PWA generated). Browser-verified via chrome-devtools MCP:
+per-paragraph playback with monotonic auto-advance + read-along highlight,
+tap-to-seek, voice download/selection, speed persistence, book-reopens-after-
+reload, zero console errors (one benign ORT `numThreads` warn — deviation #2),
+zero cdnjs/jsdelivr calls (wasm served from local mirror).
 
-**M2 scope locked** (see PRD decisions table + the four trade-off answers):
-per-paragraph synthesis with read-along highlight + tap-to-seek; curated ~8 English
-voices (medium quality) downloaded on demand to OPFS; `audio.playbackRate` for speed;
-single-threaded default (no COOP/COEP); inference in a Web Worker; **no DB schema bump**
-(voice + speed ride the `settings` store); **no position persistence** (M5).
+**Shipped:** Piper TTS engine (`@mintplex-labs/piper-tts-web@1.0.4` +
+`onnxruntime-web@1.18.0` pinned) wrapping `TtsSession` with local wasm-path
+overrides; a TTS Web Worker + promise-wrapping client (mirrors the M1 parse
+worker pattern); the `useParagraphPlayer` hook (per-paragraph synth, auto-
+advance, Blob-URL revocation, token-based cancellation); `PlayerBar` +
+`ReaderView` read-along highlight/tap-to-seek; `VoicePicker` (curated 8-voice
+catalog, OPFS download/stored states); `voiceId` + `playbackRate` in settings.
 
-**Licensing:** ADR-0002 already accepted (MIT pipeline via
-`@mintplex-labs/piper-tts-web`); ADR-0001 GPL is fallback only. The spike
-(`docs/spikes/piper-wasm.md`) proved the thesis: warm synth ≈ 0.16× realtime, faster
-than realtime even single-threaded. Spike API surface: `tts.voices()`,
-`tts.download(id, cb)` → OPFS, `tts.stored()`, `tts.predict({text, voiceId})` → WAV Blob.
+**Working tree:** the M2 implementation is **uncommitted** — run
+`git status --porcelain` for the live count. Last commit: `71a642b finished M1`.
+Land the work before starting the next milestone (M3).
 
-**Critical reminders (do not relearn):**
-1. Pin `onnxruntime-web@1.18.0` **exactly** — any other JS version deadlocks inference silently (AGENTS #1). Mirror the wasm locally; verify zero cdnjs calls.
-2. The spike ran `piper-tts-web` on the **main thread**. M2 runs it in a **Web Worker** — OPFS-from-worker must be verified in T3 (the package's `download`/`stored` use OPFS). Fallback: main-thread engine behind the same `TtsEngine` interface.
-3. Revoke every Blob URL (advance + unmount) — `useParagraphPlayer` owns this; covered by unit test.
-4. Playback state stays in the `/reader` container (variant types) — **never Context**. Only `voiceId` + `playbackRate` go in `SettingsProvider` (low-frequency).
+**4 deviations on record** — read before continuing (see Deviations below):
+broken piper-wasm URL workaround, benign ORT numThreads warn, the removed
+throwaway smoke route, and the `ended`-handler `playing`-status guard.
 
 ---
 
@@ -91,4 +93,35 @@ Checkpoint D — Speak slice shipped & `pnpm verify` green · ☐
 ---
 
 ## Deviations
-*(empty — record any here as they occur, with a numbered entry and a "read before continuing" note.)*
+
+1. **`@mintplex-labs/piper-tts-web` references a broken piper-wasm URL.** The
+   package defaults `WASM_BASE` to `@diffusion-studio/piper-wasm@1.0.0`
+   (hyphenated) on jsdelivr, which 404s — the real package is
+   `@diffusionstudio/piper-wasm` (no hyphen). The spike likely worked via
+   browser cache. T1's `wasm-paths.ts` overrides all three paths
+   (`onnxWasm`/`piperWasm`/`piperData`) to the local mirror, fully bypassing
+   both cdnjs and the broken jsdelivr reference. Verified: zero cdnjs + zero
+   jsdelivr calls in the network tab.
+
+2. **Benign ORT `numThreads` warning.** The package sets
+   `ort.env.wasm.numThreads = navigator.hardwareConcurrency` unconditionally.
+   Without cross-origin isolation (our default), ORT logs a `warn` ("numThreads
+   set to N, but crossOriginIsolated not enabled") and falls back to
+   single-threaded — which is our target. Synthesis works (loaded
+   `ort-wasm-simd.wasm`, the single-threaded variant). Benign, like M1's pdf.js
+   warns; documented here, not a blocker. Suppression would require forking the
+   package (not worth it for a `warn`).
+
+3. **Throwaway `/tts-smoke` route added for T1/T3 browser verification.**
+   `web/src/routes/tts-smoke.tsx` (+ route in `App.tsx`) exercises `TtsClient`
+   end-to-end (download / stored / synth / play). **Removed at T5** once the
+   real reader integration (`useParagraphPlayer` + `PlayerBar`) landed.
+
+4. **`useParagraphPlayer` `ended` handler guards on `playing` status.** The
+   audio element emits a spurious `ended` event when a new `src` is set
+   mid-loading (the browser fires a stale event for the old media). Without a
+   guard this caused erratic pointer movement (highlight jumped backwards /
+   skipped paragraphs). Fix: the `onEnded` handler returns early unless
+   `statusRef.current.type === 'playing'`. Verified in the browser: highlight
+   now advances monotonically (2→3→4→Finished) and terminates correctly.
+   Unit tests cover the guarded path.
