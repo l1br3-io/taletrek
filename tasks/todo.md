@@ -32,7 +32,7 @@ Checkpoint D — Three-format slice shipped & `pnpm verify` green · ✅
 ---
 
 ## Spike (deferred — independent after T2)
-- [ ] T8 — MOBI spike (decision: minimal self-written parser or punt)
+- [x] T8 — MOBI spike (decision: minimal self-written KF7 parser shipped)
 
 ---
 

@@ -1,7 +1,7 @@
 export type BookId = string & { readonly __brand: 'BookId' }
 export type ChapterId = string & { readonly __brand: 'ChapterId' }
 
-export type BookFormat = 'pdf' | 'epub' | 'txt'
+export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'txt'
 
 export interface Book {
   id: BookId

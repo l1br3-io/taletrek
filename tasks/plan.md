@@ -5,18 +5,18 @@
 
 ## Resuming
 
-**As of 2026-07-11:** M1 three-format slice (T1–T7) is **complete**. `pnpm verify`
-reconfirmed green this session — `pnpm lint` ✅, `pnpm typecheck` ✅, `pnpm test`
-✅ (49 tests across 9 files), `pnpm build` ✅ (91 modules, PWA generated).
+**As of 2026-07-11:** M1 is **complete, including the T8 MOBI spike.** `pnpm verify`
+green this session — `pnpm lint` ✅, `pnpm typecheck` ✅, `pnpm test`
+✅ (64 tests across 10 files), `pnpm build` ✅ (91 modules, PWA generated).
 
 **Completed:** Branded types + DB v2 (books/chapters/files stores), the
-`Parser` contract, TXT/EPUB/PDF parsers, a Web Worker + promise-wrapping client,
+`Parser` contract, TXT/EPUB/PDF/MOBI parsers, a Web Worker + promise-wrapping client,
 and the reader container with `UploadButton`/`ReaderView` + landing CTA.
 Hard-reload reopens the most-recent book; parsing runs off the main thread.
 
-**Working tree:** the M1 implementation is **uncommitted** — run
-`git status --porcelain` for the live count. Last commit: `27ac4ef docs: add
-AGENTS.md`. Land the work before starting T8.
+**Working tree:** the M1 + T8 implementation is **uncommitted** — run
+`git status --porcelain` for the live count. Last commit: `3cd9ea7 initial commit`.
+Land the work before starting the next milestone (M2).
 
 **3 deviations on record** — read before continuing:
 1. **EPUB parser uses `fast-xml-parser`, not `DOMParser`.** The PRD's project
@@ -28,6 +28,8 @@ AGENTS.md`. Land the work before starting T8.
 3. **Fixture strategy differs:** only `sample.txt` is committed under
    `__fixtures__/`; EPUB/PDF fixtures are generated at test time by
    `web/scripts/gen-fixtures.mjs` (untracked) rather than committed as binaries.
+   The MOBI parser follows the same no-binary approach — its test builds a valid
+   PDB in-test as an `ArrayBuffer` (`mobi.test.ts`).
 
 ---
 
@@ -94,14 +96,20 @@ AGENTS.md`. Land the work before starting T8.
 - **Verify:** full `pnpm verify` green this session (49 tests, build OK).
 - **Files:** wiring + minor fixes across the slice.
 
-### T8 — MOBI spike · ⬜ pending (next task)
+### T8 — MOBI spike · ✅ done
 - **Detail:** The only format with no healthy off-the-shelf browser parser.
-- Investigate a minimal self-written MOBI parser vs. punting; if viable, add
-  `'mobi'` to `BookFormat` and a `parse/mobi.ts`.
-- **Depends on:** T2 (`Parser` contract must exist — it does).
-- **Acceptance:** decision recorded in `docs/spikes/mobi.md`; if built, MOBI
-  fixture extracts chapters + a parser unit test passes.
-- **Verify:** spike doc + `pnpm verify` still green; parser test if implemented.
-- **Files:** `docs/spikes/mobi.md`, possibly `web/src/lib/parse/mobi.ts`.
-- **Note:** independent of T3–T7; safe to start now. Per the PRD this was always
-  deferred until after the three-format slice shipped — which it now has.
+  **Decision: build a minimal self-written KF7 parser** (no dependency, per the
+  locked PRD decision). Handles uncompressed + PalmDOC LZ77 MOBI; rejects DRM,
+  HUFF/CDIC, and KF8/AZW3 with friendly `ParseError`s recommending EPUB
+  conversion. Full findings in [`docs/spikes/mobi.md`](../docs/spikes/mobi.md).
+- **Depends on:** T2 (`Parser` contract — it existed).
+- **Acceptance:** decision recorded in `docs/spikes/mobi.md`; MOBI fixture
+  extracts chapters + 15 parser tests pass.
+- **Verify:** `mobi.test.ts` (15 tests: 9 parser + 6 `decompressPalmdoc` unit);
+  full `pnpm verify` green this session.
+- **Files:** `docs/spikes/mobi.md`, `web/src/lib/parse/{mobi,mobi.test}.ts`,
+  edits to `web/src/types.ts` (`'mobi'` in `BookFormat`),
+  `web/src/lib/parse/{util,dispatcher}.ts`.
+- **Limitations documented in the spike doc:** KF8/AZW3 unsupported (recommend
+  EPUB conversion or evaluate `@lingo-reader/mobi-parser` if demand grows);
+  HUFF/CDIC unsupported; single chapter (matches TXT/PDF precedent).

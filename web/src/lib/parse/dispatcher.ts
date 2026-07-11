@@ -1,10 +1,11 @@
 import { epubParser } from './epub'
+import { mobiParser } from './mobi'
 import { pdfParser } from './pdf'
 import { txtParser } from './txt'
 import type { ParseResult, Parser } from './types'
 import { ParseError } from './types'
 
-const parsers: Parser[] = [txtParser, epubParser, pdfParser]
+const parsers: Parser[] = [txtParser, epubParser, mobiParser, pdfParser]
 
 export async function parseFile(file: File): Promise<ParseResult> {
   const parser = parsers.find((p) => p.matches(file))
