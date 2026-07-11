@@ -1,5 +1,6 @@
 export type BookId = string & { readonly __brand: 'BookId' }
 export type ChapterId = string & { readonly __brand: 'ChapterId' }
+export type VoiceId = string & { readonly __brand: 'VoiceId' }
 
 export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'txt'
 
@@ -42,4 +43,8 @@ export function newBookId(): BookId {
 
 export function newChapterId(): ChapterId {
   return chapterId(crypto.randomUUID())
+}
+
+export function voiceId(value: string): VoiceId {
+  return value as VoiceId
 }

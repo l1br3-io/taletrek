@@ -8,6 +8,8 @@
   "packageManager": "pnpm@10.31.0",
   "scripts": {
     "dev": "pnpm -C web dev",
+    "mirror-wasm": "node web/scripts/mirror-wasm.mjs",
+    "postinstall": "node web/scripts/mirror-wasm.mjs",
     "build": "pnpm -C web build",
     "preview": "pnpm -C web preview",
     "typecheck": "pnpm -C web typecheck",

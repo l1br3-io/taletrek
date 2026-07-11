@@ -1,5 +1,7 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react'
 import { getSetting, setSetting } from '../lib/db'
+import { DEFAULT_VOICE_ID } from '../lib/tts/voices'
+import type { VoiceId } from '../types'
 
 export type Theme = 'dark' | 'sepia'
 
@@ -8,11 +10,17 @@ export interface Settings {
   theme: Theme
   /** Reader font scale multiplier. */
   fontScale: number
+  /** Active TTS voice (curated catalog id). */
+  voiceId: VoiceId
+  /** Audio playback speed (0.5–2×); applied via `audio.playbackRate`. */
+  playbackRate: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'dark',
   fontScale: 1,
+  voiceId: DEFAULT_VOICE_ID,
+  playbackRate: 1,
 }
 
 const SETTINGS_KEY = 'app'

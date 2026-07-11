@@ -12,9 +12,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@mintplex-labs/piper-tts-web": "1.0.4",
     "fast-xml-parser": "^5.9.3",
     "idb": "8.0.3",
     "jszip": "^3.10.1",
+    "onnxruntime-web": "1.18.0",
     "pdfjs-dist": "^6.1.200",
     "react": "19.2.7",
     "react-dom": "19.2.7",

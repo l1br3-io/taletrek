@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
+import { PlayerBar } from '../components/PlayerBar'
 import { ReaderView } from '../components/ReaderView'
 import { UploadButton } from '../components/UploadButton'
+import { useSettings } from '../context/settings'
+import { useParagraphPlayer } from '../hooks/useParagraphPlayer'
 import { getChaptersByBook, getMostRecentBook, putBook, putBookFile, putChapters } from '../lib/db'
 import { parseInWorker } from '../lib/parse/client'
 import { formatForFile } from '../lib/parse/util'
+import { ttsClient } from '../lib/tts/client'
 import { type Book, type BookFile, type Chapter, newBookId, newChapterId } from '../types'
 
 type LoadState =
@@ -15,6 +19,37 @@ type UploadState =
   | { type: 'idle' }
   | { type: 'parsing'; fileName: string }
   | { type: 'error'; message: string }
+
+/** Playback view for a loaded book — owns the player hook (keyed by book.id). */
+function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
+  const { settings, update } = useSettings()
+  const player = useParagraphPlayer({
+    chapters,
+    voiceId: settings.voiceId,
+    playbackRate: settings.playbackRate,
+    engine: ttsClient,
+  })
+  return (
+    <div className="space-y-6">
+      <ReaderView
+        book={book}
+        chapters={chapters}
+        currentParagraphId={player.currentParagraphId}
+        onSeekParagraph={player.seekToParagraph}
+      />
+      <PlayerBar
+        status={player.status}
+        playbackRate={settings.playbackRate}
+        onPlay={player.play}
+        onPause={player.pause}
+        onStop={player.stop}
+        onNext={player.next}
+        onPrev={player.prev}
+        onRateChange={(rate) => void update({ playbackRate: rate })}
+      />
+    </div>
+  )
+}
 
 export function Reader() {
   const [load, setLoad] = useState<LoadState>({ type: 'loading' })
@@ -116,7 +151,9 @@ export function Reader() {
           </div>
         </div>
       )}
-      {load.type === 'ready' && <ReaderView book={load.book} chapters={load.chapters} />}
+      {load.type === 'ready' && (
+        <ReaderPane key={load.book.id} book={load.book} chapters={load.chapters} />
+      )}
     </div>
   )
 }
