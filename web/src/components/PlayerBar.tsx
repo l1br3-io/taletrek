@@ -3,24 +3,30 @@ import type { PlaybackStatus } from '../hooks/useParagraphPlayer'
 interface PlayerBarProps {
   status: PlaybackStatus
   playbackRate: number
+  /** Paragraphs pre-rendered ahead of the pointer (0 when none ready). */
+  bufferedAhead?: number
   onPlay: () => void
   onPause: () => void
   onStop: () => void
   onNext: () => void
   onPrev: () => void
+  /** Skip to the next chapter (lock-screen parity). */
+  onNextChapter?: () => void
+  /** Skip to the previous chapter (lock-screen parity). */
+  onPrevChapter?: () => void
   onRateChange: (rate: number) => void
 }
 
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2]
 
-function statusLabel(status: PlaybackStatus): string {
+function statusLabel(status: PlaybackStatus, bufferedAhead: number): string {
   switch (status.type) {
     case 'idle':
       return 'Ready'
     case 'loading':
       return 'Synthesizing…'
     case 'playing':
-      return 'Playing'
+      return bufferedAhead > 0 ? 'Playing' : 'Playing · buffering…'
     case 'paused':
       return 'Paused'
     case 'ended':
@@ -33,11 +39,14 @@ function statusLabel(status: PlaybackStatus): string {
 export function PlayerBar({
   status,
   playbackRate,
+  bufferedAhead = 0,
   onPlay,
   onPause,
   onStop,
   onNext,
   onPrev,
+  onNextChapter,
+  onPrevChapter,
   onRateChange,
 }: PlayerBarProps) {
   const isPlaying = status.type === 'playing'
@@ -48,6 +57,17 @@ export function PlayerBar({
       className="sticky bottom-0 flex items-center gap-3 rounded-lg border border-line bg-surface p-3 shadow-lg"
       aria-label="Audio playback"
     >
+      {onPrevChapter && (
+        <button
+          type="button"
+          onClick={onPrevChapter}
+          disabled={busy}
+          className="rounded border border-line px-2 py-1 disabled:opacity-40"
+          aria-label="Previous chapter"
+        >
+          «
+        </button>
+      )}
       <button
         type="button"
         onClick={onPrev}
@@ -86,6 +106,17 @@ export function PlayerBar({
       >
         ⏭
       </button>
+      {onNextChapter && (
+        <button
+          type="button"
+          onClick={onNextChapter}
+          disabled={busy}
+          className="rounded border border-line px-2 py-1 disabled:opacity-40"
+          aria-label="Next chapter"
+        >
+          »
+        </button>
+      )}
       <button
         type="button"
         onClick={onStop}
@@ -95,7 +126,7 @@ export function PlayerBar({
         ⏹
       </button>
       <span className="min-w-[8rem] text-sm text-muted" aria-live="polite">
-        {statusLabel(status)}
+        {statusLabel(status, bufferedAhead)}
       </span>
       <label className="ml-auto flex items-center gap-2 text-sm text-muted">
         Speed

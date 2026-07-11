@@ -70,4 +70,30 @@ describe('PlayerBar', () => {
     expect(onNext).toHaveBeenCalledOnce()
     expect(onStop).toHaveBeenCalledOnce()
   })
+
+  it('renders chapter-skip buttons when handlers are provided', () => {
+    const onNextChapter = vi.fn()
+    const onPrevChapter = vi.fn()
+    renderBar({ onNextChapter, onPrevChapter })
+    fireEvent.click(screen.getByRole('button', { name: 'Next chapter' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Previous chapter' }))
+    expect(onNextChapter).toHaveBeenCalledOnce()
+    expect(onPrevChapter).toHaveBeenCalledOnce()
+  })
+
+  it('omits chapter-skip buttons when no handlers are given', () => {
+    renderBar()
+    expect(screen.queryByRole('button', { name: 'Next chapter' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Previous chapter' })).toBeNull()
+  })
+
+  it('shows a buffering hint while playing with nothing buffered ahead', () => {
+    renderBar({ status: { type: 'playing', paragraphId: 'c:0' }, bufferedAhead: 0 })
+    expect(screen.getByText(/buffering/)).toBeInTheDocument()
+  })
+
+  it('shows plain Playing when a chunk is buffered ahead', () => {
+    renderBar({ status: { type: 'playing', paragraphId: 'c:0' }, bufferedAhead: 2 })
+    expect(screen.queryByText(/buffering/)).toBeNull()
+  })
 })
