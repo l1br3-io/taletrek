@@ -24,12 +24,27 @@ describe('Landing', () => {
     expect(screen.getByText('l1br3', { exact: false })).toBeInTheDocument()
   })
 
-  it('offers an upload call to action', () => {
+  it('offers a library call to action', () => {
     render(
       <MemoryRouter>
         <Landing />
       </MemoryRouter>,
     )
-    expect(screen.getByRole('link', { name: /Upload a book/i })).toHaveAttribute('href', '/reader')
+    expect(screen.getByRole('link', { name: /Browse your library/i })).toHaveAttribute(
+      'href',
+      '/library',
+    )
+  })
+
+  it('offers a continue-reading shortcut', () => {
+    render(
+      <MemoryRouter>
+        <Landing />
+      </MemoryRouter>,
+    )
+    expect(screen.getByRole('link', { name: /Continue reading/i })).toHaveAttribute(
+      'href',
+      '/reader',
+    )
   })
 })

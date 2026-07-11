@@ -7,7 +7,7 @@ import { VoicePicker } from './VoicePicker'
 const ACTIVE = voiceId('en_US-hfc_female-medium')
 
 function renderPicker(overrides?: Partial<React.ComponentProps<typeof VoicePicker>>) {
-  const handlers = { onSelect: vi.fn(), onDownload: vi.fn() }
+  const handlers = { onSelect: vi.fn(), onDownload: vi.fn(), onRemove: vi.fn() }
   const props = {
     voices: CURATED_VOICES,
     activeVoiceId: ACTIVE,
@@ -57,5 +57,11 @@ describe('VoicePicker', () => {
     if (!first) throw new Error('expected a download button')
     fireEvent.click(first)
     expect(onDownload).toHaveBeenCalledWith(ACTIVE)
+  })
+
+  it('calls onRemove when a stored voice remove button is clicked', () => {
+    const { onRemove } = renderPicker({ storedIds: new Set([ACTIVE]) })
+    fireEvent.click(screen.getByRole('button', { name: /remove HFC Female/i }))
+    expect(onRemove).toHaveBeenCalledWith(ACTIVE)
   })
 })

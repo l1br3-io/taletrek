@@ -40,6 +40,20 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         cleanupOutdatedCaches: true,
+        // The Piper WASM runtime (~39 MB) is too large to precache. Cache it on
+        // first fetch so it's available offline thereafter — the app shell +
+        // these binaries + the OPFS voice model together enable true offline.
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/wasm/'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'piper-wasm',
+              expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
       },
       // Enable the SW in dev so offline/PWA behavior is testable locally.
       devOptions: {

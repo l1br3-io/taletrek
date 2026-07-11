@@ -1,6 +1,21 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { type Book, type BookFile, type Chapter, newBookId, newChapterId } from '../types'
-import { _clearDBForTests, _resetDBForTests, deleteSetting, getSetting, setSetting } from './db'
+import {
+  _clearDBForTests,
+  _resetDBForTests,
+  deleteBookCascade,
+  deleteSetting,
+  getAllBooks,
+  getBook,
+  getBookFile,
+  getChaptersByBook,
+  getSetting,
+  putBook,
+  putBookFile,
+  putChapters,
+  setSetting,
+  updateBookProgress,
+} from './db'
 
 beforeEach(async () => {
   _resetDBForTests()
@@ -136,5 +151,82 @@ describe('files store', () => {
   it('returns undefined for a missing file', async () => {
     const { getBookFile } = await import('./db')
     expect(await getBookFile(newBookId())).toBeUndefined()
+  })
+})
+
+describe('library + progress (M5)', () => {
+  it('getAllBooks returns books newest-first by updatedAt', async () => {
+    const oldest = makeBook({ updatedAt: 1000 })
+    const middle = makeBook({ updatedAt: 2000 })
+    const newest = makeBook({ updatedAt: 3000 })
+    await putBook(oldest)
+    await putBook(middle)
+    await putBook(newest)
+    expect(await getAllBooks()).toEqual([newest, middle, oldest])
+  })
+
+  it('getAllBooks returns an empty array when no books exist', async () => {
+    expect(await getAllBooks()).toEqual([])
+  })
+
+  it('a book stored without the new fields loads with them undefined', async () => {
+    const book = makeBook({ title: 'Legacy' })
+    await putBook(book)
+    const loaded = await getBook(book.id)
+    expect(loaded?.position).toBeUndefined()
+    expect(loaded?.progressFraction).toBeUndefined()
+  })
+
+  it('updateBookProgress round-trips position + fraction and bumps updatedAt', async () => {
+    const before = makeBook({ updatedAt: 1000 })
+    await putBook(before)
+    await updateBookProgress(before.id, { chapterIndex: 2, paragraphIndex: 5 }, 0.42)
+    const after = await getBook(before.id)
+    expect(after?.position).toEqual({ chapterIndex: 2, paragraphIndex: 5 })
+    expect(after?.progressFraction).toBeCloseTo(0.42)
+    expect(after?.updatedAt).toBeGreaterThan(1000)
+  })
+
+  it('updateBookProgress preserves the other book fields', async () => {
+    const book = makeBook({ title: 'Keep Me', format: 'epub', chapterCount: 9 })
+    await putBook(book)
+    await updateBookProgress(book.id, { chapterIndex: 1, paragraphIndex: 1 }, 0.1)
+    const after = await getBook(book.id)
+    expect(after?.title).toBe('Keep Me')
+    expect(after?.format).toBe('epub')
+    expect(after?.chapterCount).toBe(9)
+    expect(after?.createdAt).toBe(book.createdAt)
+  })
+
+  it('updateBookProgress is a no-op for a missing book', async () => {
+    await expect(
+      updateBookProgress(newBookId(), { chapterIndex: 0, paragraphIndex: 0 }, 0),
+    ).resolves.toBeUndefined()
+  })
+
+  it('deleteBookCascade removes the book, its chapters, and its file', async () => {
+    const target = makeBook()
+    const other = makeBook()
+    await putBook(target)
+    await putBook(other)
+    await putChapters([
+      { id: newChapterId(), bookId: target.id, index: 0, title: 'T0', paragraphs: ['x'] },
+      { id: newChapterId(), bookId: target.id, index: 1, title: 'T1', paragraphs: ['y'] },
+      { id: newChapterId(), bookId: other.id, index: 0, title: 'O0', paragraphs: ['z'] },
+    ])
+    await putBookFile({
+      bookId: target.id,
+      blob: new Blob(['x'], { type: 'text/plain' }),
+      name: 't.txt',
+      type: 'text/plain',
+      size: 1,
+    })
+    await deleteBookCascade(target.id)
+    expect(await getBook(target.id)).toBeUndefined()
+    expect(await getChaptersByBook(target.id)).toEqual([])
+    expect(await getBookFile(target.id)).toBeUndefined()
+    // sibling book untouched
+    expect(await getBook(other.id)).toEqual(other)
+    expect((await getChaptersByBook(other.id)).map((c) => c.title)).toEqual(['O0'])
   })
 })

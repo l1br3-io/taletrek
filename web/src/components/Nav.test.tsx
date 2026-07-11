@@ -11,6 +11,7 @@ describe('Nav', () => {
       </MemoryRouter>,
     )
     expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/')
+    expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/library')
     expect(screen.getByRole('link', { name: 'Reader' })).toHaveAttribute('href', '/reader')
     expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings')
   })

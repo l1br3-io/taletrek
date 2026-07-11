@@ -93,3 +93,6 @@ writeIcon('pwa-192.png', 192, 1)
 writeIcon('pwa-512.png', 512, 1)
 // Maskable: shrink the mark so it stays inside the ~80% safe zone.
 writeIcon('pwa-512-maskable.png', 512, 0.8)
+// Apple touch icon (iOS home screen). Fully opaque — iOS applies its own
+// rounded-corner mask; no transparency.
+writeIcon('apple-touch-icon.png', 180, 1)

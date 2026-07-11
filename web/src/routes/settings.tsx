@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
+import { InstallPrompt } from '../components/InstallPrompt'
+import { OfflineBadge } from '../components/OfflineBadge'
 import { type DownloadState, VoicePicker } from '../components/VoicePicker'
+import { useOnline } from '../hooks/useOnline'
 import { type Theme, useSetting } from '../hooks/useSetting'
 import type { CleaningFilters, PronunciationEntry } from '../lib/clean/types'
 import { ttsClient } from '../lib/tts/client'
@@ -27,6 +30,7 @@ export function Settings() {
 
   const [storedIds, setStoredIds] = useState<ReadonlySet<string>>(new Set())
   const [downloading, setDownloading] = useState<DownloadState | null>(null)
+  const online = useOnline()
 
   // Refresh which voice models are already in OPFS.
   const refreshStored = useCallback(async () => {
@@ -48,9 +52,20 @@ export function Settings() {
     }
   }
 
+  const handleRemove = async (id: VoiceId) => {
+    await ttsClient.remove(id)
+    setStoredIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
   return (
     <div className="space-y-8">
       <h1 className="text-2xl font-semibold">Settings</h1>
+
+      <InstallPrompt />
 
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Theme</h2>
@@ -94,7 +109,16 @@ export function Settings() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Voice</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
+            Voices &amp; offline
+          </h2>
+          <OfflineBadge online={online} ready={storedIds.has(voiceId)} />
+        </div>
+        <p className="text-xs text-muted">
+          Download a voice once and it's cached on this device — TaleTrek keeps working with no
+          connection. Remove a voice to free up space.
+        </p>
         <VoicePicker
           voices={CURATED_VOICES}
           activeVoiceId={voiceId}
@@ -102,6 +126,7 @@ export function Settings() {
           downloading={downloading}
           onSelect={setVoiceId}
           onDownload={handleDownload}
+          onRemove={handleRemove}
         />
       </section>
 

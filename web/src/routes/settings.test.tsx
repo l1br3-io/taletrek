@@ -8,11 +8,13 @@ import { Settings } from './settings'
 
 const isStoredMock = vi.fn<(id: VoiceId) => Promise<boolean>>()
 const downloadMock = vi.fn<(id: VoiceId, cb?: (f: number) => void) => Promise<void>>()
+const removeMock = vi.fn<(id: VoiceId) => Promise<void>>()
 
 vi.mock('../lib/tts/client', () => ({
   ttsClient: {
     isStored: (id: VoiceId) => isStoredMock(id),
     download: (id: VoiceId, cb?: (f: number) => void) => downloadMock(id, cb),
+    remove: (id: VoiceId) => removeMock(id),
   },
 }))
 
@@ -29,7 +31,9 @@ beforeEach(async () => {
   await _clearDBForTests()
   isStoredMock.mockReset()
   downloadMock.mockReset()
+  removeMock.mockReset()
   isStoredMock.mockResolvedValue(false)
+  removeMock.mockResolvedValue(undefined)
 })
 
 describe('Settings view', () => {
@@ -74,6 +78,45 @@ describe('Settings view', () => {
     fireEvent.click(screen.getByText(/Ryan/))
     const stored = await getSetting<{ voiceId: VoiceId }>('app')
     expect(stored?.voiceId).toBe(voiceId('en_US-ryan-medium'))
+  })
+})
+
+describe('Settings — voices & offline (M5)', () => {
+  it('removes a stored voice and clears its badge', async () => {
+    isStoredMock.mockImplementation((id) => Promise.resolve(id === voiceId('en_US-ryan-medium')))
+    render(withProviders(<Settings />))
+    await waitFor(() => expect(isStoredMock).toHaveBeenCalledTimes(8))
+    const removeBtn = screen.getByRole('button', { name: /remove Ryan/i })
+    await act(async () => {
+      fireEvent.click(removeBtn)
+    })
+    expect(removeMock).toHaveBeenCalledWith(voiceId('en_US-ryan-medium'))
+    // badge gone → all eight voices are downloadable again
+    expect(screen.queryByText('downloaded')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'download' })).toHaveLength(8)
+  })
+
+  it('shows the offline badge as not-ready when no voice is stored', async () => {
+    render(withProviders(<Settings />))
+    await waitFor(() => expect(isStoredMock).toHaveBeenCalledTimes(8))
+    expect(screen.getByText('Voice not downloaded')).toBeInTheDocument()
+  })
+
+  it('shows Ready offline when the active voice is stored', async () => {
+    isStoredMock.mockImplementation((id) =>
+      Promise.resolve(id === voiceId('en_US-hfc_female-medium')),
+    )
+    render(withProviders(<Settings />))
+    await waitFor(() => expect(screen.getByText('Ready offline')).toBeInTheDocument())
+  })
+
+  it('shows Offline when the browser goes offline', async () => {
+    render(withProviders(<Settings />))
+    await waitFor(() => expect(isStoredMock).toHaveBeenCalledTimes(8))
+    act(() => {
+      window.dispatchEvent(new Event('offline'))
+    })
+    expect(screen.getByText('Offline')).toBeInTheDocument()
   })
 })
 

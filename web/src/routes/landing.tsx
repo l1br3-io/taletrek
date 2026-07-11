@@ -14,35 +14,45 @@ export function Landing() {
         <p className="text-sm text-muted">
           A free, open-source reading companion by <span className="text-fg">l1br3</span>.
         </p>
-        <Link
-          to="/reader"
-          className="inline-block rounded-lg border border-accent bg-accent-soft px-5 py-2.5 font-medium text-accent transition-colors hover:bg-elevated"
-        >
-          Upload a book
-        </Link>
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            to="/library"
+            className="inline-block rounded-lg border border-accent bg-accent-soft px-5 py-2.5 font-medium text-accent transition-colors hover:bg-elevated"
+          >
+            Browse your library
+          </Link>
+          <Link
+            to="/reader"
+            className="inline-block rounded-lg border border-line px-5 py-2.5 font-medium text-fg transition-colors hover:border-muted"
+          >
+            Continue reading
+          </Link>
+        </div>
       </section>
 
       <section className="rounded-lg border border-line bg-surface p-6">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
-          What's coming
+          What's included
         </h2>
         <ul className="space-y-2 text-fg">
           <li>📄 Upload PDF, EPUB, MOBI, or TXT</li>
           <li>🔊 On-device neural text-to-speech (Piper)</li>
           <li>🏃 Background playback that survives screen lock</li>
           <li>🧹 Clean audio — links, images, and footnotes skipped</li>
+          <li>📚 A personal library with reading progress</li>
+          <li>✈️ Fully offline once your voice is downloaded</li>
         </ul>
       </section>
 
       <p className="text-sm text-muted">
-        This is an early build. Head to{' '}
-        <a href="/reader" className="text-accent underline">
-          Reader
-        </a>{' '}
+        Head to your{' '}
+        <Link to="/library" className="text-accent underline">
+          library
+        </Link>{' '}
         or{' '}
-        <a href="/settings" className="text-accent underline">
-          Settings
-        </a>
+        <Link to="/settings" className="text-accent underline">
+          settings
+        </Link>
         .
       </p>
     </div>
