@@ -1,26 +1,50 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router'
 import { PlayerBar } from '../components/PlayerBar'
 import { ReaderView } from '../components/ReaderView'
 import { UploadButton } from '../components/UploadButton'
 import { useSettings } from '../context/settings'
 import { useMediaSession } from '../hooks/useMediaSession'
-import { useParagraphPlayer } from '../hooks/useParagraphPlayer'
+import {
+  flattenParagraphs,
+  type ParagraphRef,
+  useParagraphPlayer,
+} from '../hooks/useParagraphPlayer'
 import { cleanChapters } from '../lib/clean'
-import { getChaptersByBook, getMostRecentBook, putBook, putBookFile, putChapters } from '../lib/db'
-import { parseInWorker } from '../lib/parse/client'
+import { getBook, getChaptersByBook, getMostRecentBook, updateBookProgress } from '../lib/db'
+import { ingestBook } from '../lib/ingest'
 import { formatForFile } from '../lib/parse/util'
 import { ttsClient } from '../lib/tts/client'
-import { type Book, type BookFile, type Chapter, newBookId, newChapterId } from '../types'
+import { type Book, type BookId, type BookPosition, bookId, type Chapter } from '../types'
 
 type LoadState =
   | { type: 'loading' }
-  | { type: 'empty' }
+  | { type: 'not-found' }
   | { type: 'ready'; book: Book; chapters: Chapter[] }
 
 type UploadState =
   | { type: 'idle' }
   | { type: 'parsing'; fileName: string }
   | { type: 'error'; message: string }
+
+/** Resolve a saved position to a flat index into the cleaned paragraph stream. */
+function resolveInitialIndex(
+  chapters: readonly Chapter[],
+  position: BookPosition | undefined,
+): number {
+  if (!position) return 0
+  const flat = flattenParagraphs(chapters)
+  const exact = flat.findIndex(
+    (p) => p.chapterIndex === position.chapterIndex && p.paragraphIndex === position.paragraphIndex,
+  )
+  if (exact >= 0) return exact
+  const chapterStart = flat.findIndex((p) => p.chapterIndex === position.chapterIndex)
+  return chapterStart >= 0 ? chapterStart : 0
+}
+
+function toPosition(p: ParagraphRef): BookPosition {
+  return { chapterIndex: p.chapterIndex, paragraphIndex: p.paragraphIndex }
+}
 
 /** Playback view for a loaded book — owns the player hook (keyed by book.id). */
 function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
@@ -29,11 +53,22 @@ function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
     () => cleanChapters(chapters, settings.cleaning),
     [chapters, settings.cleaning],
   )
+  const cleanedParagraphs = useMemo(() => flattenParagraphs(cleanedChapters), [cleanedChapters])
+
+  // Resume: compute the seed index from the saved position + cleaned view. The
+  // player only honors `initialIndex` on first render (mount), so later
+  // recomputes (e.g. cleaning toggled) are intentionally ignored by the hook.
+  const initialIndex = useMemo(
+    () => resolveInitialIndex(cleanedChapters, book.position),
+    [cleanedChapters, book.position],
+  )
+
   const player = useParagraphPlayer({
     chapters: cleanedChapters,
     voiceId: settings.voiceId,
     playbackRate: settings.playbackRate,
     engine: ttsClient,
+    initialIndex,
   })
   useMediaSession({
     player,
@@ -41,6 +76,33 @@ function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
     chapters: cleanedChapters,
     playbackRate: settings.playbackRate,
   })
+
+  // Debounced progress persistence: write at most once per ~2s of movement, and
+  // flush the final position on unmount. `latestRef` holds the most recent pos.
+  const latestRef = useRef<{ position: BookPosition; fraction: number } | null>(null)
+  useEffect(() => {
+    const idx = player.currentIndex
+    const para = player.currentParagraph
+    if (idx === null || para === null) return
+    const total = cleanedParagraphs.length
+    const fraction = total > 0 ? (idx + 1) / total : 0
+    latestRef.current = { position: toPosition(para), fraction }
+    const handle = setTimeout(() => {
+      if (latestRef.current) {
+        void updateBookProgress(book.id, latestRef.current.position, latestRef.current.fraction)
+      }
+    }, 2000)
+    return () => clearTimeout(handle)
+  }, [player.currentIndex, player.currentParagraph, book.id, cleanedParagraphs.length])
+
+  useEffect(() => {
+    return () => {
+      if (latestRef.current) {
+        void updateBookProgress(book.id, latestRef.current.position, latestRef.current.fraction)
+      }
+    }
+  }, [book.id])
+
   return (
     <div className="space-y-6">
       <ReaderView
@@ -66,71 +128,71 @@ function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
   )
 }
 
-export function Reader() {
+/** Bare `/reader` — redirect to the latest book (or the library when empty). */
+function ReaderRedirect() {
+  const navigate = useNavigate()
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const latest = await getMostRecentBook()
+      if (cancelled) return
+      navigate(latest ? `/reader/${latest.id}` : '/library', { replace: true })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [navigate])
+  return <p className="text-muted">Loading…</p>
+}
+
+/** `/reader/:bookId` — load by id, handle upload, render the pane. */
+function ReaderLoader({ id }: { id: BookId }) {
+  const navigate = useNavigate()
   const [load, setLoad] = useState<LoadState>({ type: 'loading' })
   const [upload, setUpload] = useState<UploadState>({ type: 'idle' })
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const book = await getMostRecentBook()
+      const book = await getBook(id)
       if (cancelled) return
       if (!book) {
-        setLoad({ type: 'empty' })
+        setLoad({ type: 'not-found' })
         return
       }
-      const chapters = await getChaptersByBook(book.id)
+      const chapters = await getChaptersByBook(id)
       if (cancelled) return
       setLoad({ type: 'ready', book, chapters })
     })()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [id])
 
-  const handleSelect = async (file: File): Promise<void> => {
-    const format = formatForFile(file.name)
-    if (!format) {
-      setUpload({ type: 'error', message: `Unsupported file type: ${file.name}` })
-      return
-    }
-    setUpload({ type: 'parsing', fileName: file.name })
-    try {
-      const result = await parseInWorker(file)
-      const now = Date.now()
-      const id = newBookId()
-      const book: Book = {
-        id,
-        title: result.title,
-        format,
-        chapterCount: result.chapters.length,
-        createdAt: now,
-        updatedAt: now,
+  useEffect(() => {
+    if (load.type === 'not-found') navigate('/library', { replace: true })
+  }, [load, navigate])
+
+  const handleSelect = useCallback(
+    async (file: File): Promise<void> => {
+      if (!formatForFile(file.name)) {
+        setUpload({ type: 'error', message: `Unsupported file type: ${file.name}` })
+        return
       }
-      const chapters: Chapter[] = result.chapters.map((parsed, index) => ({
-        id: newChapterId(),
-        bookId: id,
-        index,
-        title: parsed.title,
-        paragraphs: parsed.paragraphs,
-      }))
-      const bookFile: BookFile = {
-        bookId: id,
-        blob: file,
-        name: file.name,
-        type: file.type,
-        size: file.size,
+      setUpload({ type: 'parsing', fileName: file.name })
+      try {
+        const { book } = await ingestBook(file)
+        setUpload({ type: 'idle' })
+        navigate(`/reader/${book.id}`, { replace: true })
+      } catch (error) {
+        setUpload({
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to parse file',
+        })
       }
-      await Promise.all([putBook(book), putChapters(chapters), putBookFile(bookFile)])
-      setLoad({ type: 'ready', book, chapters })
-      setUpload({ type: 'idle' })
-    } catch (error) {
-      setUpload({
-        type: 'error',
-        message: error instanceof Error ? error.message : 'Failed to parse file',
-      })
-    }
-  }
+    },
+    [navigate],
+  )
 
   return (
     <div className="space-y-6">
@@ -156,19 +218,16 @@ export function Reader() {
       )}
 
       {load.type === 'loading' && <p className="text-muted">Loading…</p>}
-      {load.type === 'empty' && (
-        <div className="space-y-4">
-          <h1 className="text-2xl font-semibold">Reader</h1>
-          <div className="rounded-lg border border-dashed border-line bg-surface p-10 text-center">
-            <p className="text-muted">
-              No book loaded yet. Upload a PDF, EPUB, or TXT to start reading.
-            </p>
-          </div>
-        </div>
-      )}
+      {load.type === 'not-found' && <p className="text-muted">Book not found.</p>}
       {load.type === 'ready' && (
         <ReaderPane key={load.book.id} book={load.book} chapters={load.chapters} />
       )}
     </div>
   )
+}
+
+export function Reader() {
+  const { bookId: idParam } = useParams<{ bookId: string }>()
+  if (!idParam) return <ReaderRedirect />
+  return <ReaderLoader id={bookId(idParam)} />
 }

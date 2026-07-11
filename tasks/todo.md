@@ -1,29 +1,38 @@
-# M4 — Clean Reading · Task checklist
+# M5 — Library & Offline · Task checklist
 
 > Source of truth for `/status` and `/build`. Task detail + dependencies live in
-> [`plan.md`](./plan.md); spec in [`docs/prds/M4-clean-reading.md`](../docs/prds/M4-clean-reading.md).
-> Checkpoints gate phases: A cleaning module → B wired → C settings UI → D shipped.
+> [`plan.md`](./plan.md); spec in [`docs/prds/M5-library-offline.md`](../docs/prds/M5-library-offline.md).
+> Checkpoints gate phases: A data model → B library → C resume → D offline → E PWA → F shipped.
 
-## Phase 1 — Cleaning module
-- [x] T1 — `lib/clean/` pure transforms: `cleanText` (4 filters), `applyPronunciation`, `cleanParagraphs`, `cleanChapters`; empties dropped; `enabled:false` passthrough
+## Phase 1 — Data model
+- [x] T1 — `BookPosition` + optional `Book.position`/`progressFraction`; `getAllBooks` (newest-first), `deleteBookCascade`, `updateBookProgress`; no `DB_VERSION` bump
 
-Checkpoint A — Cleaning module pure + tested · ✅
+Checkpoint A — Data model + helpers · ✅
 
-## Phase 2 — Settings + wiring
-- [x] T2 — `CleaningConfig` on `Settings` + `DEFAULT_SETTINGS`; spread-merge fills defaults for existing users (no migration, no `DB_VERSION` bump)
-- [x] T3 — `reader.tsx` derives `cleanedChapters` (`useMemo`) → player + `ReaderView`; `useParagraphPlayer` invalidates queue on chapters-reference change
+## Phase 2 — Library
+- [x] T2 — `/library` route + `BookCover`/`BookCard`/`LibraryList` (generated covers, progress); Open/Delete; Nav + Home CTA
 
-Checkpoint B — Wired: display + audio reflect cleaning; mid-playback toggle re-primes · ✅
+Checkpoint B — Library shipped · ✅
 
-## Phase 3 — Settings UI
-- [x] T4 — Cleaning section in `settings.tsx`: master toggle, four filter rows, pronunciation editor (add/edit/delete); all persist
+## Phase 3 — Resume
+- [x] T3 — `/reader/:bookId` + resume from `Book.position`; player exposes `currentParagraph`/`currentIndex` + `initialIndex`; debounced progress writes
 
-Checkpoint C — Settings UI complete · ✅
+Checkpoint C — Resume works end-to-end · ✅
 
-## Phase 4 — End-to-end verify
-- [x] T5 — E2E + browser verify (display + audio cleaned, mid-playback re-prime, pronunciation changes speech, zero console errors, zero cdnjs, `pnpm verify` green)
+## Phase 4 — Offline
+- [x] T4 — Workbox precache `+= wasm,data`; Settings "Voices & offline" (download/remove/✓); `useOnline` + `OfflineBadge`
 
-Checkpoint D — Clean Reading shipped & `pnpm verify` green · ✅
+Checkpoint D — Offline verified · ✅
+
+## Phase 5 — PWA polish
+- [x] T5 — apple-touch-icon + `<link>`; `InstallPrompt` (beforeinstallprompt + iOS instructions); iOS splash deferred (background_color covers launch)
+
+Checkpoint E — PWA polished · ✅
+
+## Phase 6 — End-to-end verify
+- [x] T6 — E2E + browser verify (library, resume, offline, install; zero console errors, zero cdnjs, `pnpm verify` green)
+
+Checkpoint F — M5 shipped & `pnpm verify` green · ✅
 
 ---
 

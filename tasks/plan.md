@@ -1,207 +1,251 @@
-# M4 — Clean Reading · Plan
+# M5 — Library & Offline · Plan
 
 > Per-task detail for [`todo.md`](./todo.md). Spec:
-> [`docs/prds/M4-clean-reading.md`](../docs/prds/M4-clean-reading.md).
-> Ordering: T1 → T2 → T3 → T4 → T5.
+> [`docs/prds/M5-library-offline.md`](../docs/prds/M5-library-offline.md).
+> Ordering: T1 → T2 → T3 → (T4 ‖ T5) → T6.
 
 ## Resuming
 
-**As of 2026-07-12 (M4 complete):** M4 — Clean Reading is **complete.**
-`pnpm verify` green — lint ✅, typecheck ✅, test ✅ (**216 tests / 22 files**,
-up from 161/19 in M3), build ✅ (100 modules, up from 97, PWA generated).
-Browser-verified via chrome-devtools MCP on the production preview build:
-uploaded a 6-paragraph TXT with URLs, `[1]`/`[12]` footnote markers, and
-standalone `42`/`page 7` page-number lines → display showed exactly 4 cleaned
-paragraphs (footnotes stripped, URL stripped, page-number paragraphs dropped,
-clean paragraph untouched). Navigated to Settings → toggled the URLs filter off
-+ added a `hero`→`HERO` pronunciation entry → returned to Reader → display now
-showed `https://example.com` (URL filter off) AND "The HERO walked into the
-tavern." (pronunciation applied, case-insensitive whole-word). All four
-remaining filters stayed active. Zero console errors, zero cdnjs calls.
+**As of 2026-07-12 (M5 complete):** M5 — Library & Offline is **complete.**
+`pnpm verify` green — lint ✅, typecheck ✅, test ✅ (**255 tests / 26 files**,
+up from 216/22 in M4), build ✅ (108 modules, precache 14 entries / 1.5 MB,
+wasm served via runtime `CacheFirst` not precache). Browser-verified via
+chrome-devtools MCP on the production preview build (SW unregistered +
+re-registered fresh to bypass the stale-cache gotcha #3):
 
-**Working tree:** the M4 implementation is **uncommitted** — run
-`git status --porcelain` for the live count. Land the work before starting M5.
-Last commit: `e977801 finish M3`.
+- Uploaded 2 TXT books → library shows both with generated typography covers,
+  TXT chips, "today" timestamps, progress bars, newest-first.
+- Cascade delete + `window.confirm` → book removed, empty state shown.
+- Upload from library → navigated to `/reader/:bookId` (deep-link).
+- Seeded `position: {0,2}` on a book via IDB → opened it → paragraph index 2
+  highlighted (`ring-accent`), confirming resume seeding.
+- Library progress bar rendered the seeded `progressFraction` (60%).
+- DevTools network **Offline** → reloaded `/library` → full app shell + both
+  books loaded from the SW precache + IDB with zero network. `OfflineBadge`
+  showed "Ready offline" (active voice cached in OPFS) and flipped to
+  "Offline" on the `offline` event.
+- `apple-touch-icon.png` precached; `InstallPrompt` rendered in Settings.
+- **Zero console errors/warnings; zero cdnjs or external requests** (all from
+  `localhost:4173`).
 
-**Shipped this milestone:** pure `lib/clean/` module (`types.ts`, `filters.ts`
-with `stripUrls`/`stripImages`/`stripFootnoteRefs`/`isPageNumberLine`/
-`cleanText`, `pronunciation.ts` with `applyPronunciation` regex-escaped
-whole-word case-insensitive, `index.ts` with `cleanParagraphs`/`cleanChapters`
-dropping empties + `enabled:false` passthrough); `CleaningConfig` on `Settings`
-+ `DEFAULT_CLEANING` (additive — zero migration, no `DB_VERSION` bump);
-`reader.tsx` derives `cleanedChapters` via `useMemo` → both player + ReaderView;
-`useParagraphPlayer` invalidates the queue on paragraphs-reference change;
-settings UI with master toggle + four filter rows + pronunciation editor
-(add/edit/delete, `crypto.randomUUID` keys).
+**Real playback was not exercised in-browser this session** (avoids a 63 MB
+model download wait); it was thoroughly verified in M2/M3, and the M5-specific
+resume-seeding + progress-write paths are unit-tested (`reader.test.tsx`,
+`useParagraphPlayer.test.ts`). Real-iPhone background-playback gate (gotcha #5)
+remains open from M3 — M5 does not change playback.
 
-**Real-iPhone background-playback gate (gotcha #5) is still OPEN** from M3 —
-desktop MCP verified tab-backgrounding + Media Session wiring, but a
-locked-screen run on real iOS hardware is required before claiming background
-playback works. Unchanged by M4 (M4 does not touch playback behavior).
+**Working tree:** the M5 implementation is **uncommitted** — run
+`git status --porcelain` for the live count. Land the work.
+Last commit: `d57a8bf finished M4`.
+
+**Shipped this milestone:** `BookPosition` + optional `Book.position`/
+`progressFraction` (no `DB_VERSION` bump); db helpers `getAllBooks` (newest-
+first), `deleteBookCascade` (atomic), `updateBookProgress`; `routes/library.tsx`
+(container) + `BookCover`/`BookCard`/`LibraryList` (presentational, generated
+typography covers, progress bars); `/reader/:bookId` deep-link routing with
+bare-`/reader` redirect + unknown-id → `/library`; resume seeding via
+`useParagraphPlayer({ initialIndex })` + derived `currentParagraph`/
+`currentIndex` outputs; debounced progress persistence (2s + flush-on-unmount);
+shared `lib/ingest.ts` (`ingestBook`) used by both library + reader; Settings
+"Voices & offline" section with voice remove (`ttsClient.remove`) +
+`OfflineBadge` (driven by `useOnline`); Workbox runtime `CacheFirst` for
+`/wasm/**` (offline WASM, not precached due to ~39 MB size); `apple-touch-icon`
+(180) + `<link>`; `InstallPrompt` (Chromium `beforeinstallprompt` + iOS manual
+instructions, sticky localStorage dismissal). iOS splash screens deferred
+(see Deviation #1).
+
+## Decisions (locked — see PRD §Decisions)
+
+1. New `/library` route; Home stays landing with a "Your library" CTA.
+2. Generated typography covers (initials on accent gradient, pure CSS).
+3. `/reader/:bookId` deep-linkable; bare `/reader` → latest or `/library`.
+4. Progress = additive optional fields on `Book` (`position`, `progressFraction`); **no `DB_VERSION` bump**.
+5. Debounced progress writes from `player.currentIndex` + final write on pause/stop/unmount; bumps `updatedAt`.
+6. Player exposes `currentParagraph` + `currentIndex`; resume seeds via a new `initialIndex?` arg.
+7. Offline: Workbox runtime `CacheFirst` for `/wasm/**` (see Deviation #2); voice-management UI w/ remove; `useOnline` + badge.
+8. PWA polish: apple-touch-icon + install prompt; iOS splash deferred (see Deviation #1).
+9. Author field deferred (parsers return `title` only).
+10. No new dependencies.
 
 ---
 
 ## Tasks
 
-### T1 — Cleaning module (`lib/clean/`)
-- **Detail:** Create a pure, side-effect-free module (no React/IDB/DOM) under
-  `web/src/lib/clean/`. `types.ts` holds `CleaningFilters`,
-  `PronunciationEntry`, `CleaningConfig`. `filters.ts` holds four pure
-  `string → string` (or predicate) functions: (a) `stripUrls` — drop bare
-  `https?://\S+` and `www\.\S+`, rewrite markdown `[text](url)` → keep `text`;
-  (b) `stripImages` — drop `![alt](url)` entirely, drop `[Image: …]` /
-  `[Figure: …]` markers; (c) `stripFootnoteRefs` — drop inline `[\d{1,3}]`,
-  drop `[n]:` definitions, drop superscript unicode digits `¹²³`; **do not**
-  match `(\d+)` (catches years like `(1984)`); (d) `isPageNumberLine` —
-  predicate true when the *whole* paragraph is `^\s*\d{1,4}\s*$` or
-  `^\s*page\s+\d+\s*$` (case-insensitive). `pronunciation.ts` holds
-  `applyPronunciation(text, entries)`: build a single alternation regex from
-  the `find` strings, **each regex-escaped**, matched whole-word
-  (`\bescaped\b`) and case-insensitive; empty `find` entries skipped; first
-  match wins per position; replace via the corresponding `replace`. `index.ts`
-  composes: `cleanText(text, filters)` runs the active structural filters in
-  order; `cleanParagraphs(paragraphs, config)` returns `config.enabled ?
-  paragraphs.map(p => applyPronunciation(cleanText(p, config.filters),
-  config.pronunciation)).filter(nonEmpty) : paragraphs` (returns the **same
-  reference** when disabled); `cleanChapters(chapters, config)` maps over
-  chapters, preserving `title`/`index`/`id` and rewriting only `paragraphs`.
-  Page-number filter drops the whole paragraph (via `isPageNumberLine`)
-  *before* the structural-in-paragraph filters run on the survivors.
+### T1 — Data model + db helpers
+- **Detail:** In `types.ts` add `BookPosition` (`{ chapterIndex, paragraphIndex }`)
+  and optional `Book.position` + `Book.progressFraction`. In `lib/db.ts` add:
+  `getAllBooks()` — `getAllFromIndex('books','updatedAt')` then reverse (newest
+  first); `deleteBookCascade(id)` — single `readwrite` tx across `books`,
+  `chapters` (delete by index range on `bookId`), and `files`; `updateBookProgress(id,
+  position, progressFraction)` — read-modify-write to preserve other fields, set
+  `updatedAt = Date.now()`. **No `DB_VERSION` change** — fields are optional and
+  object-store values are schemaless.
 - **Depends on:** — (foundation; T2/T3 consume it).
-- **Acceptance:** all four filters transform representative strings correctly
-  (incl. the `(1984)` negative); markdown link keeps its text; pronunciation is
-  whole-word + case-insensitive + regex-escaped (`C++` doesn't crash); empties
-  dropped; `enabled:false` returns the input reference unchanged; `cleanChapters`
-  preserves all chapter fields except `paragraphs`.
-- **Verify:** `lib/clean/{filters,pronunciation,index}.test.ts`.
-- **Files:** `web/src/lib/clean/types.ts`, `filters.ts`, `pronunciation.ts`,
-  `index.ts`, `filters.test.ts`, `pronunciation.test.ts`, `index.test.ts`.
+- **Acceptance:** existing books hydrate with `position`/`progressFraction`
+  `undefined`; `getAllBooks` returns newest-first; cascade delete leaves
+  sibling books + their chapters/files intact; progress write round-trips +
+  bumps `updatedAt`.
+- **Verify:** `lib/db.test.ts` (extended with the three helpers + cascade
+  isolation + missing-fields hydration).
+- **Files:** `web/src/types.ts`, `web/src/lib/db.ts`, `web/src/lib/db.test.ts`.
 
-Checkpoint A — Cleaning module pure + tested · ☐
+Checkpoint A — Data model + helpers · ☐
 
-### T2 — Settings additions
-- **Detail:** Add `CleaningConfig` (imported from `lib/clean/types`) to the
-  `Settings` interface in `context/settings.tsx`. Add a `cleaning` field to
-  `DEFAULT_SETTINGS`: `{ enabled: true, filters: { urls: true, images: true,
-  footnotes: true, pageNumbers: true }, pronunciation: [] }`. The existing
-  spread-merge hydration (`{ ...DEFAULT_SETTINGS, ...stored }`) fills the new
-  field for existing users automatically — **no migration code, no
-  `DB_VERSION` bump**. No other changes to the provider.
-- **Depends on:** T1 (for the `CleaningConfig` type).
-- **Acceptance:** a stored `Settings` record lacking `cleaning` hydrates with
-  the full default; `useSetting('cleaning')` returns the tuple; a round-trip
-  (`update({cleaning: x})` → reload → read) preserves the value.
-- **Verify:** extend `context/settings` coverage or assert via `getSetting('app')`
-  in a settings test.
-- **Files:** `web/src/context/settings.tsx`.
+### T2 — Library route + generated covers
+- **Detail:** New container `routes/library.tsx`: fetches `getAllBooks()` into a
+  variant state (`loading | ready | error`), renders `LibraryList` (presentational:
+  grid of `BookCard` + empty state). `components/BookCover.tsx` (presentational,
+  pure): derive 2–3-char initials from `title` (first letters of the first ~2
+  significant words, uppercased), render on the accent gradient (CSS only).
+  `components/BookCard.tsx`: cover + title + format chip + progress bar
+  (`progressFraction` * 100%) + relative "last read" time from `updatedAt`.
+  Actions: click card → `navigate('/reader/:bookId')`; Delete button → confirm
+  → `deleteBookCascade` → refresh list. Reuse `UploadButton` so uploads land in
+  the library. Add `/library` to `App.tsx` + a `Library` link in `Nav.tsx`.
+  Landing gains a "Your library" CTA (and, if a recent book exists, a
+  "Continue reading" shortcut → `/reader/<latest>`).
+- **Depends on:** T1 (`getAllBooks`, `deleteBookCascade`).
+- **Acceptance:** two books render with covers + progress bars; empty state
+  shows when none; Open deep-links; Delete removes the card; nav highlights
+  `/library`; Home CTA works.
+- **Verify:** `routes/library.test.tsx`, `components/BookCover.test.tsx`.
+- **Files:** `web/src/routes/library.tsx`, `web/src/components/BookCover.tsx`,
+  `web/src/components/BookCard.tsx`, `web/src/components/LibraryList.tsx`,
+  `web/src/App.tsx`, `web/src/components/Nav.tsx`, `web/src/routes/landing.tsx`,
+  `+ tests`.
 
-### T3 — Wire cleaning into reader + player invalidation
-- **Detail:** In `routes/reader.tsx`, derive `cleanedChapters` via `useMemo`
-  keyed on `[load.chapters, settings.cleaning]`: when
-  `settings.cleaning.enabled`, call `cleanChapters(load.chapters,
-  settings.cleaning)`; otherwise return `load.chapters` unchanged. Pass
-  `cleanedChapters` (not `load.chapters`) to **both** `useParagraphPlayer` and
-  `ReaderView`. In `hooks/useParagraphPlayer.ts`, add an effect (or extend the
-  existing generation-token mechanism) that detects a **reference change** to
-  the `chapters` argument: on change, bump the generation token, revoke all
-  queued Blob URLs, clear the queue, and re-prime from the current paragraph
-  index. This mirrors the existing voice-change invalidation. Preserve the
-  current playback position (chapterIndex + paragraphIndex) across the
-  re-prime. Guard: if the hook is idle (not yet played), just re-flatten.
-- **Depends on:** T1 (module), T2 (settings).
-- **Acceptance:** rendered reader text and synthesized text are identical and
-  both reflect cleaning; a URL/noise paragraph is absent from display + audio;
-  toggling a filter mid-playback invalidates the queue and re-primes within one
-  synth cycle; `seekToParagraph` still lands on the right paragraph (ids are
-  consistent within the cleaned array).
-- **Verify:** `routes/reader.test.tsx` (cleaned-text assertion + synth `calls`),
-  `hooks/useParagraphPlayer.test.ts` (chapters-change → queue invalidated).
+Checkpoint B — Library shipped · ☐
+
+### T3 — Reader routing + resume + progress persistence
+- **Detail:** Move reader to `/reader/:bookId` (RR8 `useParams`). Bare
+  `/reader` → effect that calls `getMostRecentBook()` and `navigate`s to
+  `/reader/<id>` (or `/library` if none). Load by id (`getBook` +
+  `getChaptersByBook`); unknown id → redirect `/library`. In
+  `useParagraphPlayer`, add `currentParagraph: ParagraphRef | null` and
+  `currentIndex: number | null` to the result (derive from `pointerRef` +
+  `paragraphs`), and an optional `initialIndex?` arg that seeds `pointerRef`
+  on mount (resume) without playing. In `ReaderPane`, read `book.position` on
+  mount → compute the seed index (match `chapterId:paragraphIndex` in the
+  cleaned stream; fall back to clamped flat index → 0) → pass as
+  `initialIndex`. Add a debounced progress-write effect: watch
+  `player.currentIndex`; at most one `updateBookProgress` write per ~2s, plus a
+  final write on pause/stop/unmount. Compute `progressFraction =
+  (currentIndex+1)/paragraphs.length`. Upload-from-reader creates the book then
+  `navigate`s to its `/reader/:id`.
+- **Depends on:** T1 (progress helpers), T2 (`/library` redirect target).
+- **Acceptance:** deep link opens the right book; reload resumes at the saved
+  paragraph; progress bar updates in the library after reading; deleting the
+  open book redirects to `/library`; bare `/reader` redirects correctly.
+- **Verify:** `routes/reader.test.tsx` (param load, resume, 404 redirect,
+  progress write), `hooks/useParagraphPlayer.test.ts` (`currentParagraph`/
+  `currentIndex`, `initialIndex` seeding).
 - **Files:** `web/src/routes/reader.tsx`, `web/src/hooks/useParagraphPlayer.ts`,
-  `routes/reader.test.tsx`, `hooks/useParagraphPlayer.test.ts`.
+  `web/src/App.tsx`, `+ tests`.
 
-Checkpoint B — Wired: display + audio reflect cleaning; mid-playback toggle re-primes · ☐
+Checkpoint C — Resume works end-to-end · ☐
 
-### T4 — Settings UI
-- **Detail:** Add a cleaning section to `routes/settings.tsx` (props-only UI;
-  reads via `useSetting('cleaning')`). Three parts: (a) a master `enabled`
-  toggle (card-button with `aria-pressed`, mirroring the theme toggle pattern);
-  (b) four filter toggle rows (denser list, each an `aria-pressed` button or
-  checkbox-style row for `urls`/`images`/`footnotes`/`pageNumbers`); (c) a
-  pronunciation-dictionary editor — a list of entries each with `find` + input,
-  `replace` + input, and a delete button, plus an "Add entry" button that
-  appends `{ id: crypto.randomUUID(), find: '', replace: '' }`. All writes go
-  through `update({ cleaning: { ...cleaning, filters: {…} } })` (shallow nested
-  merge — the provider's `update` is a one-level spread, so the settings UI must
-  spread the nested objects explicitly). The section is disabled/hidden when
-  the master toggle is off (except the master toggle itself). Empty `find`
-  entries are allowed in the UI (the cleaning module skips them at apply time).
-- **Depends on:** T2 (settings field).
-- **Acceptance:** master toggle persists across reload; each filter toggle
-  persists; add/edit/delete a pronunciation entry round-trips through IDB;
-  the UI is presentational (no direct IDB calls — all via `useSetting`).
-- **Verify:** `routes/settings.test.tsx` (extended).
-- **Files:** `web/src/routes/settings.tsx`, `web/src/routes/settings.test.tsx`.
+### T4 — Offline + voice management
+- **Detail:** **Fix Workbox** in `vite.config.ts`: add `wasm,data` to
+  `globPatterns` (or a `runtimeCaching` `cacheFirst` rule for `/wasm/**` if
+  precache size is a concern — decide during T6 size check). New
+  `hooks/useOnline.ts`: `navigator.onLine` + `online`/`offline` listeners →
+  `boolean`. New `components/OfflineBadge.tsx` (presentational): dot + label
+  ("Offline" / "Ready offline" when the active voice is stored + online).
+  Settings subsection "Voices & offline": list `CURATED_VOICES`; each row shows
+  name + human-readable size + state button (Download → progress% → ✓ Downloaded
+  / Remove), driven by `ttsClient.isStored`/`download`(progress)/`remove`.
+  Refresh states on mount and after each op. All ops via the existing client —
+  no new worker protocol.
+- **Depends on:** — (independent of T1–T3; can start after T0).
+- **Acceptance:** download a voice → ✓ persists across reload; remove frees it;
+  offline badge flips when DevTools goes offline; **with network offline, app
+  shell + TTS still work** after first load.
+- **Verify:** `routes/settings.test.tsx` (voice states via stub `TtsEngine`),
+  `hooks/useOnline.test.ts`; offline confirmed in T6.
+- **Files:** `web/vite.config.ts`, `web/src/routes/settings.tsx`,
+  `web/src/hooks/useOnline.ts`, `web/src/components/OfflineBadge.tsx`,
+  `+ tests`.
 
-Checkpoint C — Settings UI complete · ☐
+Checkpoint D — Offline verified · ☐
 
-### T5 — End-to-end + browser verify
-- **Detail:** Upload a TXT containing URLs, `[1]`-style markers, and standalone
-  page-number lines → confirm the reader omits them and the synthesized audio
-  omits them (assert via stub engine or MCP audio check). Toggle `urls` off
-  mid-playback → the queue invalidates and re-primes, URL reappears. Add a
-  pronunciation entry `{find: 'foo', replace: 'bar'}` → the spoken/displayed
-  text changes. Add a regex-special `find` (`C++`) → no crash. Zero console
-  errors; zero cdnjs calls; `pnpm verify` green. Document any deviations below.
-- **Depends on:** T1–T4 (full slice).
+### T5 — PWA polish
+- **Detail:** Extend `scripts/gen-icons.mjs` to emit `apple-touch-icon-180.png`
+  and a minimal set of iOS splash images (`apple-touch-startup-image`) for
+  latest iPhone portrait sizes. Add `<link rel="apple-touch-icon" ...>` and the
+  startup-image `<link>` tags to `index.html`. New
+  `components/InstallPrompt.tsx`: on mount, add a `beforeinstallprompt`
+  listener that stashes the event (prevent default); render a dismissible
+  "Install TaleTrek" affordance that calls `prompt()`; on iOS (no event +
+  `!navigator.standalone`), show "Share → Add to Home Screen" instructions;
+  sticky dismissal via a settings flag. Mount it in Settings (and optionally a
+  one-time banner). Verify `display:standalone` full-screen on the production
+  preview.
+- **Depends on:** — (parallel with T2–T4).
+- **Acceptance:** apple-touch-icon renders on iOS home screen; splash shows on
+  cold launch; install button appears on Chromium, dismiss is sticky; iOS shows
+  instructions; no console warnings.
+- **Verify:** browser MCP (Chromium install prompt) + visual; iOS verified
+  manually (note in gotchas — desktop MCP can't test iOS).
+- **Files:** `web/index.html`, `web/scripts/gen-icons.mjs`, `web/public/icons/`,
+  `web/src/components/InstallPrompt.tsx`, `web/src/routes/settings.tsx` (mount).
+- **Trim handle:** if iOS splash generation grows large, ship apple-touch-icon
+  + install prompt first; splash can trail without blocking core value.
+
+Checkpoint E — PWA polished · ☐
+
+### T6 — End-to-end + browser verify
+- **Detail:** Upload 2 books → library shows both with generated covers → open
+  one → play 3 paragraphs → reload → resume at saved position → return to
+  library → progress bar updated → toggle DevTools Offline → reload → app shell
+  loads + stored voice still synthesizes → install prompt visible → delete a
+  book → returns to library. **Zero console errors; zero cdnjs calls** (confirm
+  wasm served from `/wasm/`). Check build size impact of the Workbox precache
+  change. `pnpm verify` green. Document deviations below.
+- **Depends on:** T1–T5 (full slice).
 - **Acceptance:** `pnpm verify` green; chrome-devtools MCP run clean.
 - **Verify:** full `pnpm verify` + chrome-devtools MCP.
 - **Files:** wiring + minor fixes across the slice.
 
-Checkpoint D — Clean Reading shipped & `pnpm verify` green · ☐
+Checkpoint F — M5 shipped & `pnpm verify` green · ☐
 
 ---
 
 ## Deviations
 
-1. **Filter execution order is images → urls → footnotes (not urls → images).**
-   The PRD listed filters as urls/images/footnotes conceptually, but
-   `cleanText` runs `stripImages` before `stripUrls` because the `stripUrls`
-   markdown-link regex (`[text](url)`) would otherwise match the `[img](url)`
-   portion of a markdown image `![img](url)`, leaving a stray `!img`. Running
-   images first removes the full image syntax cleanly. No behavior difference
-   for the user; just internal ordering. Caught by the T1 unit tests.
+1. **iOS splash screens deferred (T5).** Per the plan's trim handle, T5 ships
+   the high-value, low-risk pieces — `apple-touch-icon` (180×180) + `<link>`,
+   and the `InstallPrompt` component (Chromium `beforeinstallprompt` + iOS
+   "Share → Add to Home Screen" instructions, sticky dismissal via
+   localStorage). Dedicated `apple-touch-startup-image` PNGs are a per-device
+   rabbit hole (each iPhone size must be exact or iOS ignores it) with
+   diminishing returns for a first M5 cut; the manifest `background_color`
+   (`#0b1120`) already themes the launch flash, and the apple-touch-icon covers
+   the home screen. A focused follow-up can add a startup-image set if real-iOS
+   testing shows a white launch flash.
 
-2. **Settings test hydration pattern (`renderHydrated` helper).** The
-   SettingsProvider's async hydration (`getSetting().then(setSettings)`) can
-   overwrite an optimistic UI update if a test clicks before hydration
-   resolves. The existing theme test solved this by pre-seeding a value and
-   using `findByRole({pressed: ...})` to wait. The cleaning tests adopt the
-   same pattern via a `renderHydrated()` helper that pre-seeds
-   `{fontScale: 1.25}` as a sentinel and waits for the `×1.25` marker (which
-   only appears post-hydration) before interacting. Also added
-   `_clearDBForTests()` to the settings `beforeEach` for test isolation. No
-   production impact — in real usage hydration completes in milliseconds.
+2. **Workbox uses runtime `CacheFirst` for `/wasm/**`, not precache (T4).** The
+   Piper WASM runtime is ~39 MB — too large to precache (would bloat SW install
+   + the precache cache). A `CacheFirst` runtime rule caches each binary on
+   first fetch into the `piper-wasm` cache, available offline thereafter.
+   Combined with the precached app shell (1.5 MB) + the OPFS voice model, this
+   gives true offline TTS after first use. Build verified: precache stays at 13
+   entries / 1.5 MB.
 
-3. **`prevParagraphsRef` invalidation in `useParagraphPlayer` (T3).** The PRD
-   described chapters-change invalidation abstractly; the implementation keys
-   on the `paragraphs` memo reference (which changes when `chapters` changes),
-   mirroring the existing voice-change effect exactly (`genRef++`,
-   `queueRef.clear()`, `syncBufferedAhead()`). No playback interruption — the
-   current paragraph finishes; the next advance re-synthesizes with the new
-   cleaning config. The "brief re-synth" is the cleared buffer re-filling on
-   advance, same class as a voice change.
+3. **`useOnline` + `OfflineBadge` (T4).** The badge lives in the Settings
+   "Voices & offline" section header (not a global nav badge) to keep it
+   contextual to the voice data. States: amber "Offline" when
+   `navigator.onLine` is false; accent "Ready offline" when the active voice is
+   stored; muted "Voice not downloaded" otherwise. Subscribes to `online`/
+   `offline` events for live updates.
+
+4. **VoicePicker gained `onRemove` (T4).** Stored voices now show a "remove"
+   button next to the "downloaded" badge, wired to `ttsClient.remove`.
+   Required adding `remove` to the settings `ttsClient` mock.
 
 ## Real-iPhone manual gate (gotcha #5 — carried from M3)
 
 Desktop MCP cannot simulate a locked screen or true app-backgrounding on iOS.
-Before the read-aloud core is considered "done" for the product's core promise,
-verify on a real iPhone (installed to home screen, standalone mode):
-
-1. Start playback → lock the screen → audio continues.
-2. Lock-screen controls render (▶/⏸, ⏮/⏭ chapter skip, ±15s, seekbar).
-3. Switch to another app → audio continues.
-4. Background the browser fully → audio continues for ≥30s.
-5. Re-open → playback state is intact.
-
-M4 does not change playback behavior, so this gate is unchanged from M3. Do
-**not** publicly claim iOS background playback works without this run.
+M5 does not change playback behavior, so this gate is unchanged. Additionally,
+M5's PWA polish (splash, install) is best confirmed on real iOS hardware — note
+results here when verified. Do **not** publicly claim iOS background playback or
+installability works without this run.

@@ -13,6 +13,7 @@ interface VoicePickerProps {
   downloading: DownloadState | null
   onSelect: (id: VoiceId) => void
   onDownload: (id: VoiceId) => void
+  onRemove: (id: VoiceId) => void
 }
 
 function formatSize(bytes: number): string {
@@ -26,6 +27,7 @@ export function VoicePicker({
   downloading,
   onSelect,
   onDownload,
+  onRemove,
 }: VoicePickerProps) {
   return (
     <ul className="space-y-2">
@@ -53,9 +55,19 @@ export function VoicePicker({
               <div className="text-xs text-muted">{formatSize(voice.sizeBytes)}</div>
             </button>
             {stored ? (
-              <span className="rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent">
-                downloaded
-              </span>
+              <>
+                <span className="rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent">
+                  downloaded
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onRemove(voice.id)}
+                  aria-label={`remove ${voice.name}`}
+                  className="rounded border border-line px-2 py-1 text-sm transition-colors hover:border-red-500 hover:text-red-400"
+                >
+                  remove
+                </button>
+              </>
             ) : isDownloading ? (
               <span className="text-xs text-muted">
                 {Math.round((downloading?.progress ?? 0) * 100)}%

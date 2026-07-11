@@ -4,6 +4,11 @@ export type VoiceId = string & { readonly __brand: 'VoiceId' }
 
 export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'txt'
 
+export interface BookPosition {
+  chapterIndex: number
+  paragraphIndex: number
+}
+
 export interface Book {
   id: BookId
   title: string
@@ -11,6 +16,10 @@ export interface Book {
   chapterCount: number
   createdAt: number
   updatedAt: number
+  /** Last reading position; `undefined` means not started (M5). */
+  position?: BookPosition
+  /** Fraction of paragraphs consumed (0..1), for the library progress bar (M5). */
+  progressFraction?: number
 }
 
 export interface Chapter {

@@ -580,3 +580,63 @@ describe('useParagraphPlayer — chapter skip', () => {
     expect(result.current.currentParagraphId).toBe(`${chapterId('c3')}:0`)
   })
 })
+
+// Resume + position-output tests (M5).
+describe('useParagraphPlayer — resume + position outputs', () => {
+  it('seeds the pointer from initialIndex without playing', () => {
+    const { result } = renderHook(() =>
+      useParagraphPlayer({
+        chapters: oneChapter(['A.', 'B.', 'C.', 'D.']),
+        voiceId: VOICE,
+        playbackRate: 1,
+        engine: stubEngine(),
+        audio: new FakeAudio(),
+        lookahead: 0,
+        initialIndex: 2,
+      }),
+    )
+    expect(result.current.status.type).toBe('idle')
+    expect(result.current.currentIndex).toBe(2)
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:2`)
+    expect(result.current.currentParagraph?.text).toBe('C.')
+  })
+
+  it('currentIndex/currentParagraph are null when idle', () => {
+    const { result } = renderHook(() =>
+      useParagraphPlayer({
+        chapters: oneChapter(['A.', 'B.']),
+        voiceId: VOICE,
+        playbackRate: 1,
+        engine: stubEngine(),
+        audio: new FakeAudio(),
+        lookahead: 0,
+      }),
+    )
+    expect(result.current.currentIndex).toBeNull()
+    expect(result.current.currentParagraph).toBeNull()
+  })
+
+  it('currentIndex tracks the pointer through play and advance', async () => {
+    const engine = stubEngine()
+    const audio = new FakeAudio()
+    const { result } = renderHook(() =>
+      useParagraphPlayer({
+        chapters: oneChapter(['A.', 'B.', 'C.']),
+        voiceId: VOICE,
+        playbackRate: 1,
+        engine,
+        audio,
+        lookahead: 0,
+      }),
+    )
+    await act(async () => {
+      result.current.play()
+    })
+    expect(result.current.currentIndex).toBe(0)
+    await act(async () => {
+      audio.emitEnded()
+    })
+    expect(result.current.currentIndex).toBe(1)
+    expect(result.current.currentParagraph?.text).toBe('B.')
+  })
+})

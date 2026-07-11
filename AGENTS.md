@@ -10,7 +10,9 @@
 | Piper spike | ✅ Done (thesis proven in-browser) | [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) |
 | M1 — Upload & Read | ✅ **Done** (PDF/EPUB/MOBI/TXT slice; commit `71a642b`) | [`docs/prds/M1-upload-read.md`](docs/prds/M1-upload-read.md) |
 | M2 — Speak | ✅ **Done** (Piper TTS, per-paragraph read-along, voice picker, speed) | [`docs/prds/M2-speak.md`](docs/prds/M2-speak.md) |
-| M3–M5 | Planned | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| M3 — Jog Mode | ✅ **Done** (pre-rendered chunks, `<audio>`, Media Session) | [`docs/prds/M3-jog.md`](docs/prds/M3-jog.md) |
+| M4 — Clean Reading | ✅ **Done** (filters + pronunciation dictionary; commit `d57a8bf`) | [`docs/prds/M4-clean-reading.md`](docs/prds/M4-clean-reading.md) |
+| M5 — Library & Offline | 🚧 **In progress** (library, resume, offline voice mgmt, PWA polish) | [`docs/prds/M5-library-offline.md`](docs/prds/M5-library-offline.md) |
 
 **Read first:** [`docs/VISION.md`](docs/VISION.md) (the why) → [`docs/ROADMAP.md`](docs/ROADMAP.md) (milestones) → [`docs/prds/M0-foundation.md`](docs/prds/M0-foundation.md) (what shipped, patterns, conventions).
 

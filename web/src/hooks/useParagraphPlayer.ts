@@ -107,11 +107,21 @@ export interface UseParagraphPlayerArgs {
   lookahead?: number
   /** Test override; defaults to a real `AudioController`. */
   audio?: AudioController
+  /**
+   * Flat paragraph index to seed the pointer with on mount (resume). No
+   * playback is started; only the highlight + pointer are positioned so the
+   * first `play()` begins here. Ignored after mount.
+   */
+  initialIndex?: number
 }
 
 export interface UseParagraphPlayerResult {
   status: PlaybackStatus
   currentParagraphId: string | null
+  /** The paragraph at the pointer, or null when idle (M5). */
+  currentParagraph: ParagraphRef | null
+  /** Flat index of the pointer, or null when idle (M5). */
+  currentIndex: number | null
   /** Chunks currently buffered ahead of the pointer (0..lookahead). */
   bufferedAhead: number
   play: () => void
@@ -169,12 +179,16 @@ export function useParagraphPlayer({
   engine,
   lookahead = DEFAULT_LOOKAHEAD,
   audio,
+  initialIndex,
 }: UseParagraphPlayerArgs): UseParagraphPlayerResult {
   const paragraphs = useMemo(() => flattenParagraphs(chapters), [chapters])
   const la = Math.max(0, Math.trunc(lookahead))
 
   const [status, setStatus] = useState<PlaybackStatus>({ type: 'idle' })
-  const [currentParagraphId, setCurrentParagraphId] = useState<string | null>(null)
+  const [currentParagraphId, setCurrentParagraphId] = useState<string | null>(() => {
+    if (initialIndex === undefined || initialIndex <= 0) return null
+    return paragraphs[initialIndex]?.id ?? null
+  })
   const [bufferedAhead, setBufferedAhead] = useState(0)
 
   // Refs for values that must NOT trigger re-subscription when they change:
@@ -184,7 +198,7 @@ export function useParagraphPlayer({
   engineRef.current = engine
   voiceIdRef.current = voiceId
 
-  const pointerRef = useRef(0)
+  const pointerRef = useRef(initialIndex ?? 0)
   const urlRef = useRef<string | null>(null)
   const tokenRef = useRef(0) // bumped on every play request; stale play results ignored
   const genRef = useRef(0) // bumped on discontinuous moves; stale pre-render results ignored
@@ -449,9 +463,18 @@ export function useParagraphPlayer({
     return { currentTime: audioRef.current.currentTime, duration: audioRef.current.duration }
   }, [])
 
+  const currentIndex = useMemo(
+    () => (currentParagraphId ? paragraphs.findIndex((p) => p.id === currentParagraphId) : null),
+    [currentParagraphId, paragraphs],
+  )
+  const currentParagraph =
+    currentIndex !== null && currentIndex >= 0 ? (paragraphs[currentIndex] ?? null) : null
+
   return {
     status,
     currentParagraphId,
+    currentParagraph,
+    currentIndex,
     bufferedAhead,
     play,
     pause,

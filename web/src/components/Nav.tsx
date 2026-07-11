@@ -2,6 +2,7 @@ import { NavLink } from 'react-router'
 
 const links = [
   { to: '/', label: 'Home', end: true },
+  { to: '/library', label: 'Library', end: false },
   { to: '/reader', label: 'Reader', end: false },
   { to: '/settings', label: 'Settings', end: false },
 ] as const

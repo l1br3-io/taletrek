@@ -1,5 +1,5 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb'
-import type { Book, BookFile, BookId, Chapter, ChapterId } from '../types'
+import type { Book, BookFile, BookId, BookPosition, Chapter, ChapterId } from '../types'
 
 /**
  * TaleTrek IndexedDB schema.
@@ -108,11 +108,53 @@ export async function deleteBook(id: BookId): Promise<void> {
   await db.delete('books', id)
 }
 
+/**
+ * Remove a book together with all of its chapters and its uploaded file.
+ * Runs in a single transaction so the cascade is atomic.
+ */
+export async function deleteBookCascade(id: BookId): Promise<void> {
+  const db = await getDB()
+  const chapterKeys = await db.getAllKeysFromIndex('chapters', 'bookId', id)
+  const tx = db.transaction(['books', 'chapters', 'files'], 'readwrite')
+  await Promise.all([
+    tx.objectStore('books').delete(id),
+    ...chapterKeys.map((key) => tx.objectStore('chapters').delete(key)),
+    tx.objectStore('files').delete(id),
+  ])
+  await tx.done
+}
+
+/**
+ * Lightweight progress write — preserves the other book fields, sets
+ * `position` + `progressFraction`, and bumps `updatedAt` so the book sorts to
+ * the top of the library / `getMostRecentBook`. No-op if the book is gone.
+ */
+export async function updateBookProgress(
+  id: BookId,
+  position: BookPosition,
+  progressFraction: number,
+): Promise<void> {
+  const db = await getDB()
+  const book = await db.get('books', id)
+  if (!book) return
+  book.position = position
+  book.progressFraction = progressFraction
+  book.updatedAt = Date.now()
+  await db.put('books', book)
+}
+
 /** Return the most-recently-updated book, or `undefined` when none exist. */
 export async function getMostRecentBook(): Promise<Book | undefined> {
   const db = await getDB()
   const books = await db.getAllFromIndex('books', 'updatedAt')
   return books.at(-1)
+}
+
+/** All books, newest-first by `updatedAt`. */
+export async function getAllBooks(): Promise<Book[]> {
+  const db = await getDB()
+  const books = await db.getAllFromIndex('books', 'updatedAt')
+  return books.reverse()
 }
 
 /** Write chapters (insert or overwrite). */
