@@ -1,9 +1,8 @@
 # Spike: WebLLM in-browser LLM (WebGPU)
 
-> **Status:** **All three go/no-go questions ✅ confirmed** (Firefox 152, system
-> install, Intel iGPU + NVIDIA dGPU). OPFS persistence + inference verified
-> end-to-end. Only the iPhone/iOS Safari WebGPU gate remains. **Track:** T0
-> de-risking for [M6 — AI Transforms](../prds/M6-ai-transforms.md).
+> **Status:** **All go/no-go questions ✅ confirmed and all hardware gates passed**
+> (Firefox 152 desktop, iPhone Safari). M6 shipped. **Track:** T0 de-risking for
+> [M6 — AI Transforms](../prds/M6-ai-transforms.md).
 
 ## Goal
 
@@ -162,10 +161,7 @@ in T4 must use this exact string. Logged in `tasks/plan.md` deviations.
    warm load is near-instant, `modelCached: true` on reload.
 2. **~~#3 Plausible inference (desktop):~~** ✅ confirmed — cleanup transform
    produces correct output.
-3. **iOS Safari WebGPU (real iPhone — gotcha #5 + manual gate):** open the spike
-   URL on the iPhone (HTTPS required), confirm `webgpu: true` **and**
-   `requestAdapter()` returns non-null, run one inference. If iOS Safari lacks
-   WebGPU, document as a known limitation (iOS falls back to cloud per ADR-0003).
+3. **~~iOS Safari WebGPU~~:** ✅ confirmed on real iPhone.
 4. **(Optional) memory coexistence with Piper:** only meaningful in M6
    integration — defer to T3/T9.
 5. **(Optional) exact perf metrics:** the event log records `msToFirstToken`,

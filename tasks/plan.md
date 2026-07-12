@@ -446,7 +446,7 @@ Checkpoint E — End-to-end post-process on one book · ◐ (component-level via
 - **Verify:** full `pnpm verify` + chrome-devtools MCP.
 - **Files:** wiring + minor fixes across the slice.
 
-Checkpoint F — M6 shipped & `pnpm verify` green · ☐
+Checkpoint F — M6 shipped & `pnpm verify` green · ✅
 
 ---
 
