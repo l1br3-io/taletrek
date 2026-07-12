@@ -1,5 +1,6 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb'
 import type { Book, BookFile, BookId, BookPosition, Chapter, ChapterId } from '../types'
+import type { AppliedProcessing } from './ai/types'
 
 /**
  * TaleTrek IndexedDB schema.
@@ -139,6 +140,25 @@ export async function updateBookProgress(
   if (!book) return
   book.position = position
   book.progressFraction = progressFraction
+  book.updatedAt = Date.now()
+  await db.put('books', book)
+}
+
+/**
+ * Set or clear a book's applied-processing record (M6). Passing `undefined`
+ * clears it (e.g. on re-process-from-originals). Bumps `updatedAt`. No-op if
+ * the book is gone. The key invariant: **position is reset separately** by the
+ * caller via `updateBookProgress` (keep `chapterIndex`, reset `paragraphIndex`).
+ */
+export async function updateBookProcessing(
+  id: BookId,
+  processing: AppliedProcessing | undefined,
+): Promise<void> {
+  const db = await getDB()
+  const book = await db.get('books', id)
+  if (!book) return
+  if (processing) book.processing = processing
+  else delete book.processing
   book.updatedAt = Date.now()
   await db.put('books', book)
 }

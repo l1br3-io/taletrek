@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
+import { AiSettingsSection } from '../components/AiSettingsSection'
 import { InstallPrompt } from '../components/InstallPrompt'
 import { OfflineBadge } from '../components/OfflineBadge'
 import { type DownloadState, VoicePicker } from '../components/VoicePicker'
+import { DEFAULT_AI_SETTINGS } from '../context/settings'
 import { useOnline } from '../hooks/useOnline'
 import { type Theme, useSetting } from '../hooks/useSetting'
 import type { CleaningFilters, PronunciationEntry } from '../lib/clean/types'
@@ -27,6 +29,8 @@ export function Settings() {
   const [voiceId, setVoiceId] = useSetting('voiceId')
   const [playbackRate, setPlaybackRate] = useSetting('playbackRate')
   const [cleaning, setCleaning] = useSetting('cleaning')
+  const [aiValue, setAi] = useSetting('ai')
+  const ai = aiValue ?? DEFAULT_AI_SETTINGS
 
   const [storedIds, setStoredIds] = useState<ReadonlySet<string>>(new Set())
   const [downloading, setDownloading] = useState<DownloadState | null>(null)
@@ -209,6 +213,8 @@ export function Settings() {
           onChange={(pronunciation) => setCleaning({ ...cleaning, pronunciation })}
         />
       )}
+
+      <AiSettingsSection ai={ai} onChange={setAi} />
 
       <p className="text-sm text-muted">
         Settings are stored on this device (IndexedDB) and survive a reload or restart. Voice models

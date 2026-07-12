@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react'
+import type { AiSettings } from '../lib/ai/types'
 import type { CleaningConfig } from '../lib/clean/types'
 import { getSetting, setSetting } from '../lib/db'
 import { DEFAULT_VOICE_ID } from '../lib/tts/voices'
@@ -17,6 +18,8 @@ export interface Settings {
   playbackRate: number
   /** Text-cleaning pipeline config (M4). */
   cleaning: CleaningConfig
+  /** AI post-processing config (M6). Absent on pre-M6 stored settings → falls back to the default (disabled). */
+  ai?: AiSettings
 }
 
 export const DEFAULT_CLEANING: CleaningConfig = {
@@ -25,12 +28,22 @@ export const DEFAULT_CLEANING: CleaningConfig = {
   pronunciation: [],
 }
 
+/** M6 default: disabled end-to-end (no UI beyond the toggle, no modals, no downloads). */
+export const DEFAULT_AI_SETTINGS: AiSettings = {
+  enabled: false,
+  backend: 'in-browser',
+  inBrowser: { modelId: 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC' },
+  cloud: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  modal: { beforeUpload: false, afterUpload: true },
+}
+
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'dark',
   fontScale: 1,
   voiceId: DEFAULT_VOICE_ID,
   playbackRate: 1,
   cleaning: DEFAULT_CLEANING,
+  ai: DEFAULT_AI_SETTINGS,
 }
 
 const SETTINGS_KEY = 'app'
