@@ -21,9 +21,13 @@ interface BookCardProps {
   book: Book
   onOpen: (id: BookId) => void
   onDelete: (id: BookId) => void
+  /** When provided (AI enabled), shows a "Reprocess" action on the card. */
+  onReprocess?: (id: BookId) => void
+  /** When provided (AI enabled), shows a "Hints" action on the card. */
+  onPronunciation?: (id: BookId) => void
 }
 
-export function BookCard({ book, onOpen, onDelete }: BookCardProps) {
+export function BookCard({ book, onOpen, onDelete, onReprocess, onPronunciation }: BookCardProps) {
   const pct = Math.round((book.progressFraction ?? 0) * 100)
   return (
     <li className="flex flex-col">
@@ -50,14 +54,36 @@ export function BookCard({ book, onOpen, onDelete }: BookCardProps) {
       >
         <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
       </div>
-      <button
-        type="button"
-        onClick={() => onDelete(book.id)}
-        className="mt-2 self-start text-xs text-muted transition-colors hover:text-red-400"
-        aria-label={`Delete ${book.title}`}
-      >
-        Delete
-      </button>
+      <div className="mt-2 flex gap-3">
+        {onReprocess && (
+          <button
+            type="button"
+            onClick={() => onReprocess(book.id)}
+            className="text-xs text-muted transition-colors hover:text-accent"
+            aria-label={`Reprocess ${book.title}`}
+          >
+            Reprocess
+          </button>
+        )}
+        {onPronunciation && (
+          <button
+            type="button"
+            onClick={() => onPronunciation(book.id)}
+            className="text-xs text-muted transition-colors hover:text-accent"
+            aria-label={`Review pronunciation for ${book.title}`}
+          >
+            Hints
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => onDelete(book.id)}
+          className="text-xs text-muted transition-colors hover:text-red-400"
+          aria-label={`Delete ${book.title}`}
+        >
+          Delete
+        </button>
+      </div>
     </li>
   )
 }

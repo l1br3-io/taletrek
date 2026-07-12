@@ -23,8 +23,17 @@ export type TransformState =
 
 export interface RunTransformsArgs {
   book: Book
-  /** All chapters of the book, in order. Transformed in place per chapter. */
-  chapters: Chapter[]
+  /**
+   * Source chapters (upload flow). Mutually exclusive with `resolveChapters`.
+   */
+  chapters?: Chapter[]
+  /**
+   * Lazy source resolver (reprocess flow): re-parses the original file so
+   * transforms start from pristine paragraphs (idempotent re-runs, not stacked
+   * on prior output). Reported as a "Re-parsing original…" running stage.
+   * Mutually exclusive with `chapters`.
+   */
+  resolveChapters?: () => Promise<Chapter[]>
   /** Selected ops, applied in order — the output of each feeds the next. */
   ops: TransformOp[]
 }
@@ -100,7 +109,8 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
   }, [])
 
   const run = useCallback(
-    async ({ book, chapters, ops }: RunTransformsArgs) => {
+    async (args: RunTransformsArgs) => {
+      const { book, ops, resolveChapters } = args
       if (ops.length === 0) return
       if (runningRef.current) return
       if (!engine) {
@@ -110,22 +120,30 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
       runningRef.current = true
       const controller = new AbortController()
       abortRef.current = controller
-      const numChapters = chapters.length
-      const total = ops.length * numChapters
-      setState({
-        type: 'running',
-        fraction: 0,
-        stage: prepare ? 'Loading model…' : describeStage(ops, 0),
-      })
-      let working = chapters
+      const initialStage = prepare
+        ? 'Loading model…'
+        : resolveChapters
+          ? 'Re-parsing original…'
+          : describeStage(ops, 0)
+      setState({ type: 'running', fraction: 0, stage: initialStage })
       try {
         if (prepare) {
           await prepare((fraction) =>
             setState({ type: 'running', fraction, stage: 'Loading model…' }),
           )
           if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
-          setState({ type: 'running', fraction: 0, stage: describeStage(ops, 0) })
         }
+        let working: Chapter[]
+        if (resolveChapters) {
+          setState({ type: 'running', fraction: 0, stage: 'Re-parsing original…' })
+          working = await resolveChapters()
+          if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
+          setState({ type: 'running', fraction: 0, stage: describeStage(ops, 0) })
+        } else {
+          working = args.chapters ?? []
+        }
+        const numChapters = working.length
+        const total = ops.length * numChapters
         for (let i = 0; i < ops.length; i++) {
           const op = ops[i]
           if (!op) continue

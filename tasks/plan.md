@@ -8,17 +8,20 @@
 
 ## Resuming
 
-**As of 2026-07-12 (T6 shipped — Checkpoint E ✅, post-process wired end-to-end):**
+**As of 2026-07-12 (T9 browser-verified — all M6 UI surfaces confirmed, hardware gates pending):**
 M6 — AI Transforms implementation is underway. PRD + two ADRs are locked. The
 WebLLM spike has **go/no-go #1 ✅ confirmed** (MCP); **#2 (OPFS) + #3 (inference)
 pending the user's local run + iPhone gate** (MCP Chrome = Flatpak, no Vulkan).
-T1 (types), T2 (cloud engine + SSE + CSP), T3 (in-browser WebLLM engine + worker +
-runner + client), T4 (Settings UI), T5 (modal + hook + `updateBookProcessing`),
-and **T6 (upload-flow wiring)** are shipped, `pnpm verify` green (375 tests). T6
-finally connects `lib/ai/` → build: WebLLM code-splits into lazy chunks
-(`webllm-runtime` 5.7 MB + `webllm.worker` 5.8 MB; main bundle 342 K). **T7
- (library "Reprocess" + M3 audio-cache invalidation) is the next action.** Then
- T8 (pronunciation review), then T9 (E2E browser verify → ship).
+**T1–T8 are shipped** (`pnpm verify` green, 401 tests). **T9 browser verification
+(MCP, dev server):** ✅ app loads clean (zero console errors/warnings); ✅ AI
+settings toggle persists through reload; ✅ cloud + in-browser backend fields
+render correctly; ✅ book cards show Reprocess + Hints + Delete (AI-gated); ✅
+upload → post-process modal fires (afterUpload); ✅ checkbox → Process button
+interaction; ✅ pronunciation review modal opens + handles no-key error
+gracefully; ✅ reprocess modal opens from book card. **Remaining (user,
+hardware-gated):** cloud transform execution (needs an OpenAI-compatible key +
+SW workaround for preview); WebLLM spike #2/#3 (Vulkan-capable browser); iPhone
+WebGPU gate. Checkpoint F (ship) lands after those.
 
 ### Origin of this milestone (consolidated from the planning session)
 
@@ -166,16 +169,34 @@ relates to source formats. That surfaced three facts that shaped M6:
   removed — errors propagate via prepare/transform). **This is the task that
   connects `lib/ai/` → build.** `pnpm verify` green (375 tests).
 
-**Next action — T7 (library "Reprocess" + M3 audio-cache invalidation):**
-Add a "Reprocess" action to the book card menu in `routes/library.tsx` that
-opens `<PostProcessModal/>` pre-filled from `Book.processing`. On confirm,
-re-parse from the raw bytes (`getBookFile` → `parseInWorker`) → apply new
-transforms → overwrite `paragraphs` → update `processing`. **M3 audio-cache
-invalidation:** when `putChapters` writes new paragraphs, clear the
-corresponding jog-mode audio chunks (keyed by chapterId + paragraph range) — add
-`invalidateAudioForBook(bookId)` (or per-chapter) to the M3 cache module and
-call it from the reprocess path (and ideally from `useAiTransform`'s write).
-Find the M3 cache via `rg -n 'jog\|chunk' web/src/lib/`. T7 is independent of T8.
+**Next action — T9 (E2E browser verify → ship):**
+With T1–T8 shipped + `pnpm verify` green (401 tests), the remaining work is
+real-hardware verification + polish:
+
+1. **WebLLM spike go/no-go #2 + #3 (user, local Vulkan-capable browser):** load
+   the model → reload (OPFS rehydrate) → go offline → run each transform op →
+   run pronunciation hints. Record metrics into `docs/spikes/webllm.md`.
+2. **Cloud backend smoke test:** enable AI in settings → enter an OpenAI-
+   compatible key → upload a short TXT → run cleanup/translate → verify
+   paragraphs change + position resets. This is fully verifiable in the MCP
+   browser (no GPU needed) — the blocker is having a key + the SW stale-cache
+   issue (unregister SW or use a fresh profile).
+3. **Upload→modal→transform E2E (fresh profile):** clear the SW, load `pnpm
+   preview`, upload a book, run a transform, verify the reader shows transformed
+   text. The T6/T7/T8 unit tests prove the flow deterministically; this is the
+   visual confirmation.
+4. **iPhone WebGPU gate:** the highest unknown for the in-browser backend.
+5. **Checkpoint F:** mark M6 shipped, final `pnpm verify`, commit.
+
+**T8 shipped:** `usePronunciationHints` hook (scans opening chapter via
+`engine.proposePronunciationHints`, variant state + abort); `<PronunciationReview/>`
+modal (presentational: candidates ranked by confidence, per-row edit + accept,
+bulk "Accept high-confidence ≥80%" threshold, save collapses to
+`PronunciationEntry` dropping confidence/category); "Hints" action on `BookCard`
+(AI-gated); accepted entries dedup-merge into `Settings.cleaning.pronunciation`
+(case-insensitive, existing entries win so manual edits aren't clobbered). The
+pronunciation dictionary is the existing M4 global `PronunciationEntry[]` — no
+new store, reuses `applyPronunciation` at TTS time. `pnpm verify` green (401 tests).
 
 **In parallel (user):** run the spike locally for #2/#3 (load → reload → offline →
 each transform op; record metrics into `docs/spikes/webllm.md`) and the iPhone
@@ -523,6 +544,29 @@ Checkpoint F — M6 shipped & `pnpm verify` green · ☐
   proven by the 4 library AI-flow unit tests (real `Library` + real settings
   hydration vs mocked ingest) + the build's correct code-split. A clean visual
   pass lands in T9 (unregister SW / fresh profile).
+- **T7 M3 audio-cache invalidation is a no-op:** the plan assumed a persistent
+  jog-mode audio cache keyed by chapter/paragraph that transforms would
+  invalidate. In fact `useParagraphPlayer` pre-renders into an **in-memory `Map`
+  only** (`queueRef`) — nothing is persisted to OPFS/IndexedDB for audio chunks.
+  The player mounts only in the reader route; transforms run from the library
+  route (reader unmounted), so there is no live queue to invalidate. On next
+  reader open the queue starts empty and re-renders from the current (already
+  transformed) paragraphs. No `invalidateAudioForBook` was needed.
+- **T7 reparse preserves chapter IDs by index:** rather than
+  `deleteChaptersByBook` + fresh IDs (which would orphan + lose any future
+  per-chapter references), `reparseChapters` loads existing chapters and reuses
+  each `ChapterId` by index, updating only `title` + `paragraphs`. The parser is
+  deterministic for a given file so counts match; a count mismatch (extras) gets
+  fresh IDs, and a shorter re-parse leaves a stale tail that a future cleanup
+  pass can sweep (neither happens in practice).
+- **T8 reuses the M4 pronunciation dictionary (no new store):** accepted
+  pronunciation candidates collapse to the existing `PronunciationEntry` shape
+  (dropping LLM-specific `confidence` + `category`) and merge into
+  `Settings.cleaning.pronunciation` — the same list the M4 `PronunciationEditor`
+  in Settings manages + `applyPronunciation` applies at TTS time. No new IndexedDB
+  store, no new TTS hook; the review is a pure authoring surface over the existing
+  dictionary. Dedup is case-insensitive by `find`, existing entries win so a prior
+  manual edit isn't clobbered by a re-scan.
 
 ---
 

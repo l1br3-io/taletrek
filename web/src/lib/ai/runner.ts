@@ -16,7 +16,7 @@ import {
   parseHintCandidates,
   splitOutput,
 } from './prompts'
-import type { PronunciationCandidate, TransformOp } from './types'
+import type { AppliedProcessing, PronunciationCandidate, TransformOp } from './types'
 
 /** Engine-specific completion primitive. */
 export type CompleteFn = (
@@ -81,4 +81,24 @@ export async function runHints(
   const raw = await complete(buildHintsMessages(chunk.paragraphs), { json: true, signal })
   onProgress?.(1)
   return parseHintCandidates(raw)
+}
+
+/**
+ * Reconstruct the ordered {@link TransformOp} list from a book's
+ * {@link AppliedProcessing} record — the inverse of the hook's `extractParams`.
+ * Used to pre-fill the Reprocess modal with whatever was applied last.
+ * Params fall back to the modal defaults if the record omits them.
+ */
+export function opsFromProcessing(p: AppliedProcessing): TransformOp[] {
+  const ops: TransformOp[] = []
+  for (const kind of p.transforms) {
+    if (kind === 'cleanup') ops.push({ kind: 'cleanup' })
+    else if (kind === 'translate')
+      ops.push({ kind: 'translate', target: p.params.translate?.target ?? 'es' })
+    else if (kind === 'summarize')
+      ops.push({ kind: 'summarize', ratio: p.params.summarize?.ratio ?? 0.5 })
+    else if (kind === 'simplify')
+      ops.push({ kind: 'simplify', level: p.params.simplify?.level ?? 2 })
+  }
+  return ops
 }

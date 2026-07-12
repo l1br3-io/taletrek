@@ -1,12 +1,22 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_AI_SETTINGS, DEFAULT_SETTINGS, SettingsProvider } from '../context/settings'
 import { _resetAiEngineForTests } from '../lib/ai/client'
 import type { AiSettings, AiTransformEngine } from '../lib/ai/types'
-import { _clearDBForTests, _resetDBForTests, putBook, setSetting } from '../lib/db'
+import {
+  _clearDBForTests,
+  _resetDBForTests,
+  getChaptersByBook,
+  getSetting,
+  putBook,
+  putBookFile,
+  putChapters,
+  setSetting,
+} from '../lib/db'
+import { parseInWorker } from '../lib/parse/client'
 import type { Book } from '../types'
-import { newBookId } from '../types'
+import { chapterId, newBookId } from '../types'
 import { Library } from './library'
 
 vi.mock('../lib/parse/client', () => ({
@@ -193,5 +203,143 @@ describe('Library — AI upload flow (M6)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^close$/i }))
     const capture = await findByTestId('capture')
     expect(capture.textContent).toMatch(/\/reader\//)
+  })
+})
+
+describe('Library — Reprocess (M6 T7)', () => {
+  /** Render + let SettingsProvider hydrate from the seeded `app` value. */
+  async function renderReady(path: string) {
+    const utils = renderAt(path)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10))
+    })
+    return utils
+  }
+
+  beforeEach(() => {
+    ingestMock.mockReset()
+    vi.mocked(parseInWorker).mockReset()
+  })
+
+  it('reprocesses a book: re-parses original, transforms, writes chapters, stays in library', async () => {
+    await seedAiSettings({ backend: 'cloud', modal: { beforeUpload: false, afterUpload: false } })
+    vi.mocked(parseInWorker).mockResolvedValue({
+      title: 'Reprocessed',
+      chapters: [{ title: 'Ch0', paragraphs: ['fresh-a', 'fresh-b'] }],
+    })
+    const id = newBookId()
+    const now = Date.now()
+    const blob = new File(['hello world'], 'book.txt', { type: 'text/plain' })
+    const book: Book = {
+      id,
+      title: 'Already Processed',
+      format: 'txt',
+      chapterCount: 1,
+      createdAt: now,
+      updatedAt: now,
+      processing: { appliedAt: now, transforms: ['cleanup'], params: {} },
+    }
+    await putBook(book)
+    await putChapters([
+      { id: chapterId('c1'), bookId: id, index: 0, title: 'Ch0', paragraphs: ['old'] },
+    ])
+    await putBookFile({ bookId: id, blob, name: 'book.txt', type: 'text/plain', size: blob.size })
+
+    await renderReady('/library')
+
+    const reprocessBtn = await screen.findByRole('button', { name: /Reprocess Already Processed/i })
+    fireEvent.click(reprocessBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /process book/i })
+    // initialOps pre-fills from Book.processing — the modal's useEffect seeds it
+    // one tick after open, so wait for the checkbox to settle.
+    await waitFor(() => {
+      expect(within(dialog).getByRole('checkbox', { name: /clean up/i })).toBeChecked()
+    })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /process book/i }))
+    await screen.findByText(/Transform applied/i)
+
+    const stored = await getChaptersByBook(id)
+    expect(stored[0]?.paragraphs).toEqual(['[done] fresh-a', '[done] fresh-b'])
+
+    expect(screen.queryByTestId('capture')).not.toBeInTheDocument()
+  })
+
+  it('hides the Reprocess action when AI is disabled', async () => {
+    await putBook(makeBook({ title: 'No AI' }))
+    await renderReady('/library')
+    await screen.findByText('No AI')
+    expect(screen.queryByRole('button', { name: /Reprocess No AI/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('Library — Pronunciation hints (M6 T8)', () => {
+  async function renderReady(path: string) {
+    const utils = renderAt(path)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10))
+    })
+    return utils
+  }
+
+  beforeEach(() => {
+    ingestMock.mockReset()
+    vi.mocked(parseInWorker).mockReset()
+  })
+
+  it('scans hints, accepts a candidate, and merges into the pronunciation dictionary', async () => {
+    await seedAiSettings({ backend: 'cloud', modal: { beforeUpload: false, afterUpload: false } })
+    stubEngine.proposePronunciationHints = vi.fn(async () => [
+      {
+        id: 'h1',
+        find: 'Siobhan',
+        replace: 'Shi-vawn',
+        confidence: 0.9,
+        category: 'proper-noun' as const,
+      },
+    ])
+    const id = newBookId()
+    const now = Date.now()
+    await putBook({
+      id,
+      title: 'Hinted Book',
+      format: 'txt',
+      chapterCount: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+    await putChapters([
+      { id: chapterId('c1'), bookId: id, index: 0, title: 'C0', paragraphs: ['Siobhan arrived.'] },
+    ])
+
+    await renderReady('/library')
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Review pronunciation for Hinted Book/i }),
+    )
+
+    const dialog = await screen.findByRole('dialog', { name: /pronunciation review/i })
+    await waitFor(() => {
+      expect(within(dialog).getByRole('checkbox', { name: /accept siobhan/i })).toBeInTheDocument()
+    })
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /accept siobhan/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /save 1 accepted/i }))
+
+    await waitFor(async () => {
+      const stored = await getSetting<{ cleaning: { pronunciation: unknown[] } }>('app')
+      expect(stored?.cleaning.pronunciation).toEqual([
+        { id: 'h1', find: 'Siobhan', replace: 'Shi-vawn' },
+      ])
+    })
+  })
+
+  it('hides the Hints action when AI is disabled', async () => {
+    await putBook(makeBook({ title: 'No Hints' }))
+    await renderReady('/library')
+    await screen.findByText('No Hints')
+    expect(
+      screen.queryByRole('button', { name: /Review pronunciation for No Hints/i }),
+    ).not.toBeInTheDocument()
   })
 })

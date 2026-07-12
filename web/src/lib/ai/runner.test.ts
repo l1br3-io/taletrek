@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { type CompleteFn, runHints, runTransform } from './runner'
+import { type CompleteFn, opsFromProcessing, runHints, runTransform } from './runner'
+import type { AppliedProcessing } from './types'
 
 /** Uppercases the joined user content and re-splits on blank lines (count-preserving round-trip). */
 const upperComplete: CompleteFn = async (messages) => messages.user.toUpperCase()
@@ -119,5 +120,39 @@ describe('runHints', () => {
     // default sample maxParagraphs=50 → user content is the first 50 joined
     const firstCall = complete.mock.calls[0]?.[0] as { user: string } | undefined
     expect((firstCall?.user ?? '').split('\n\n')).toHaveLength(50)
+  })
+})
+
+describe('opsFromProcessing', () => {
+  it('reconstructs the ordered ops from a full processing record', () => {
+    const p: AppliedProcessing = {
+      appliedAt: 1,
+      transforms: ['cleanup', 'translate', 'summarize', 'simplify'],
+      params: { translate: { target: 'fr' }, summarize: { ratio: 0.4 }, simplify: { level: 3 } },
+    }
+    expect(opsFromProcessing(p)).toEqual([
+      { kind: 'cleanup' },
+      { kind: 'translate', target: 'fr' },
+      { kind: 'summarize', ratio: 0.4 },
+      { kind: 'simplify', level: 3 },
+    ])
+  })
+
+  it('falls back to defaults when params are missing', () => {
+    const p: AppliedProcessing = {
+      appliedAt: 1,
+      transforms: ['translate', 'summarize', 'simplify'],
+      params: {},
+    }
+    expect(opsFromProcessing(p)).toEqual([
+      { kind: 'translate', target: 'es' },
+      { kind: 'summarize', ratio: 0.5 },
+      { kind: 'simplify', level: 2 },
+    ])
+  })
+
+  it('returns [] for an empty transforms list', () => {
+    const p: AppliedProcessing = { appliedAt: 1, transforms: [], params: {} }
+    expect(opsFromProcessing(p)).toEqual([])
   })
 })
