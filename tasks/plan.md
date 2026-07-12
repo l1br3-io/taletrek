@@ -8,20 +8,23 @@
 
 ## Resuming
 
-**As of 2026-07-12 (T9 browser-verified — all M6 UI surfaces confirmed, hardware gates pending):**
-M6 — AI Transforms implementation is underway. PRD + two ADRs are locked. The
+**As of 2026-07-12 (T9 fully browser-verified incl. CSP block test — only hardware gates remain):**
+M6 — AI Transforms implementation is code-complete. PRD + two ADRs are locked. The
 WebLLM spike has **go/no-go #1 ✅ confirmed** (MCP); **#2 (OPFS) + #3 (inference)
 pending the user's local run + iPhone gate** (MCP Chrome = Flatpak, no Vulkan).
-**T1–T8 are shipped** (`pnpm verify` green, 401 tests). **T9 browser verification
-(MCP, dev server):** ✅ app loads clean (zero console errors/warnings); ✅ AI
-settings toggle persists through reload; ✅ cloud + in-browser backend fields
-render correctly; ✅ book cards show Reprocess + Hints + Delete (AI-gated); ✅
-upload → post-process modal fires (afterUpload); ✅ checkbox → Process button
-interaction; ✅ pronunciation review modal opens + handles no-key error
-gracefully; ✅ reprocess modal opens from book card. **Remaining (user,
-hardware-gated):** cloud transform execution (needs an OpenAI-compatible key +
-SW workaround for preview); WebLLM spike #2/#3 (Vulkan-capable browser); iPhone
-WebGPU gate. Checkpoint F (ship) lands after those.
+**T1–T9 are shipped** (`pnpm verify` green, **402 tests**). **T9 browser verification
+(MCP):** ✅ all UI surfaces (dev server, no SW); ✅ ADR-0004 key isolation (absent
+from IDB/localStorage/sessionStorage); ✅ cloud pipeline via mock OpenAI server
+(SSE, chunking, paragraph write, processing record, position reset, pronunciation
+hints); ✅ **CSP XSS block test (production build):** inline script injection
+BLOCKED (`script-src 'self'`), inline event handler BLOCKED, HTTP exfil to
+non-allowlisted host BLOCKED (`connect-src`), HTTPS ALLOWED (provider compat),
+localhost ALLOWED by CSP. **Code review fixes shipped:** CSP hardened (full
+directives), WebLLM mid-stream abort, hints re-entry race, runner reassembly
+clamp, reparse stale-tail sweep, SSE docstring, per-op checkpoint. **Remaining
+(user, hardware-gated only):** WebLLM spike #2/#3 (Vulkan browser), iPhone WebGPU
+gate, real cloud LLM quality (pipeline proven via mock; a real key only adds
+quality verification). Checkpoint F (ship) lands after hardware gates pass.
 
 ### Origin of this milestone (consolidated from the planning session)
 
