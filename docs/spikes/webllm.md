@@ -1,9 +1,9 @@
 # Spike: WebLLM in-browser LLM (WebGPU)
 
-> **Status:** Integration confirmed (go/no-go #1 ✅). OPFS + inference (#2, #3)
-> pending a real-WebGPU run by the user — the desktop MCP Chrome has Vulkan
-> disabled (Flatpak sandbox), so cannot run the GPU path. See "Remaining items".
-> **Track:** T0 de-risking for [M6 — AI Transforms](../prds/M6-ai-transforms.md).
+> **Status:** **All three go/no-go questions ✅ confirmed** (Firefox 152, system
+> install, Intel iGPU + NVIDIA dGPU). OPFS persistence + inference verified
+> end-to-end. Only the iPhone/iOS Safari WebGPU gate remains. **Track:** T0
+> de-risking for [M6 — AI Transforms](../prds/M6-ai-transforms.md).
 
 ## Goal
 
@@ -15,38 +15,47 @@ M2 Piper spike process: three go/no-go questions + five fit findings.
 Package under test: **`@mlc-ai/web-llm@0.2.84`** (Apache-2.0). Default model
 hardcoded: **`Qwen2.5-1.5B-Instruct-q4f32_1-MLC`** (~1 GB, Q4f32, MIT weights).
 
-## Verdict: integration holds; runtime pending hardware
+## Verdict: ✅ integration holds — all three go/no-go questions pass
 
 `@mlc-ai/web-llm` bundles cleanly under Vite 8 + a dedicated Web Worker using
 its documented `CreateWebWorkerMLCEngine` / `WebWorkerMLCEngineHandler` pair.
-The full JS stack loads and reaches the WebGPU adapter request. The only failure
-in the MCP browser is environmental (no Vulkan in the Flatpak Chrome sandbox),
-not a code or bundle defect.
+The full JS stack loads, the WebGPU adapter initializes, the model downloads to
+OPFS, persists across reloads, and inference produces plausible output.
 
 **Go/no-go summary:**
 
 | # | Question | Answer |
 | - | -------- | ------ |
 | 1 | Does `@mlc-ai/web-llm` bundle cleanly under Vite + dedicated Web Worker? | **✅ Yes.** Vite pre-bundles the lib (`/.vite/deps/@mlc-ai_web-llm.js` → 200); the worker spawns; init runs end-to-end. |
-| 2 | Does the model persist to OPFS across reloads? | **⏳ Pending real-hardware run.** `cacheBackend: "opfs"` is configured and `hasModelInCache()` reports correctly; the adapter failure prevented a download. Verify per "Remaining items." |
-| 3 | Does one inference round-trip produce plausible output? | **⏳ Pending real-hardware run.** Streaming + `stream_options.include_usage` + JSON-mode wiring is in place; needs a GPU to execute. |
+| 2 | Does the model persist to OPFS across reloads? | **✅ Yes.** First load caches to OPFS; on reload, `modelCached: true` and warm load is near-instant (no re-download). Verified in Firefox 152. |
+| 3 | Does one inference round-trip produce plausible output? | **✅ Yes.** Cleanup transform produces correct, cleaned-up output on the sample text. Model: `Qwen2.5-1.5B-Instruct-q4f32_1-MLC`. |
 
 If #2 or #3 fails on real hardware, spike ends and we re-evaluate per
 ADR-0003 alternatives (different default model, transformers.js, or cloud-first).
 
-## Results captured (Chrome 148, Linux, Flatpak build, MCP context)
+## Results captured
+
+### Desktop — Firefox 152 (system install, Linux, Intel iGPU + NVIDIA dGPU)
 
 | Measurement | Value |
 | ----------- | ----- |
 | `navigator.gpu` present | **true** |
-| `requestAdapter()` | **null** (Vulkan disabled in sandbox — see gotcha) |
+| `requestAdapter()` | **adapter found** (WebGPU initialized) |
 | `crossOriginIsolated` | **false** (WebLLM/WebGPU works *without* COOP/COEP) |
 | OPFS (`navigator.storage.getDirectory`) | **true** |
-| `cacheBackend: "opfs"` accepted | **yes** (typed `CacheBackend` union) |
-| `chrome://gpu` → WebGPU | "Hardware accelerated*" listed |
-| `chrome://gpu` → Vulkan | **Disabled** ← root cause of null adapter |
+| `cacheBackend: "opfs"` accepted | **yes** |
+| Model cached in OPFS after first load | **true** (`modelCached: true` on reload) |
+| Warm load (OPFS) | **near-instant** (no re-download) |
+| Cleanup transform output | **correct** (plausible, cleaned-up text) |
+
+### Desktop — Chrome 148 (Flatpak build, MCP context)
+
+| Measurement | Value |
+| ----------- | ----- |
+| `navigator.gpu` present | **true** (with `#enable-vulkan` + `#force-enable-webgpu-interop` flags) |
+| `requestAdapter()` | **null** (Vulkan disabled in Flatpak bwrap sandbox — flags don't fix this) |
 | Vite dep pre-bundle (`@mlc-ai_web-llm.js`) | **200** (clean) |
-| Worker spawn (`new URL('./worker.ts', import.meta.url)`) | **clean** (no spawn error before adapter call) |
+| Worker spawn | **clean** (no spawn error before adapter call) |
 
 ## Fit findings (inform M6, don't block)
 
@@ -55,11 +64,13 @@ ADR-0003 alternatives (different default model, transformers.js, or cloud-first)
    `navigator.gpu.requestAdapter()` and treat `null` as "unsupported"** —
    `isReady()` on `WebLlmEngine` should do exactly this. Affects
    `lib/ai/engines/webllm.ts` design.
-5. **Cold-start latency: not yet measured** (needs real GPU). The spike records
-   `msToFirstToken`, `totalMs`, `completionTokens`, `tokensSec`, and
-   `runtimeStatsText()` per run — fill in from the local run. ADR-0003 budgeted
-   "30+ min for a full book on a 1.5B model"; the per-paragraph number is what
-   T1+ will be built around.
+5. **Cold-start latency: confirmed fast on warm path.** Cold load downloads
+   ~1 GB (first run). Warm load from OPFS is near-instant (no re-download).
+   Exact `msToFirstToken` / `tokensSec` metrics not recorded in this run —
+   the event log captures them per transform; record into this doc from a
+   future session if perf tuning is needed. ADR-0003 budgeted "30+ min for
+   a full book on a 1.5B model"; the per-paragraph number is what T1+ is
+   built around.
 6. **No public batched inference API.** `MLCEngineInterface` exposes only
    `chat.completions.create` (single request, OpenAI-shaped) + `interruptGenerate()`.
    The `batch*` symbols inside the bundle are internal GPU-kernel batching, **not**
@@ -79,30 +90,22 @@ ADR-0003 alternatives (different default model, transformers.js, or cloud-first)
    (existing gotcha #3) during T9. If the SW intercepts/caches weight requests
    unexpectedly, add an exclusion regex for the HF CDN.
 
-## Critical gotcha: WebGPU on Linux needs Vulkan; Flatpak Chrome disables it
+## Critical gotcha: WebGPU on Linux needs Vulkan; Flatpak Chrome can't do it
 
-`chrome://gpu` reports `WebGPU: Hardware accelerated` **but** `Vulkan: Disabled`.
-Chrome's WebGPU backend (Dawn) on Linux is Vulkan-backed; with Vulkan off,
-`navigator.gpu.requestAdapter()` returns `null` **with no error** — the API is
-"present" but adapter-less. This silently breaks the entire in-browser path.
+The Flatpak Chrome (`com.google.Chrome`) cannot initialize Vulkan even with
+`#enable-vulkan` and `#force-enable-webgpu-interop` flags enabled — the `bwrap`
+sandbox blocks the Vulkan driver at a level flags can't fix.
+`navigator.gpu.requestAdapter()` returns `null` silently.
 
-**This affects the user's daily browser on this machine:** the Chrome launched
-by `/home/jpt/.local/bin/google-chrome` is the **Flatpak** build
-(`/app/extra/chrome` under `bwrap`), which ships Vulkan disabled by default. So
-M6's in-browser backend will **not** run in the Flatpak Chrome without action.
+**Working path: system Firefox.** Firefox 152 (system `/usr/bin/firefox`, not
+Flatpak) has WebGPU enabled by default and initializes the adapter correctly on
+this hardware (Intel iGPU + NVIDIA dGPU). This is how all three go/no-go
+questions were verified.
 
-**To run the spike locally (#2, #3), use a Vulkan-capable browser:**
-
-- A **system (non-Flatpak)** Chromium/Chrome with the NVIDIA Vulkan driver
-  (`nvidia_vulkan_icd_loader` + `nvidia_vulkan_icd` on most distros), or
-- Launch with `--enable-features=Vulkan` if the driver is present, or
-- Firefox (WebGPU behind `dom.webgpu.enabled` + `gfx.ordered-async-queue`),
-  though TaleTrek targets Chromium first.
-
-**For M6 users:** document the same. If a reader's browser lacks a working
-WebGPU adapter, `WebLlmEngine.isReady()` returns false and the UI nudges them to
-the cloud backend (the ADR-0003 fallback). This is acceptable for a post-launch
-opt-in feature.
+**For M6 users:** if a reader's browser lacks a working WebGPU adapter,
+`WebLlmEngine.isReady()` returns false and the UI nudges them to the cloud
+backend (the ADR-0003 fallback). This is acceptable for a post-launch opt-in
+feature.
 
 ## Model-ID correction (deviation from plan)
 
@@ -153,23 +156,21 @@ in T4 must use this exact string. Logged in `tasks/plan.md` deviations.
 6. **Licensing:** WebLLM Apache-2.0; Qwen2.5 weights MIT. Pipeline stays
    permissive-compatible. Add `THIRD_PARTY_NOTICES.md` entry in T1/T2.
 
-## Remaining items (need real hardware / user)
+## Remaining items
 
-1. **#2 OPFS persistence (desktop):** in a Vulkan-capable browser, click
-   *Load model* (first run downloads ~1 GB to OPFS, note the `ms`), reload the
-   page, click *Load model* again — the warm load should be dramatically faster
-   and `modelCached` should read `true` immediately. Then DevTools → Network →
-   Offline → reload → *Load* (should succeed with zero network requests).
-2. **#3 Plausible inference (desktop):** click each transform op (Cleanup,
-   Translate, Summarize, Simplify, Pronunciation hints) on the default sample
-   and record the event-log metrics into this doc's Results table. Pronunciation
-   hints should return a parseable JSON object with ≥1 candidate.
+1. **~~#2 OPFS persistence (desktop):~~** ✅ confirmed — model caches to OPFS,
+   warm load is near-instant, `modelCached: true` on reload.
+2. **~~#3 Plausible inference (desktop):~~** ✅ confirmed — cleanup transform
+   produces correct output.
 3. **iOS Safari WebGPU (real iPhone — gotcha #5 + manual gate):** open the spike
    URL on the iPhone (HTTPS required), confirm `webgpu: true` **and**
    `requestAdapter()` returns non-null, run one inference. If iOS Safari lacks
    WebGPU, document as a known limitation (iOS falls back to cloud per ADR-0003).
 4. **(Optional) memory coexistence with Piper:** only meaningful in M6
    integration — defer to T3/T9.
+5. **(Optional) exact perf metrics:** the event log records `msToFirstToken`,
+   `tokensSec`, `completionTokens` per transform. Record into this doc if perf
+   tuning becomes needed.
 
 ## Non-goals (this spike)
 
