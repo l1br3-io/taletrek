@@ -62,8 +62,11 @@ export function usePronunciationHints(engine: AiTransformEngine | null): UsePron
         if (controller.signal.aborted) return
         setState({ type: 'ready', candidates })
       } catch (e) {
-        if (controller.signal.aborted) setState({ type: 'idle' })
-        else setState({ type: 'error', message: (e as Error).message || 'Hints scan failed.' })
+        if (!controller.signal.aborted) {
+          setState({ type: 'error', message: (e as Error).message || 'Hints scan failed.' })
+        }
+        // Aborted controllers don't setState — reset() already set idle, or a
+        // newer scan has taken over (re-entry race guard).
       } finally {
         if (abortRef.current === controller) abortRef.current = null
       }

@@ -201,6 +201,15 @@ export async function deleteChaptersByBook(bookId: BookId): Promise<void> {
   await tx.done
 }
 
+/** Remove specific chapters by ID (e.g. stale tail chapters after a re-parse). */
+export async function deleteChaptersByIds(ids: ChapterId[]): Promise<void> {
+  if (ids.length === 0) return
+  const db = await getDB()
+  const tx = db.transaction('chapters', 'readwrite')
+  await Promise.all(ids.map((id) => tx.store.delete(id)))
+  await tx.done
+}
+
 /** Store the raw uploaded blob for a book (source of truth). */
 export async function putBookFile(file: BookFile): Promise<void> {
   const db = await getDB()

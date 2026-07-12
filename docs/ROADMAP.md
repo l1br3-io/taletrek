@@ -93,4 +93,4 @@ Revisited once the read-aloud core is shipped and adopted:
 
 ## Status
 
-Greenfield — no source yet. [`VISION.md`](./VISION.md) holds the problem and goals; this roadmap is directional and will be updated as milestones ship and PRDs land under `docs/prds/`.
+M0–M5 shipped (read-aloud core complete). M6 (AI Transforms) in progress — code complete, browser-verified, hardware gates (WebLLM Vulkan + iPhone WebGPU) pending. See [`AGENTS.md`](../AGENTS.md) for the current milestone status table + [`tasks/todo.md`](../tasks/todo.md) for checkpoint-level tracking.

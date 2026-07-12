@@ -61,7 +61,10 @@ export async function runTransform(
   for (const [i, chunk] of chunks.entries()) {
     const raw = await complete(buildTransformMessages(op, chunk.paragraphs), { signal })
     const parts = splitOutput(raw)
-    for (let j = 0; j < parts.length; j++) {
+    // Clamp to the chunk's paragraph count so a model that over-returns can't
+    // clobber the start of the next chunk.
+    const max = Math.min(parts.length, chunk.paragraphs.length)
+    for (let j = 0; j < max; j++) {
       const idx = chunk.start + j
       if (idx < out.length) out[idx] = parts[j] ?? out[idx] ?? ''
     }

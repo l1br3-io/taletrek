@@ -13,7 +13,7 @@
 
 import type { BookId, Chapter } from '../types'
 import { newChapterId } from '../types'
-import { getBookFile, getChaptersByBook } from './db'
+import { deleteChaptersByIds, getBookFile, getChaptersByBook } from './db'
 import { parseInWorker } from './parse/client'
 
 export class OriginalUnavailableError extends Error {
@@ -34,7 +34,7 @@ export async function reparseChapters(bookId: BookId): Promise<Chapter[]> {
   const file = new File([stored.blob], stored.name, { type: stored.type })
   const result = await parseInWorker(file)
   const existing = await getChaptersByBook(bookId)
-  return result.chapters.map((parsed, index) => {
+  const mapped = result.chapters.map((parsed, index) => {
     const ex = existing[index]
     return {
       id: ex?.id ?? newChapterId(),
@@ -44,4 +44,10 @@ export async function reparseChapters(bookId: BookId): Promise<Chapter[]> {
       paragraphs: parsed.paragraphs,
     }
   })
+  // Sweep stale tail chapters if the re-parse yielded fewer than before.
+  if (mapped.length < existing.length) {
+    const staleIds = existing.slice(mapped.length).map((c) => c.id)
+    await deleteChaptersByIds(staleIds)
+  }
+  return mapped
 }
