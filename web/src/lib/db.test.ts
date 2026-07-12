@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { type Book, type BookFile, type Chapter, newBookId, newChapterId } from '../types'
+import type { AppliedProcessing } from './ai/types'
 import {
   _clearDBForTests,
   _resetDBForTests,
@@ -14,6 +15,7 @@ import {
   putBookFile,
   putChapters,
   setSetting,
+  updateBookProcessing,
   updateBookProgress,
 } from './db'
 
@@ -202,6 +204,37 @@ describe('library + progress (M5)', () => {
     await expect(
       updateBookProgress(newBookId(), { chapterIndex: 0, paragraphIndex: 0 }, 0),
     ).resolves.toBeUndefined()
+  })
+
+  it('updateBookProcessing round-trips a processing record and bumps updatedAt', async () => {
+    const book = makeBook({ updatedAt: 1000 })
+    await putBook(book)
+    const processing: AppliedProcessing = {
+      appliedAt: 1234,
+      transforms: ['cleanup', 'translate'],
+      params: { translate: { target: 'es' } },
+    }
+    await updateBookProcessing(book.id, processing)
+    const after = await getBook(book.id)
+    expect(after?.processing).toEqual(processing)
+    expect(after?.updatedAt).toBeGreaterThan(1000)
+  })
+
+  it('updateBookProcessing(undefined) clears the record', async () => {
+    const book = makeBook()
+    await putBook(book)
+    await updateBookProcessing(book.id, {
+      appliedAt: 1,
+      transforms: ['cleanup'],
+      params: {},
+    })
+    expect((await getBook(book.id))?.processing).toBeDefined()
+    await updateBookProcessing(book.id, undefined)
+    expect((await getBook(book.id))?.processing).toBeUndefined()
+  })
+
+  it('updateBookProcessing is a no-op for a missing book', async () => {
+    await expect(updateBookProcessing(newBookId(), undefined)).resolves.toBeUndefined()
   })
 
   it('deleteBookCascade removes the book, its chapters, and its file', async () => {

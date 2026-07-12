@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@mintplex-labs/piper-tts-web": "1.0.4",
+    "@mlc-ai/web-llm": "0.2.84",
     "fast-xml-parser": "^5.9.3",
     "idb": "8.0.3",
     "jszip": "^3.10.1",

@@ -1,3 +1,5 @@
+import type { AppliedProcessing } from './lib/ai/types'
+
 export type BookId = string & { readonly __brand: 'BookId' }
 export type ChapterId = string & { readonly __brand: 'ChapterId' }
 export type VoiceId = string & { readonly __brand: 'VoiceId' }
@@ -20,6 +22,8 @@ export interface Book {
   position?: BookPosition
   /** Fraction of paragraphs consumed (0..1), for the library progress bar (M5). */
   progressFraction?: number
+  /** Last applied AI processing (M6); `undefined` = unprocessed. Originals stay recoverable via `getBookFile` + re-parse. */
+  processing?: AppliedProcessing
 }
 
 export interface Chapter {

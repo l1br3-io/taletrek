@@ -18,6 +18,14 @@ vi.mock('../lib/tts/client', () => ({
   },
 }))
 
+const setApiKeyMock = vi.fn<(key: string) => void>()
+const clearApiKeyMock = vi.fn<() => void>()
+vi.mock('../lib/ai/keyring', () => ({
+  getApiKey: (): string | undefined => undefined,
+  setApiKey: (key: string) => setApiKeyMock(key),
+  clearApiKey: () => clearApiKeyMock(),
+}))
+
 function withProviders(node: React.ReactElement) {
   return (
     <MemoryRouter>
@@ -32,6 +40,8 @@ beforeEach(async () => {
   isStoredMock.mockReset()
   downloadMock.mockReset()
   removeMock.mockReset()
+  setApiKeyMock.mockReset()
+  clearApiKeyMock.mockReset()
   isStoredMock.mockResolvedValue(false)
   removeMock.mockResolvedValue(undefined)
 })
@@ -193,5 +203,102 @@ describe('Settings — pronunciation dictionary', () => {
       fireEvent.click(screen.getByRole('button', { name: /remove entry/i }))
     })
     expect(screen.queryByLabelText(/word to replace/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('Settings — AI transforms (M6)', () => {
+  it('renders only the enable toggle when disabled (default)', async () => {
+    await renderHydrated()
+    expect(
+      screen.getByRole('button', { name: /toggle AI transforms/i, pressed: false }),
+    ).toBeInTheDocument()
+    // backend radio + fields are hidden until enabled
+    expect(screen.queryByRole('button', { name: /use on-device backend/i })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/cloud base url/i)).not.toBeInTheDocument()
+  })
+
+  it('reveals the config + default in-browser backend when enabled', async () => {
+    await renderHydrated()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
+    })
+    expect(
+      screen.getByRole('button', { name: /use on-device backend/i, pressed: true }),
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText(/in-browser model id/i)).toHaveValue(
+      'Qwen2.5-1.5B-Instruct-q4f32_1-MLC',
+    )
+  })
+
+  it('swaps to cloud fields on backend change and persists it', async () => {
+    await renderHydrated()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /use cloud backend/i }))
+    })
+    expect(screen.getByLabelText(/cloud base url/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/cloud model/i)).toBeInTheDocument()
+    const stored = await getSetting<{ ai: { backend: string } }>('app')
+    expect(stored?.ai.backend).toBe('cloud')
+  })
+
+  it('saves the API key to the in-memory keyring (not to settings)', async () => {
+    await renderHydrated()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /use cloud backend/i }))
+    })
+    const keyInput = screen.getByLabelText(/cloud api key/i)
+    await act(async () => {
+      fireEvent.change(keyInput, { target: { value: 'sk-secret-123' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save api key/i }))
+    })
+    expect(setApiKeyMock).toHaveBeenCalledWith('sk-secret-123')
+    // The key must never be persisted to settings (ADR-0004)
+    const stored = await getSetting<{ ai?: { key?: string } }>('app')
+    expect(stored?.ai?.key).toBeUndefined()
+  })
+
+  it('forgets the key via the keyring', async () => {
+    // Seed the in-memory keyring as "has key" so the Forget button enables.
+    setApiKeyMock.mockImplementation(() => undefined)
+    await renderHydrated()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /use cloud backend/i }))
+    })
+    const keyInput = screen.getByLabelText(/cloud api key/i)
+    await act(async () => {
+      fireEvent.change(keyInput, { target: { value: 'sk-x' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save api key/i }))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /forget api key/i }))
+    })
+    expect(clearApiKeyMock).toHaveBeenCalled()
+  })
+
+  it('persists the modal-timing flags', async () => {
+    await renderHydrated()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
+    })
+    const beforeCheckbox = screen.getByLabelText(/before upload/i)
+    expect(beforeCheckbox).not.toBeChecked()
+    await act(async () => {
+      fireEvent.click(beforeCheckbox)
+    })
+    const stored = await getSetting<{ ai: { modal: { beforeUpload: boolean } } }>('app')
+    expect(stored?.ai.modal.beforeUpload).toBe(true)
   })
 })
