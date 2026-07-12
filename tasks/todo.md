@@ -7,9 +7,9 @@
 > Checkpoints gate phases: A spike → B types → C engines → D settings → E modal → F shipped.
 
 ## Phase 1 — WebLLM spike (de-risk before commit)
-- [~] T0 — `spike/webllm/` throwaway app built; **go/no-go #1 (Vite+Worker bundle) ✅ confirmed**; #2 (OPFS) + #3 (inference) **pending real-hardware run** (desktop MCP Chrome has Vulkan disabled → no WebGPU adapter; user runs locally + on iPhone). Fit findings captured: feature-detect must use `requestAdapter()`; WebGPU works w/o COOP/COEP; **no public batched API** (sequential per chunk); Flatpak-Chrome-Vulkan gotcha; model-id corrected to `Qwen2.5-1.5B-Instruct-q4f32_1-MLC`. Output: `docs/spikes/webllm.md` (written).
+- [x] T0 — `spike/webllm/` throwaway app built; **all 3 go/no-go questions ✅ confirmed** (Firefox 152 system install: bundle ✅, OPFS persistence ✅, inference ✅). Fit findings captured: feature-detect must use `requestAdapter()`; WebGPU works w/o COOP/COEP; **no public batched API** (sequential per chunk); Flatpak-Chrome can't Vulkan (bwrap sandbox), **system Firefox works**; model-id corrected to `Qwen2.5-1.5B-Instruct-q4f32_1-MLC`. Output: `docs/spikes/webllm.md`.
 
-Checkpoint A — WebLLM spike proves viable · ◐ (#1 confirmed; #2/#3 + iPhone pending user run — **non-blocking for T1 per user**)
+Checkpoint A — WebLLM spike proves viable · ✅ (all 3 go/no-go confirmed in Firefox; iPhone/iOS gate pending)
 
 ## Phase 2 — Types + keyring + chunking
 - [x] T1 — `AiTransformEngine`, `TransformOp`, `AppliedProcessing`, `AiSettings`, `PronunciationCandidate` types; `keyring` (in-memory, zero persistence asserted); `chunk` strategies (solo / windowed / sample) · **`pnpm verify` green (24 new tests)**

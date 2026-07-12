@@ -246,7 +246,7 @@ section above. Full table in [`docs/prds/M6-ai-transforms.md`](../docs/prds/M6-a
 - **Verify:** manual spike run + iPhone test.
 - **Files:** `spike/webllm/**` (throwaway), `docs/spikes/webllm.md`.
 
-Checkpoint A — WebLLM spike proves viable · ◐ (#1 confirmed; #2/#3 + iPhone pending user run)
+Checkpoint A — WebLLM spike proves viable · ✅ (all 3 go/no-go confirmed in Firefox 152; iPhone/iOS gate pending)
 
 ### T1 — Types + keyring + chunking
 - **Detail:** In `web/src/lib/ai/types.ts`: `TransformKind`, `TransformOp`,
@@ -310,7 +310,7 @@ Checkpoint B — Types/keyring/chunk locked · ✅
 - **Files:** `web/src/lib/ai/engines/webllm.ts`, `web/src/lib/ai/worker.ts`,
   `web/src/lib/ai/protocol.ts`, `web/src/lib/ai/client.ts`, `+ tests`.
 
-Checkpoint C — Both backends functional · ◐ (cloud fully tested; in-browser code-complete + unit-tested, real-WebGPU verify pending user's #2/#3 run)
+Checkpoint C — Both backends functional · ✅ (cloud fully tested; in-browser spike-verified in Firefox 152: bundle, OPFS, inference all confirmed; iPhone/iOS gate pending)
 
 ### T4 — Settings UI + ai? field
 - **Detail:** In `web/src/context/settings.tsx` add `ai?: AiSettings` to
