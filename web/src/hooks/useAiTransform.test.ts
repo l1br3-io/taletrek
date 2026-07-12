@@ -180,6 +180,45 @@ describe('useAiTransform — prepare + state edge cases', () => {
   })
 })
 
+describe('useAiTransform — resolveChapters (reprocess)', () => {
+  it('re-parses via resolveChapters before transforming, and writes the result', async () => {
+    const book = makeBook()
+    await putBook(book)
+    // Existing (stale/processed) chapter in the DB — should be overwritten by the run.
+    await putChapters([makeChapter(['stale'])])
+
+    const fresh = makeChapter(['original-a', 'original-b'])
+    const resolveChapters = vi.fn(async () => [fresh])
+
+    const { result } = renderHook(() => useAiTransform({ engine: stubEngine() }))
+    await act(async () => {
+      await result.current.run({ book, resolveChapters, ops: [{ kind: 'cleanup' }] })
+    })
+
+    expect(resolveChapters).toHaveBeenCalledTimes(1)
+    expect(result.current.state.type).toBe('done')
+    const stored = await getChaptersByBook(book.id)
+    expect(stored[0]?.paragraphs).toEqual(['cleanup:original-a', 'cleanup:original-b'])
+  })
+
+  it('reaches error when resolveChapters throws (e.g. original file evicted)', async () => {
+    const book = makeBook()
+    await putBook(book)
+
+    const resolveChapters = vi.fn(async () => {
+      throw new Error('Original file is no longer available')
+    })
+    const { result } = renderHook(() => useAiTransform({ engine: stubEngine() }))
+    await act(async () => {
+      await result.current.run({ book, resolveChapters, ops: [{ kind: 'cleanup' }] })
+    })
+    expect(result.current.state.type).toBe('error')
+    if (result.current.state.type === 'error') {
+      expect(result.current.state.message).toMatch(/Original file/)
+    }
+  })
+})
+
 describe('useAiTransform — abort', () => {
   it('aborts an in-flight run and returns to idle', async () => {
     const book = makeBook()

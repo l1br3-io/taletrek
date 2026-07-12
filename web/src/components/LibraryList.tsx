@@ -5,9 +5,19 @@ interface LibraryListProps {
   books: readonly Book[]
   onOpen: (id: BookId) => void
   onDelete: (id: BookId) => void
+  /** When provided (AI enabled), shows a "Reprocess" action on each card. */
+  onReprocess?: (id: BookId) => void
+  /** When provided (AI enabled), shows a "Hints" action on each card. */
+  onPronunciation?: (id: BookId) => void
 }
 
-export function LibraryList({ books, onOpen, onDelete }: LibraryListProps) {
+export function LibraryList({
+  books,
+  onOpen,
+  onDelete,
+  onReprocess,
+  onPronunciation,
+}: LibraryListProps) {
   if (books.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-line bg-surface p-10 text-center">
@@ -18,7 +28,14 @@ export function LibraryList({ books, onOpen, onDelete }: LibraryListProps) {
   return (
     <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3">
       {books.map((book) => (
-        <BookCard key={book.id} book={book} onOpen={onOpen} onDelete={onDelete} />
+        <BookCard
+          key={book.id}
+          book={book}
+          onOpen={onOpen}
+          onDelete={onDelete}
+          onReprocess={onReprocess}
+          onPronunciation={onPronunciation}
+        />
       ))}
     </ul>
   )
