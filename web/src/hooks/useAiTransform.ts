@@ -167,8 +167,10 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
             next.push({ ...chapter, paragraphs: out })
           }
           working = next
+          // Checkpoint after each op so a tab crash mid-run doesn't lose
+          // completed ops (PRD: "long ops checkpoint to IndexedDB").
+          await putChapters(working)
         }
-        await putChapters(working)
         const processing: AppliedProcessing = {
           appliedAt: Date.now(),
           transforms: ops.map((o) => o.kind),
