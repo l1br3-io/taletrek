@@ -139,6 +139,10 @@ export class WebLlmEngine implements AiTransformEngine {
       let acc = ''
       for await (const chunk of stream) {
         acc += chunk.choices[0]?.delta?.content ?? ''
+        if (opts.signal?.aborted) {
+          void engine.interruptGenerate()
+          throw new DOMException('The user aborted a request.', 'AbortError')
+        }
       }
       return acc.trim()
     } finally {

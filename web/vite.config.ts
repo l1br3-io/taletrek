@@ -4,33 +4,31 @@ import react from '@vitejs/plugin-react'
 import { defineConfig, type Plugin } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// CSP `connect-src` allowlist for the production build (ADR-0004: primary
-// exfiltration defence for the M6 cloud API key). Build-only — never injected in
-// dev so Vite's HMR websocket isn't blocked. Verify via `pnpm preview` + hard
-// reload (gotcha #3). Covers the known OpenAI-compatible providers + localhost
-// (self-hosted Ollama/LM Studio) + the model CDNs the app already fetches from
-// (Piper voices + WebLLM models on HuggingFace, WebLLM libs on GitHub raw).
-const CSP_CONNECT_SRC = [
-  "'self'",
-  'https://huggingface.co',
-  'https://cdn-lfs.huggingface.co',
-  'https://raw.githubusercontent.com',
-  'https://cdn.jsdelivr.net',
-  'https://*.openai.com',
-  'https://api.anthropic.com',
-  'https://openrouter.ai',
-  'https://api.groq.com',
-  'https://api.together.xyz',
-  'http://localhost:*',
-  'http://127.0.0.1:*',
-].join(' ')
+// Content-Security-Policy for the production build. Hardened across all
+// directives per ADR-0004 (the CSP is the primary exfiltration defence for the
+// M6 cloud API key). `default-src 'self'` locks every unlisted directive to
+// same-origin; `connect-src` allows any HTTPS endpoint (the user's explicit
+// cloud-provider choice) + localhost for self-hosted Ollama/LM Studio + the
+// model CDNs. Build-only — never injected in dev so Vite's HMR websocket + test
+// runners aren't blocked. Verify via `pnpm preview` + hard reload (gotcha #3).
+const CSP = [
+  "default-src 'self'",
+  "connect-src 'self' https: http://localhost:* http://127.0.0.1:*",
+  "img-src 'self' data: blob:",
+  "style-src 'self' 'unsafe-inline'",
+  "script-src 'self'",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ')
 
 function contentSecurityPolicy(): Plugin {
   return {
     name: 'taletrek-csp',
     apply: 'build',
     transformIndexHtml(html) {
-      const tag = `<meta http-equiv="Content-Security-Policy" content="connect-src ${CSP_CONNECT_SRC}">`
+      const tag = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`
       return html.replace('<head>', `<head>\n    ${tag}`)
     },
   }

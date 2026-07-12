@@ -37,6 +37,15 @@ describe('runTransform — fallback', () => {
     const out = await runTransform(['keep', 'drop'], { kind: 'cleanup' }, complete)
     expect(out).toEqual(['CLEANED', 'drop'])
   })
+
+  it("clamps to chunk size — model over-return can't clobber a sibling's fallback", async () => {
+    // Solo chunks (1 paragraph each). Chunk 0 over-returns 2 parts; chunk 1
+    // returns empty. Without the clamp, chunk 0's extra part clobbers index 1
+    // and chunk 1's empty result leaves the clobbered value in place.
+    const complete = vi.fn(async (m) => (m.user === 'a' ? 'X\n\nY' : ''))
+    const out = await runTransform(['a', 'b'], { kind: 'cleanup' }, complete)
+    expect(out).toEqual(['X', 'b'])
+  })
 })
 
 describe('runTransform — translate (windowed, overlap=1, last-write-wins)', () => {

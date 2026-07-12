@@ -47,8 +47,8 @@ export function parseSseEvent(event: string): SseDelta | null {
 /**
  * Read an SSE `ReadableStream<Uint8Array>` to completion, invoking `onContent`
  * for each incremental delta. Normalizes CRLF → LF per decoded chunk. Resolves
- * when the stream ends or `[DONE]` is seen; rejects with an `AbortError`-like
- * `DOMException` if `signal` aborts mid-stream.
+ * when the stream ends; rejects with an `AbortError`-like `DOMException` if
+ * `signal` aborts mid-stream.
  */
 export async function consumeSse(
   body: ReadableStream<Uint8Array>,
