@@ -1,14 +1,17 @@
-import { ArrowRight, Download, Upload, X } from 'lucide-react'
+import { ArrowRight, Download, Trash2, Upload, X } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { AiSettingsSection } from '../components/AiSettingsSection'
 import { AudioCacheIndicator } from '../components/AudioCacheIndicator'
+import { DeleteAllDataDialog } from '../components/DeleteAllDataDialog'
 import { InstallPrompt } from '../components/InstallPrompt'
 import { OfflineBadge } from '../components/OfflineBadge'
+import { StorageUsageIndicator } from '../components/StorageUsageIndicator'
 import { type DownloadState, VoicePicker } from '../components/VoicePicker'
 import { DEFAULT_AI_SETTINGS, type SynthMode, useSettings } from '../context/settings'
 import { useAudioCacheStats } from '../hooks/useAudioCacheStats'
 import { useOnline } from '../hooks/useOnline'
 import { type Theme, useSetting } from '../hooks/useSetting'
+import { useStorageEstimate } from '../hooks/useStorageEstimate'
 import {
   BackupTooLargeError,
   CorruptBackupError,
@@ -17,7 +20,8 @@ import {
   importBackup,
 } from '../lib/backup'
 import type { CleaningFilters, PronunciationEntry } from '../lib/clean/types'
-import { clearAudioCache, evictAudioCacheToBudget } from '../lib/db'
+import { clearAllData } from '../lib/clearAllData'
+import { clearAudioCache, evictAudioCacheToBudget, getAllBooks } from '../lib/db'
 import { ttsClient } from '../lib/tts/client'
 import { CURATED_VOICES } from '../lib/tts/voices'
 import type { VoiceId } from '../types'
@@ -59,8 +63,12 @@ export function Settings() {
   const [storedIds, setStoredIds] = useState<ReadonlySet<string>>(new Set())
   const [downloading, setDownloading] = useState<DownloadState | null>(null)
   const [clearingCache, setClearingCache] = useState(false)
+  const [booksCount, setBooksCount] = useState(0)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
   const online = useOnline()
   const cacheStats = useAudioCacheStats()
+  const storageEstimate = useStorageEstimate()
 
   // Refresh which voice models are already in OPFS.
   const refreshStored = useCallback(async () => {
@@ -70,6 +78,7 @@ export function Settings() {
 
   useEffect(() => {
     void refreshStored()
+    void getAllBooks().then((books) => setBooksCount(books.length))
   }, [refreshStored])
 
   const handleDownload = async (id: VoiceId) => {
@@ -96,10 +105,11 @@ export function Settings() {
     try {
       await clearAudioCache()
       await cacheStats.refresh()
+      await storageEstimate.refresh()
     } finally {
       setClearingCache(false)
     }
-  }, [cacheStats])
+  }, [cacheStats, storageEstimate])
 
   const handleChangeBudget = useCallback(
     async (mb: number) => {
@@ -113,8 +123,22 @@ export function Settings() {
     [audioCacheBudgetMb, setAudioCacheBudgetMb, cacheStats],
   )
 
+  const handleDeleteAllResult = useCallback(async (confirmed: boolean) => {
+    if (!confirmed) {
+      setDeleteDialogOpen(false)
+      return
+    }
+    setDeletingAll(true)
+    try {
+      await clearAllData()
+    } finally {
+      // Reload to a fresh app state — the DB, OPFS, caches, and SW are gone.
+      location.reload()
+    }
+  }, [])
+
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-3xl space-y-6">
       <h1 className="text-2xl font-semibold">Settings</h1>
 
       <InstallPrompt />
@@ -206,6 +230,18 @@ export function Settings() {
       </SettingsGroup>
 
       <SettingsGroup title="Storage">
+        <StorageUsageIndicator
+          usageBytes={storageEstimate.usage}
+          quotaBytes={storageEstimate.quota}
+        />
+        <p className="text-xs text-muted">
+          {booksCount} book{booksCount === 1 ? '' : 's'} · {storedIds.size} voice{' '}
+          {storedIds.size === 1 ? 'model' : 'models'} downloaded
+          {cacheStats.sizeBytes
+            ? ` · ${Math.round(cacheStats.sizeBytes / (1024 * 1024))} MB cached audio`
+            : ''}
+        </p>
+
         <section className="space-y-3">
           <h3 className="text-sm font-medium text-fg">Pre-synthesize on upload</h3>
           <p className="text-xs text-muted">
@@ -232,7 +268,7 @@ export function Settings() {
             ))}
           </div>
           {synthMode === 'no-limit' && (
-            <p className="rounded-md border border-yellow-500/40 bg-yellow-500/10 p-3 text-xs text-yellow-300">
+            <p className="rounded-md border border-warning/40 bg-warning/10 p-3 text-xs text-warning">
               No-limit mode keeps every synthesized paragraph until the browser&apos;s storage quota
               is hit. On low-space devices this can trigger panics that evict half the cache at
               once. Use Standard if you&apos;re unsure.
@@ -351,6 +387,27 @@ export function Settings() {
 
       <BackupSection onImported={() => void reloadSettings()} />
 
+      <section className="space-y-3 rounded-xl border border-danger/40 bg-surface p-5">
+        <h2 className="text-base font-semibold text-fg">Danger zone</h2>
+        <p className="text-xs text-muted">
+          Permanently delete every book, voice model, cached audio, and setting from this device.
+          There is no undo — export a backup first if you want to keep anything.
+        </p>
+        <button
+          type="button"
+          onClick={() => setDeleteDialogOpen(true)}
+          className="inline-flex items-center gap-2 rounded-lg border border-danger px-4 py-2 text-sm font-medium text-danger transition-colors hover:bg-danger hover:text-white"
+        >
+          <Trash2 className="h-4 w-4" /> Delete all data
+        </button>
+      </section>
+
+      <DeleteAllDataDialog
+        open={deleteDialogOpen}
+        busy={deletingAll}
+        onResult={(confirmed) => void handleDeleteAllResult(confirmed)}
+      />
+
       <p className="text-sm text-muted">
         Settings are stored on this device (IndexedDB) and survive a reload or restart. Voice models
         download once and are cached offline. Nothing leaves your phone.
@@ -411,7 +468,7 @@ function PronunciationEditor({
               type="button"
               onClick={() => remove(entry.id)}
               aria-label={`remove ${entry.find || 'entry'}`}
-              className="rounded-md border border-line px-2.5 py-1.5 text-sm text-muted transition-colors hover:border-red-500 hover:text-red-400"
+              className="rounded-md border border-line px-2.5 py-1.5 text-sm text-muted transition-colors hover:border-danger hover:text-danger"
             >
               <X className="h-4 w-4" />
             </button>
@@ -537,7 +594,7 @@ function BackupSection({ onImported }: { onImported: () => void }) {
         </p>
       )}
       {status.type === 'error' && (
-        <p className="text-xs text-red-400" role="alert">
+        <p className="text-xs text-danger" role="alert">
           {status.message}
         </p>
       )}

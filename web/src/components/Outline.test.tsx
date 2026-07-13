@@ -165,4 +165,111 @@ describe('Outline — sub-headings', () => {
     )
     expect(screen.getByText('Chapter 1')).toBeInTheDocument()
   })
+
+  it('renders buffer progress bars when bufferedParagraphIds is provided', () => {
+    const ch: Chapter = {
+      id: chapterId('c0'),
+      bookId: bookId('b1'),
+      index: 0,
+      title: 'Half Done',
+      paragraphs: ['A.', 'B.', 'C.', 'D.'],
+    }
+    const { container } = render(
+      <Outline
+        open
+        chapters={[ch]}
+        currentChapterIndex={0}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        bufferedParagraphIds={new Set([`${ch.id}:0`, `${ch.id}:1`])}
+      />,
+    )
+    // A progress bar div exists inside the chapter <li>.
+    const bars = container.querySelectorAll('li div.h-0\\.5')
+    expect(bars).toHaveLength(1)
+  })
+
+  it('does not render buffer bars when bufferedParagraphIds is undefined', () => {
+    const ch: Chapter = {
+      id: chapterId('c0'),
+      bookId: bookId('b1'),
+      index: 0,
+      title: 'No Buffer',
+      paragraphs: ['A.'],
+    }
+    const { container } = render(
+      <Outline open chapters={[ch]} currentChapterIndex={0} onSelect={vi.fn()} onClose={vi.fn()} />,
+    )
+    const bars = container.querySelectorAll('li div.h-0\\.5')
+    expect(bars).toHaveLength(0)
+  })
+
+  it('auto-expands the current chapter on open', () => {
+    const ch = chapterWithHeadings(0, 'Chapter 1', [{ paragraphIndex: 1, title: 'A SECTION' }])
+    render(
+      <Outline open chapters={[ch]} currentChapterIndex={0} onSelect={vi.fn()} onClose={vi.fn()} />,
+    )
+    expect(screen.getByText('A SECTION')).toBeInTheDocument()
+    expect(screen.getByLabelText('Collapse Chapter 1')).toBeInTheDocument()
+  })
+
+  it('expands sub-headings when the chevron of a collapsed chapter is toggled', () => {
+    const ch0 = chapter(0, 'Intro')
+    const ch1 = chapterWithHeadings(1, 'Middle', [{ paragraphIndex: 1, title: 'THE STORM' }])
+    render(
+      <Outline
+        open
+        chapters={[ch0, ch1]}
+        currentChapterIndex={0}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText('THE STORM')).toBeNull()
+    fireEvent.click(screen.getByLabelText('Expand Middle'))
+    expect(screen.getByText('THE STORM')).toBeInTheDocument()
+    expect(screen.getByLabelText('Collapse Middle')).toBeInTheDocument()
+  })
+
+  it('collapses sub-headings when the chevron of an expanded chapter is toggled', () => {
+    const ch = chapterWithHeadings(0, 'Chapter 1', [{ paragraphIndex: 1, title: 'A SECTION' }])
+    render(
+      <Outline open chapters={[ch]} currentChapterIndex={0} onSelect={vi.fn()} onClose={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByLabelText('Collapse Chapter 1'))
+    expect(screen.queryByText('A SECTION')).toBeNull()
+    expect(screen.getByLabelText('Expand Chapter 1')).toBeInTheDocument()
+  })
+
+  it('does not show a chevron for chapters without headings', () => {
+    const ch: Chapter = {
+      id: chapterId('c0'),
+      bookId: bookId('b1'),
+      index: 0,
+      title: 'Plain',
+      paragraphs: ['x'],
+    }
+    render(
+      <Outline open chapters={[ch]} currentChapterIndex={0} onSelect={vi.fn()} onClose={vi.fn()} />,
+    )
+    expect(screen.queryByLabelText(/^(Expand|Collapse) /)).toBeNull()
+  })
+
+  it('navigates to the chapter start (not a sub-heading) when the title is tapped', () => {
+    const onSelect = vi.fn()
+    const onClose = vi.fn()
+    const ch = chapterWithHeadings(0, 'Chapter 1', [{ paragraphIndex: 2, title: 'A Section' }])
+    render(
+      <Outline
+        open
+        chapters={[ch]}
+        currentChapterIndex={0}
+        onSelect={onSelect}
+        onClose={onClose}
+      />,
+    )
+    fireEvent.click(screen.getByText('Chapter 1'))
+    expect(onSelect).toHaveBeenCalledWith(0)
+    expect(onClose).toHaveBeenCalledOnce()
+  })
 })

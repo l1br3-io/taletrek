@@ -1,5 +1,5 @@
-import { X } from 'lucide-react'
-import { useEffect } from 'react'
+import { ChevronDown, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { Chapter } from '../types'
 
 interface OutlineProps {
@@ -10,6 +10,13 @@ interface OutlineProps {
   /** Select a chapter (and optionally a specific paragraph within it). */
   onSelect: (chapterIndex: number, paragraphIndex?: number) => void
   onClose: () => void
+  /**
+   * Set of cached paragraph IDs (`${chapterId}:${index}`). A subtle per-chapter
+   * progress bar shows the fraction of paragraphs cached. Passed both during
+   * active synth (live job progress) and during normal reading (persistent
+   * cache probe).
+   */
+  bufferedParagraphIds?: Set<string>
 }
 
 function chapterTitle(chapter: Chapter, fallbackIndex: number): string {
@@ -17,7 +24,14 @@ function chapterTitle(chapter: Chapter, fallbackIndex: number): string {
   return t.length > 0 ? t : `Chapter ${fallbackIndex + 1}`
 }
 
-export function Outline({ open, chapters, currentChapterIndex, onSelect, onClose }: OutlineProps) {
+export function Outline({
+  open,
+  chapters,
+  currentChapterIndex,
+  onSelect,
+  onClose,
+  bufferedParagraphIds,
+}: OutlineProps) {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -26,6 +40,28 @@ export function Outline({ open, chapters, currentChapterIndex, onSelect, onClose
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
+
+  // Accordion expand state. The current chapter auto-expands whenever the
+  // outline opens or the cursor moves; the user's manual toggles are preserved.
+  const [expanded, setExpanded] = useState<Set<number>>(() => {
+    const s = new Set<number>()
+    if (currentChapterIndex != null) s.add(currentChapterIndex)
+    return s
+  })
+  useEffect(() => {
+    if (!open || currentChapterIndex == null) return
+    setExpanded((prev) =>
+      prev.has(currentChapterIndex) ? prev : new Set(prev).add(currentChapterIndex),
+    )
+  }, [open, currentChapterIndex])
+
+  const toggle = (index: number) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
 
   if (!open) return null
   const multi = chapters.length > 1
@@ -56,28 +92,65 @@ export function Outline({ open, chapters, currentChapterIndex, onSelect, onClose
           <ul>
             {chapters.map((chapter, i) => {
               const active = currentChapterIndex === chapter.index
+              const total = chapter.paragraphs.length
+              const headings = chapter.headings
+              const hasHeadings = !!headings && headings.length > 0
+              const isExpanded = expanded.has(chapter.index)
+              const title = chapterTitle(chapter, i)
+              const done = bufferedParagraphIds
+                ? chapter.paragraphs.filter(
+                    (_, pi) =>
+                      bufferedParagraphIds.has(`${chapter.id}:${pi}`) ||
+                      !chapter.paragraphs[pi]?.trim(),
+                  ).length
+                : 0
+              const fraction = bufferedParagraphIds && total > 0 ? done / total : 0
               return (
                 <li key={chapter.id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSelect(chapter.index)
-                      onClose()
-                    }}
-                    className={[
-                      'block w-full border-b border-line/50 px-4 py-3 text-left text-sm transition-colors',
-                      active
-                        ? 'bg-accent-soft font-medium text-accent'
-                        : 'text-fg hover:bg-elevated',
-                    ].join(' ')}
-                    aria-current={active ? 'true' : undefined}
-                  >
-                    <span className="mr-2 text-xs text-muted">{i + 1}.</span>
-                    {chapterTitle(chapter, i)}
-                  </button>
-                  {chapter.headings && chapter.headings.length > 0 && (
-                    <ul>
-                      {chapter.headings.map((heading) => (
+                  <div className="flex items-center border-b border-line/50">
+                    {hasHeadings && (
+                      <button
+                        type="button"
+                        onClick={() => toggle(chapter.index)}
+                        aria-expanded={isExpanded}
+                        aria-controls={`outline-headings-${chapter.id}`}
+                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${title}`}
+                        className="self-stretch px-2 text-muted transition-colors hover:text-fg"
+                      >
+                        <ChevronDown
+                          className={`h-4 w-4 transition-transform ${isExpanded ? '' : '-rotate-90'}`}
+                        />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSelect(chapter.index)
+                        onClose()
+                      }}
+                      className={[
+                        'flex-1 px-4 py-3 text-left text-sm transition-colors',
+                        active
+                          ? 'bg-accent-soft font-medium text-accent'
+                          : 'text-fg hover:bg-elevated',
+                      ].join(' ')}
+                      aria-current={active ? 'true' : undefined}
+                    >
+                      <span className="mr-2 text-xs text-muted">{i + 1}.</span>
+                      {title}
+                    </button>
+                  </div>
+                  {bufferedParagraphIds && total > 0 && (
+                    <div className="h-0.5 w-full bg-accent/10">
+                      <div
+                        className="h-full bg-accent/50 transition-[width] duration-300"
+                        style={{ width: `${Math.round(fraction * 100)}%` }}
+                      />
+                    </div>
+                  )}
+                  {hasHeadings && isExpanded && (
+                    <ul id={`outline-headings-${chapter.id}`}>
+                      {headings.map((heading) => (
                         <li key={heading.paragraphIndex}>
                           <button
                             type="button"

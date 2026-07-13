@@ -13,15 +13,7 @@ import { getAiEngine } from '../lib/ai/client'
 import { opsFromProcessing } from '../lib/ai/runner'
 import type { TransformOp } from '../lib/ai/types'
 import type { PronunciationEntry } from '../lib/clean/types'
-import {
-  deleteAudioCacheKeys,
-  deleteBookCascade,
-  getAllBooks,
-  getAudioCacheKeysByBook,
-  getBook,
-  getChaptersByBook,
-  putBook,
-} from '../lib/db'
+import { deleteBookCascade, getAllBooks, getBook, getChaptersByBook, putBook } from '../lib/db'
 import { ingestBook } from '../lib/ingest'
 import { reparseChapters } from '../lib/reprocess'
 import { uploadManager } from '../lib/upload/manager'
@@ -175,7 +167,7 @@ export function Library() {
     [runCtx, transform.state.type, transform.abort, outline, proceedWithBook],
   )
 
-  const handleReprocess = useCallback(
+  const handleEdit = useCallback(
     async (id: BookId): Promise<void> => {
       if (transform.state.type === 'running') return
       const book = await getBook(id)
@@ -271,22 +263,13 @@ export function Library() {
     [refresh],
   )
 
-  // --- per-book re-synthesize (deletes cached audio, then re-runs via manager) ---
+  // --- per-book synthesize (resume: skips already-cached paragraphs) ---
   const handleResynthesize = useCallback(
     async (id: BookId): Promise<void> => {
       if (uploadManager.isActive()) return // one job at a time
       const book = await getBook(id)
       if (!book) return
-      if (
-        !window.confirm(
-          `Re-synthesize "${book.title}"? This deletes its cached audio and synthesizes every paragraph from scratch using the current voice.`,
-        )
-      ) {
-        return
-      }
       const chapters = await getChaptersByBook(id)
-      const keys = await getAudioCacheKeysByBook(id)
-      await deleteAudioCacheKeys(keys)
       uploadManager.startJob({
         book,
         chapters,
@@ -298,7 +281,7 @@ export function Library() {
   )
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Library</h1>
         <UploadButton onSelect={handleSelect} disabled={uploadBusy} />
@@ -319,14 +302,14 @@ export function Library() {
       {parseState.type === 'error' && (
         <div
           role="alert"
-          className="flex items-center justify-between rounded-lg border border-red-500 bg-red-500/10 p-4 text-red-400"
+          className="flex items-center justify-between rounded-lg border border-danger bg-danger/10 p-4 text-danger"
         >
           <span className="text-sm">{parseState.message}</span>
           <button
             type="button"
             onClick={() => setParseState({ type: 'idle' })}
             aria-label="Dismiss error"
-            className="ml-4 text-xs text-red-400/70 hover:text-red-400"
+            className="ml-4 text-xs text-danger/70 hover:text-danger"
           >
             <X className="h-4 w-4" />
           </button>
@@ -360,14 +343,14 @@ export function Library() {
       {outline.state.type === 'error' && (
         <div
           role="alert"
-          className="flex items-center justify-between rounded-lg border border-red-500 bg-red-500/10 p-4 text-red-400"
+          className="flex items-center justify-between rounded-lg border border-danger bg-danger/10 p-4 text-danger"
         >
           <span>{outline.state.message}</span>
           <button
             type="button"
             onClick={outline.reset}
             aria-label="Dismiss error message"
-            className="ml-4 text-xs text-red-400/70 hover:text-red-400"
+            className="ml-4 text-xs text-danger/70 hover:text-danger"
           >
             <X className="h-4 w-4" />
           </button>
@@ -380,7 +363,7 @@ export function Library() {
           books={list.books}
           onOpen={(id) => navigate(`/reader/${id}`)}
           onDelete={handleDelete}
-          onReprocess={ai.enabled ? handleReprocess : undefined}
+          onEdit={ai.enabled ? handleEdit : undefined}
           onPronunciation={ai.enabled ? handlePronunciation : undefined}
           onOutline={handleOutline}
           onResynthesize={settings.synthesizeOnUpload !== 'off' ? handleResynthesize : undefined}

@@ -34,6 +34,7 @@ function makeStubEngine(opts: {
       return result
     },
     async remove() {},
+    async clearAllStored() {},
     synthCalls,
   }
 }

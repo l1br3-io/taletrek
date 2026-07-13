@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { TtsEngine } from '../lib/tts/types'
+import type { SynthesisResult, TtsEngine } from '../lib/tts/types'
 import { bookId, type Chapter, type ChapterId, chapterId, type VoiceId, voiceId } from '../types'
 import { type AudioController, useParagraphPlayer } from './useParagraphPlayer'
 
@@ -101,6 +101,7 @@ function stubEngine(): TtsEngine & { calls: { text: string; voiceId: VoiceId }[]
     },
     async download() {},
     async remove() {},
+    async clearAllStored() {},
     async synthesize(req) {
       calls.push({ text: req.text, voiceId: req.voiceId })
       n++
@@ -124,6 +125,10 @@ interface RenderOpts {
   audio?: FakeAudio
   lookahead?: number
   voiceId?: VoiceId
+  backgroundActive?: boolean
+  backgroundBufferedIds?: Set<string>
+  cachedParagraphIds?: Set<string>
+  onParagraphSynthesized?: (id: string) => void
 }
 
 function renderPlayer(chapters: Chapter[], opts?: RenderOpts) {
@@ -137,6 +142,10 @@ function renderPlayer(chapters: Chapter[], opts?: RenderOpts) {
       engine: TtsEngine
       audio: AudioController
       lookahead: number
+      backgroundActive: boolean
+      backgroundBufferedIds?: Set<string>
+      cachedParagraphIds?: Set<string>
+      onParagraphSynthesized?: (id: string) => void
     }) =>
       useParagraphPlayer({
         chapters: args.chapters,
@@ -145,6 +154,10 @@ function renderPlayer(chapters: Chapter[], opts?: RenderOpts) {
         engine: args.engine,
         audio: args.audio,
         lookahead: args.lookahead,
+        backgroundActive: args.backgroundActive,
+        backgroundBufferedIds: args.backgroundBufferedIds,
+        cachedParagraphIds: args.cachedParagraphIds,
+        onParagraphSynthesized: args.onParagraphSynthesized,
       }),
     {
       initialProps: {
@@ -154,6 +167,10 @@ function renderPlayer(chapters: Chapter[], opts?: RenderOpts) {
         engine,
         audio,
         lookahead: opts?.lookahead ?? 0,
+        backgroundActive: opts?.backgroundActive ?? false,
+        backgroundBufferedIds: opts?.backgroundBufferedIds,
+        cachedParagraphIds: opts?.cachedParagraphIds,
+        onParagraphSynthesized: opts?.onParagraphSynthesized,
       },
     },
   )
@@ -395,6 +412,10 @@ describe('useParagraphPlayer — playback (lookahead=0)', () => {
       engine: stubEngine(),
       audio,
       lookahead: 0,
+      backgroundActive: false,
+      backgroundBufferedIds: undefined,
+      cachedParagraphIds: undefined,
+      onParagraphSynthesized: undefined,
     })
     expect(audio.rates).toContain(1.5)
   })
@@ -562,6 +583,10 @@ describe('useParagraphPlayer — pre-render queue (lookahead=3)', () => {
       engine,
       audio: new FakeAudio(),
       lookahead: 3,
+      backgroundActive: false,
+      backgroundBufferedIds: undefined,
+      cachedParagraphIds: undefined,
+      onParagraphSynthesized: undefined,
     })
     await waitFor(() => {
       expect(result.current.bufferedAhead).toBe(0)
@@ -589,6 +614,10 @@ describe('useParagraphPlayer — pre-render queue (lookahead=3)', () => {
       engine,
       audio,
       lookahead: 3,
+      backgroundActive: false,
+      backgroundBufferedIds: undefined,
+      cachedParagraphIds: undefined,
+      onParagraphSynthesized: undefined,
     })
     await waitFor(() => {
       expect(result.current.bufferedAhead).toBe(0)
@@ -703,5 +732,158 @@ describe('useParagraphPlayer — resume + position outputs', () => {
     })
     expect(result.current.currentIndex).toBe(1)
     expect(result.current.currentParagraph?.text).toBe('B.')
+  })
+})
+
+describe('useParagraphPlayer — background synth + cache', () => {
+  it('shows loading status when background is active and paragraph not yet cached', async () => {
+    const ch = oneChapter(['A.', 'B.'])
+    const engine = stubEngine()
+    // Gate the synth so we can observe the status mid-flight.
+    let resolveSynth: (() => void) | undefined
+    engine.synthesize = vi.fn(
+      () =>
+        new Promise<SynthesisResult>((res) => {
+          resolveSynth = () => res({ audio: new Blob(['x']), synthMs: 1 })
+        }),
+    )
+    const audio = new FakeAudio()
+    const { result } = renderPlayer(ch, {
+      engine,
+      audio,
+      backgroundActive: true,
+      backgroundBufferedIds: new Set<string>(), // empty — nothing buffered yet
+    })
+
+    await act(async () => {
+      result.current.play()
+    })
+    // Uncached paragraph → status is 'loading' (synthesizing on-demand,
+    // not waiting for the background job).
+    expect(result.current.status.type).toBe('loading')
+    // Release the synth so the hook can finish cleanly.
+    await act(async () => {
+      resolveSynth?.()
+    })
+  })
+
+  it('shows loading status when background is active but paragraph IS buffered', async () => {
+    const ch = oneChapter(['A.', 'B.'])
+    const firstId = ch[0]?.id
+    const engine = stubEngine()
+    const audio = new FakeAudio()
+    const { result } = renderPlayer(ch, {
+      engine,
+      audio,
+      backgroundActive: true,
+      // Mark paragraph 0 as already buffered by the background job.
+      backgroundBufferedIds: new Set(firstId ? [`${firstId}:0`] : []),
+    })
+
+    await act(async () => {
+      result.current.play()
+    })
+    // Since the background job already has this paragraph, it's a cache hit
+    // → status should be 'loading' (not 'buffering') → then 'playing'.
+    expect(result.current.status.type).toBe('playing')
+  })
+
+  it('runs primeAhead during background synth (user jump scenario)', async () => {
+    const ch = oneChapter(['A.', 'B.', 'C.', 'D.'])
+    const firstId = ch[0]?.id
+    const engine = stubEngine()
+    const audio = new FakeAudio()
+    const { result } = renderPlayer(ch, {
+      engine,
+      audio,
+      lookahead: 3,
+      backgroundActive: true,
+      backgroundBufferedIds: new Set(firstId ? [`${firstId}:0`] : []),
+    })
+
+    await act(async () => {
+      result.current.play()
+    })
+    // primeAhead is NOT skipped during background synth. Paragraph 0 is
+    // played (1 call), then look-ahead pre-renders paragraphs 1-3 (3 calls).
+    expect(engine.calls).toHaveLength(4)
+  })
+
+  it('falls back to loading status when background is not active', async () => {
+    const ch = oneChapter(['A.', 'B.'])
+    const engine = stubEngine()
+    let resolveSynth: (() => void) | undefined
+    engine.synthesize = vi.fn(
+      () =>
+        new Promise<SynthesisResult>((res) => {
+          resolveSynth = () => res({ audio: new Blob(['x']), synthMs: 1 })
+        }),
+    )
+    const audio = new FakeAudio()
+    const { result } = renderPlayer(ch, { engine, audio })
+
+    await act(async () => {
+      result.current.play()
+    })
+    // No background → status should be 'loading' (not 'buffering').
+    expect(result.current.status.type).toBe('loading')
+    await act(async () => {
+      resolveSynth?.()
+    })
+  })
+
+  it('skips loading status when paragraph is in persistent cache', async () => {
+    const ch = oneChapter(['A.', 'B.'])
+    const firstId = ch[0]?.id
+    const engine = stubEngine()
+    let resolveSynth: (() => void) | undefined
+    engine.synthesize = vi.fn(
+      () =>
+        new Promise<SynthesisResult>((res) => {
+          resolveSynth = () => res({ audio: new Blob(['x']), synthMs: 1 })
+        }),
+    )
+    const audio = new FakeAudio()
+    const { result } = renderPlayer(ch, {
+      engine,
+      audio,
+      cachedParagraphIds: new Set(firstId ? [`${firstId}:0`] : []),
+    })
+
+    await act(async () => {
+      result.current.play()
+    })
+    // Paragraph is cached → no loading/buffering status. While the synth
+    // (cache lookup) is mid-flight, status stays 'idle' (not 'loading').
+    expect(result.current.status.type).not.toBe('loading')
+    expect(result.current.status.type).not.toBe('buffering')
+    await act(async () => {
+      resolveSynth?.()
+    })
+    expect(result.current.status.type).toBe('playing')
+  })
+
+  it('fires onParagraphSynthesized for on-demand and look-ahead synth', async () => {
+    const ch = oneChapter(['A.', 'B.', 'C.', 'D.'])
+    const synthIds: string[] = []
+    const engine = stubEngine()
+    const audio = new FakeAudio()
+    const { result } = renderPlayer(ch, {
+      engine,
+      audio,
+      lookahead: 2,
+      onParagraphSynthesized: (id) => synthIds.push(id),
+    })
+
+    await act(async () => {
+      result.current.play()
+    })
+
+    // Paragraph 0 (on-demand) + paragraphs 1-2 (look-ahead) = 3 calls
+    expect(synthIds).toHaveLength(3)
+    const firstId = ch[0]?.id
+    expect(synthIds[0]).toBe(`${firstId}:0`)
+    expect(synthIds).toContain(`${firstId}:1`)
+    expect(synthIds).toContain(`${firstId}:2`)
   })
 })

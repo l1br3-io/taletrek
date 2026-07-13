@@ -5,6 +5,7 @@ export type TtsRequest =
   | { id: number; op: 'download'; voiceId: VoiceId }
   | { id: number; op: 'isStored'; voiceId: VoiceId }
   | { id: number; op: 'remove'; voiceId: VoiceId }
+  | { id: number; op: 'clearAllStored' }
 
 export type TtsResponse =
   | { id: number; type: 'progress'; fraction: number }
@@ -12,6 +13,7 @@ export type TtsResponse =
   | { id: number; type: 'success'; op: 'isStored'; stored: boolean }
   | { id: number; type: 'success'; op: 'download' }
   | { id: number; type: 'success'; op: 'remove' }
+  | { id: number; type: 'success'; op: 'clearAllStored' }
   | { id: number; type: 'error'; message: string }
 
 /** A success response of any op — the resolved payload from `request`. */

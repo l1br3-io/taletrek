@@ -116,6 +116,14 @@ async function pickFile(file: File): Promise<void> {
   })
 }
 
+/** Open the overflow menu on the book card with the given title. */
+async function openBookMenu(title: string): Promise<void> {
+  const btn = await screen.findByRole('button', { name: `More actions for ${title}` })
+  await act(async () => {
+    fireEvent.click(btn)
+  })
+}
+
 describe('Library', () => {
   it('shows the empty state when there are no books', async () => {
     renderAt('/library')
@@ -144,6 +152,7 @@ describe('Library', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     await putBook(makeBook({ title: 'Delete Me' }))
     renderAt('/library')
+    await openBookMenu('Delete Me')
     const del = await screen.findByRole('button', { name: 'Delete Delete Me' })
     fireEvent.click(del)
     expect(await screen.findByText(/Your library is empty/i)).toBeInTheDocument()
@@ -153,6 +162,7 @@ describe('Library', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false)
     await putBook(makeBook({ title: 'Keep Me' }))
     renderAt('/library')
+    await openBookMenu('Keep Me')
     const del = await screen.findByRole('button', { name: 'Delete Keep Me' })
     fireEvent.click(del)
     expect(await screen.findByText('Keep Me')).toBeInTheDocument()
@@ -266,7 +276,8 @@ describe('Library — Reprocess (M6 T7)', () => {
 
     await renderReady('/library')
 
-    const reprocessBtn = await screen.findByRole('button', { name: /Reprocess Already Processed/i })
+    await openBookMenu('Already Processed')
+    const reprocessBtn = await screen.findByRole('button', { name: /Edit Already Processed/i })
     fireEvent.click(reprocessBtn)
 
     const dialog = await screen.findByRole('dialog', { name: /prepare book/i })
@@ -288,8 +299,8 @@ describe('Library — Reprocess (M6 T7)', () => {
   it('hides the Reprocess action when AI is disabled', async () => {
     await putBook(makeBook({ title: 'No AI' }))
     await renderReady('/library')
-    await screen.findByText('No AI')
-    expect(screen.queryByRole('button', { name: /Reprocess No AI/i })).not.toBeInTheDocument()
+    await openBookMenu('No AI')
+    expect(screen.queryByRole('button', { name: /Edit No AI/i })).not.toBeInTheDocument()
   })
 })
 
@@ -334,6 +345,7 @@ describe('Library — Pronunciation hints (M6 T8)', () => {
 
     await renderReady('/library')
 
+    await openBookMenu('Hinted Book')
     fireEvent.click(
       await screen.findByRole('button', { name: /Review pronunciation for Hinted Book/i }),
     )
@@ -356,7 +368,7 @@ describe('Library — Pronunciation hints (M6 T8)', () => {
   it('hides the Hints action when AI is disabled', async () => {
     await putBook(makeBook({ title: 'No Hints' }))
     await renderReady('/library')
-    await screen.findByText('No Hints')
+    await openBookMenu('No Hints')
     expect(
       screen.queryByRole('button', { name: /Review pronunciation for No Hints/i }),
     ).not.toBeInTheDocument()
@@ -380,7 +392,7 @@ describe('Library — Outline detection', () => {
   it('shows the Outline button for non-EPUB books', async () => {
     await putBook(makeBook({ title: 'A Novel', format: 'txt' }))
     await renderReady('/library')
-    await screen.findByText('A Novel')
+    await openBookMenu('A Novel')
     expect(
       screen.getByRole('button', { name: /Generate outline for A Novel/i }),
     ).toBeInTheDocument()
@@ -389,7 +401,7 @@ describe('Library — Outline detection', () => {
   it('hides the Outline button for EPUB books', async () => {
     await putBook(makeBook({ title: 'An EPUB', format: 'epub' }))
     await renderReady('/library')
-    await screen.findByText('An EPUB')
+    await openBookMenu('An EPUB')
     expect(
       screen.queryByRole('button', { name: /Generate outline for An EPUB/i }),
     ).not.toBeInTheDocument()
@@ -425,6 +437,7 @@ describe('Library — Outline detection', () => {
 
     await renderReady('/library')
 
+    await openBookMenu('Outline Book')
     fireEvent.click(
       await screen.findByRole('button', { name: /Generate outline for Outline Book/i }),
     )
@@ -465,13 +478,14 @@ describe('Library — Outline detection', () => {
 
     await renderReady('/library')
 
+    await openBookMenu('No Heads')
     fireEvent.click(await screen.findByRole('button', { name: /Generate outline for No Heads/i }))
 
     expect(await screen.findByText(/No chapter headings detected/)).toBeInTheDocument()
   })
 })
 
-describe('Library — per-book re-synthesize', () => {
+describe('Library — per-book synthesize', () => {
   async function seedBookForResynth(
     overrides: Partial<Book> = {},
   ): Promise<{ id: Book['id']; title: string }> {
@@ -515,8 +529,9 @@ describe('Library — per-book re-synthesize', () => {
     await seedSettings('standard')
     await seedBookForResynth({ title: 'Standard Book' })
     await renderReady('/library')
+    await openBookMenu('Standard Book')
     expect(
-      await screen.findByRole('button', { name: /Re-synthesize Standard Book/i }),
+      await screen.findByRole('button', { name: /Synthesize Standard Book/i }),
     ).toBeInTheDocument()
   })
 
@@ -524,8 +539,9 @@ describe('Library — per-book re-synthesize', () => {
     await seedSettings('no-limit')
     await seedBookForResynth({ title: 'NoLimit Book' })
     await renderReady('/library')
+    await openBookMenu('NoLimit Book')
     expect(
-      await screen.findByRole('button', { name: /Re-synthesize NoLimit Book/i }),
+      await screen.findByRole('button', { name: /Synthesize NoLimit Book/i }),
     ).toBeInTheDocument()
   })
 
@@ -533,15 +549,16 @@ describe('Library — per-book re-synthesize', () => {
     await seedSettings('off')
     await seedBookForResynth({ title: 'No Synth' })
     await renderReady('/library')
-    expect(screen.queryByRole('button', { name: /Re-synthesize No Synth/i })).toBeNull()
+    await openBookMenu('No Synth')
+    expect(screen.queryByRole('button', { name: /Synthesize No Synth/i })).toBeNull()
   })
 
-  it('deletes cached audio and re-synthesizes every paragraph on confirm', async () => {
+  it('synthesizes remaining paragraphs without deleting existing cache', async () => {
     await seedSettings('standard')
     const { id, title } = await seedBookForResynth()
-    // Seed stale audio cache for this book.
+    // Seed an existing cache entry — it should survive the synthesize action.
     await putAudioCacheEntry({
-      key: 'stale-1',
+      key: 'existing-1',
       blob: new Blob(['old']),
       sizeBytes: 3,
       synthMs: 1,
@@ -550,39 +567,25 @@ describe('Library — per-book re-synthesize', () => {
       createdAt: Date.now(),
       bookId: id,
     })
-    expect(await getAudioCacheKeysByBook(id)).toEqual(['stale-1'])
 
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     await renderReady('/library')
 
-    fireEvent.click(await screen.findByRole('button', { name: `Re-synthesize ${title}` }))
-    // Wait for the done banner (global, in Layout).
+    await openBookMenu(title)
+    fireEvent.click(await screen.findByRole('button', { name: `Synthesize ${title}` }))
+    // Wait for the done banner.
     expect(await screen.findByText(new RegExp(`${title}.*is ready`))).toBeInTheDocument()
 
-    // Old key is gone; two new keys were written by the synth mock (one per paragraph).
+    // Existing cache key survives (no delete-before-synth).
     const keysAfter = await getAudioCacheKeysByBook(id)
-    expect(keysAfter).not.toContain('stale-1')
-    // The cache write happens inside the real PiperEngine path, which the mock
-    // bypasses — so we assert on the synth call count instead of cache contents.
+    expect(keysAfter).toContain('existing-1')
+    // The synth mock is called for each paragraph (cache lookup happens in
+    // the real engine, which the mock bypasses).
     expect(ttsSynthMock).toHaveBeenCalledTimes(2)
-  })
-
-  it('does nothing when the confirm dialog is cancelled', async () => {
-    await seedSettings('standard')
-    const { title } = await seedBookForResynth()
-    vi.spyOn(window, 'confirm').mockReturnValue(false)
-    await renderReady('/library')
-
-    fireEvent.click(await screen.findByRole('button', { name: `Re-synthesize ${title}` }))
-    // No banner appears; no synth calls.
-    expect(screen.queryByText(/Synthesizing/i)).toBeNull()
-    expect(ttsSynthMock).not.toHaveBeenCalled()
   })
 
   it('shows the running banner with progress while synthesizing', async () => {
     await seedSettings('standard')
     const { title } = await seedBookForResynth()
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     // Gate each synth so we can observe the running banner between calls.
     const gates: Array<() => void> = []
     ttsSynthMock.mockReset()
@@ -594,7 +597,8 @@ describe('Library — per-book re-synthesize', () => {
     )
     await renderReady('/library')
 
-    fireEvent.click(await screen.findByRole('button', { name: `Re-synthesize ${title}` }))
+    await openBookMenu(title)
+    fireEvent.click(await screen.findByRole('button', { name: `Synthesize ${title}` }))
     // The global banner shows the initial synthesizing state immediately
     // (manager sets done=0 before the first synth resolves).
     expect(await screen.findByText(/Synthesizing/)).toBeInTheDocument()
@@ -613,12 +617,12 @@ describe('Library — per-book re-synthesize', () => {
   it('shows an error banner when synthesis fails', async () => {
     await seedSettings('standard')
     const { title } = await seedBookForResynth()
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     ttsSynthMock.mockReset()
     ttsSynthMock.mockRejectedValue(new Error('worker exploded'))
     await renderReady('/library')
 
-    fireEvent.click(await screen.findByRole('button', { name: `Re-synthesize ${title}` }))
+    await openBookMenu(title)
+    fireEvent.click(await screen.findByRole('button', { name: `Synthesize ${title}` }))
     expect(await screen.findByText(/Synthesis failed for/i)).toBeInTheDocument()
   })
 })

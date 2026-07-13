@@ -3,7 +3,7 @@ import { Link } from 'react-router'
 
 export function NotFound() {
   return (
-    <div className="space-y-4 text-center">
+    <div className="mx-auto max-w-3xl space-y-4 text-center">
       <Compass className="mx-auto h-10 w-10 text-muted" />
       <h1 className="text-6xl font-bold text-accent">404</h1>
       <p className="text-muted">This page wandered off the trail.</p>

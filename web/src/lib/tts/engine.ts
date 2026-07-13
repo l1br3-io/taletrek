@@ -44,6 +44,11 @@ export class PiperEngine implements TtsEngine {
     await piper.remove(voiceId)
   }
 
+  async clearAllStored(): Promise<void> {
+    const stored = await piper.stored()
+    await Promise.all(stored.map((id) => piper.remove(id as VoiceId)))
+  }
+
   async synthesize(req: SynthesisRequest): Promise<SynthesisResult> {
     // M8: content-addressed cache check first. A hit returns the stored WAV
     // without running Piper inference — resume-after-reload is near-instant.

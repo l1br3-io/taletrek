@@ -12,7 +12,7 @@ const features = [
 
 export function Landing() {
   return (
-    <div className="space-y-8">
+    <div className="mx-auto max-w-3xl space-y-8">
       <section className="space-y-4">
         <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
           Every story is a <span className="text-accent">journey</span>.

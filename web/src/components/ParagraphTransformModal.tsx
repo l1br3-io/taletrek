@@ -84,7 +84,7 @@ export function ParagraphTransformModal({
         </header>
 
         {error && (
-          <p role="alert" className="rounded-md border border-red-500/50 p-2 text-xs text-red-400">
+          <p role="alert" className="rounded-md border border-danger/50 p-2 text-xs text-danger">
             {error}
           </p>
         )}

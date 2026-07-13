@@ -1,5 +1,5 @@
-import type { AudioCacheRecord, BookId, VoiceId } from '../types'
-import { getAudioCacheEntry, putAudioCacheEntry } from './db'
+import type { AudioCacheRecord, BookId, Chapter, VoiceId } from '../types'
+import { getAudioCacheEntry, getAudioCacheKeysByBook, putAudioCacheEntry } from './db'
 import { NORM_VERSION, normalizeForSpeech } from './tts/normalize'
 
 /**
@@ -70,6 +70,34 @@ async function sha256Hex(text: string): Promise<string> {
   const data = new TextEncoder().encode(text)
   const digest = await crypto.subtle.digest('SHA-256', data)
   return bufferToHex(digest)
+}
+
+/**
+ * Compute the set of positional paragraph IDs (`${chapterId}:${index}`) that
+ * are currently cached for a given book + voice. Uses a single bulk IDB query
+ * (`getAudioCacheKeysByBook`) then checks each paragraph's computed key against
+ * the result set — no per-paragraph IDB round-trips.
+ *
+ * Pass **cleaned** chapters so the key derivation matches what the engine
+ * produces at synth time.
+ */
+export async function getCachedParagraphIds(
+  bookId: BookId,
+  voiceId: VoiceId,
+  chapters: Chapter[],
+): Promise<Set<string>> {
+  const cachedKeys = new Set(await getAudioCacheKeysByBook(bookId))
+  const result = new Set<string>()
+  for (const ch of chapters) {
+    for (const [i, text] of ch.paragraphs.entries()) {
+      if (!text.trim()) continue
+      const key = await audioCacheKey(voiceId, text)
+      if (cachedKeys.has(key)) {
+        result.add(`${ch.id}:${i}`)
+      }
+    }
+  }
+  return result
 }
 
 function bufferToHex(buffer: ArrayBuffer): string {

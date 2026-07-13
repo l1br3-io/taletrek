@@ -40,14 +40,14 @@ export function GlobalUploadBanner() {
     return (
       <div
         role="alert"
-        className="flex items-center justify-between gap-3 border-b border-red-500/40 bg-red-500/10 px-4 py-3 text-red-400 sm:px-5"
+        className="flex items-center justify-between gap-3 border-b border-danger/40 bg-danger/10 px-4 py-3 text-danger sm:px-5"
       >
         <span className="text-sm">Synthesis failed for “{state.book.title}”.</span>
         <button
           type="button"
           onClick={() => uploadManager.dismiss()}
           aria-label="Dismiss error"
-          className="text-xs text-red-400/70 hover:text-red-400"
+          className="text-xs text-danger/70 hover:text-danger"
         >
           <X className="h-4 w-4" />
         </button>

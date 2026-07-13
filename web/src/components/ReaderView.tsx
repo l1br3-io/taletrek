@@ -13,10 +13,17 @@ interface ReaderViewProps {
    * container can scroll it into view. Re-attached as the active paragraph moves.
    */
   activeParagraphRef?: RefObject<HTMLParagraphElement | null>
-  /** Paragraph id to briefly pulse-highlight (e.g. after Outline navigation). */
+  /** Paragraph id to mark as the navigation target (e.g. after Outline nav). */
   pulseParagraphId?: string | null
-  /** Invoked when the pulse animation finishes. */
+  /** Invoked when the target animation finishes. */
   onPulseEnd?: () => void
+  /**
+   * Set of positional paragraph IDs (`${chapterId}:${index}`) that are cached.
+   * A subtle faded dot is rendered before each cached paragraph; uncached
+   * paragraphs show nothing. Passed both during active synth (live job
+   * progress) and during normal reading (persistent cache probe).
+   */
+  bufferedParagraphIds?: Set<string>
 }
 
 interface ParagraphItem {
@@ -36,6 +43,7 @@ export function ReaderView({
   activeParagraphRef,
   pulseParagraphId,
   onPulseEnd,
+  bufferedParagraphIds,
 }: ReaderViewProps) {
   const multi = chapters.length > 1
   return (
@@ -54,6 +62,7 @@ export function ReaderView({
               const active = item.id === currentParagraphId
               const seekable = !!onSeekParagraph
               const pulsing = item.id === pulseParagraphId
+              const isBuffered = bufferedParagraphIds?.has(item.id) ?? false
               const seekProps = seekable
                 ? {
                     role: 'button' as const,
@@ -77,13 +86,19 @@ export function ReaderView({
                       : seekable
                         ? 'cursor-pointer'
                         : '',
-                    pulsing ? 'tt-nav-pulse' : '',
+                    pulsing ? 'tt-nav-target' : '',
                   ]
                     .join(' ')
                     .trim()}
                   onAnimationEnd={pulsing ? onPulseEnd : undefined}
                   {...seekProps}
                 >
+                  {isBuffered && (
+                    <span
+                      className="mr-1.5 inline-block h-1 w-1 shrink-0 rounded-full bg-accent/30 align-middle"
+                      aria-hidden
+                    />
+                  )}
                   {item.text}
                 </p>
               )
