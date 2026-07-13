@@ -95,14 +95,14 @@ export function PlayerBar({
 
   return (
     <section
-      className="sticky bottom-0 flex items-center gap-2 rounded-lg border border-line bg-surface p-2 shadow-lg sm:gap-3 sm:p-3"
+      className="sticky bottom-0 flex items-center gap-2 border border-line bg-surface p-2 shadow-lg sm:gap-3 sm:p-3"
       aria-label="Audio playback"
     >
       <button
         type="button"
         onClick={onPrev}
         disabled={busy}
-        className="rounded border border-line px-2 py-1 disabled:opacity-40"
+        className="border border-line px-2 py-1 disabled:opacity-40"
         aria-label="Previous paragraph"
       >
         <SkipBack className="h-5 w-5" />
@@ -111,7 +111,7 @@ export function PlayerBar({
         <button
           type="button"
           onClick={onPause}
-          className="inline-flex items-center justify-center gap-1 rounded border border-accent bg-accent px-4 py-1 text-bg"
+          className="inline-flex items-center justify-center gap-1 border border-accent bg-accent px-4 py-1 text-bg"
           aria-label="Pause"
         >
           <Pause className="h-4 w-4" /> <span className="hidden sm:inline">Pause</span>
@@ -121,7 +121,7 @@ export function PlayerBar({
           type="button"
           onClick={onPlay}
           disabled={busy}
-          className="inline-flex items-center justify-center gap-1 rounded border border-accent bg-accent px-4 py-1 text-bg disabled:opacity-40"
+          className="inline-flex items-center justify-center gap-1 border border-accent bg-accent px-4 py-1 text-bg disabled:opacity-40"
           aria-label="Play"
         >
           <Play className="h-4 w-4" /> <span className="hidden sm:inline">Play</span>
@@ -131,7 +131,7 @@ export function PlayerBar({
         type="button"
         onClick={onNext}
         disabled={busy}
-        className="rounded border border-line px-2 py-1 disabled:opacity-40"
+        className="border border-line px-2 py-1 disabled:opacity-40"
         aria-label="Next paragraph"
       >
         <SkipForward className="h-5 w-5" />
@@ -142,13 +142,13 @@ export function PlayerBar({
       {hasOverflow && (
         <Menu
           placement="top-end"
-          panelClassName="w-56 rounded-lg border border-line bg-surface p-2 shadow-xl"
+          panelClassName="w-56 border border-line bg-surface p-2 shadow-xl"
           trigger={(props) => (
             <button
               type="button"
               {...props}
               aria-label="More playback controls"
-              className="rounded border border-line px-2 py-1 text-muted hover:text-fg"
+              className="border border-line px-2 py-1 text-muted hover:text-fg"
             >
               <MoreHorizontal className="h-5 w-5" />
             </button>
@@ -166,7 +166,7 @@ export function PlayerBar({
                         close()
                       }}
                       disabled={busy}
-                      className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                      className="flex flex-1 items-center justify-center gap-1 border border-line px-2 py-1 text-sm disabled:opacity-40"
                     >
                       <ChevronsLeft className="h-4 w-4" /> Prev chapter
                     </button>
@@ -179,7 +179,7 @@ export function PlayerBar({
                         close()
                       }}
                       disabled={busy}
-                      className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                      className="flex flex-1 items-center justify-center gap-1 border border-line px-2 py-1 text-sm disabled:opacity-40"
                     >
                       Next chapter <ChevronsRight className="h-4 w-4" />
                     </button>
@@ -192,16 +192,16 @@ export function PlayerBar({
                   onStop()
                   close()
                 }}
-                className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
+                className="mt-1 flex w-full items-center gap-2 border border-line px-2 py-1 text-sm"
               >
                 <Square className="h-4 w-4" /> Stop
               </button>
-              <label className="mt-1 flex items-center justify-between gap-2 rounded px-1 py-1 text-sm text-muted">
+              <label className="mt-1 flex items-center justify-between gap-2 px-1 py-1 text-sm text-muted">
                 Speed
                 <select
                   value={playbackRate}
                   onChange={(e) => onRateChange(Number(e.target.value))}
-                  className="rounded border border-line bg-surface px-2 py-1"
+                  className="border border-line bg-surface px-2 py-1"
                 >
                   {RATES.map((r) => (
                     <option key={r} value={r}>
@@ -218,7 +218,7 @@ export function PlayerBar({
                     close()
                   }}
                   disabled={!hasCurrentParagraph}
-                  className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                  className="mt-1 flex w-full items-center gap-2 border border-line px-2 py-1 text-sm disabled:opacity-40"
                 >
                   <Locate className="h-4 w-4" /> Go to current paragraph
                 </button>
@@ -230,7 +230,7 @@ export function PlayerBar({
                     onScrollToTop()
                     close()
                   }}
-                  className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
+                  className="mt-1 flex w-full items-center gap-2 border border-line px-2 py-1 text-sm"
                 >
                   <ArrowUp className="h-4 w-4" /> Back to top
                 </button>
@@ -242,7 +242,7 @@ export function PlayerBar({
                     onOpenOutline()
                     close()
                   }}
-                  className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
+                  className="mt-1 flex w-full items-center gap-2 border border-line px-2 py-1 text-sm"
                 >
                   <List className="h-4 w-4" /> Outline
                 </button>
@@ -255,7 +255,7 @@ export function PlayerBar({
                     close()
                   }}
                   disabled={!hasCurrentParagraph}
-                  className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                  className="mt-1 flex w-full items-center gap-2 border border-line px-2 py-1 text-sm disabled:opacity-40"
                 >
                   <Wand2 className="h-4 w-4" /> Transform paragraph
                 </button>

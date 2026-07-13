@@ -139,7 +139,12 @@ export function Settings() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <h1 className="text-2xl font-semibold">Settings</h1>
+      <h1 className="flex items-center gap-2 text-xl font-semibold">
+        <span className="text-accent" aria-hidden>
+          ❯
+        </span>
+        Settings
+      </h1>
 
       <InstallPrompt />
 
@@ -154,7 +159,7 @@ export function Settings() {
                 onClick={() => setTheme(t.value)}
                 aria-pressed={theme === t.value}
                 className={[
-                  'rounded-lg border p-4 text-left transition-colors',
+                  'border p-4 text-left transition-colors',
                   theme === t.value
                     ? 'border-accent bg-elevated'
                     : 'border-line hover:border-muted',
@@ -182,7 +187,7 @@ export function Settings() {
             className="w-full accent-accent"
             aria-label="Reader text size"
           />
-          <p className="tt-reader-text rounded-md bg-bg p-3 text-fg">
+          <p className="tt-reader-text border border-line bg-bg p-3 text-fg">
             The first sentence of your book will appear like this.
           </p>
         </section>
@@ -256,7 +261,7 @@ export function Settings() {
                 onClick={() => setSynthMode(m.value)}
                 aria-pressed={synthMode === m.value}
                 className={[
-                  'rounded-lg border p-4 text-left transition-colors',
+                  'border p-4 text-left transition-colors',
                   synthMode === m.value
                     ? 'border-accent bg-elevated'
                     : 'border-line hover:border-muted',
@@ -268,7 +273,7 @@ export function Settings() {
             ))}
           </div>
           {synthMode === 'no-limit' && (
-            <p className="rounded-md border border-warning/40 bg-warning/10 p-3 text-xs text-warning">
+            <p className="border border-warning/40 bg-warning/10 p-3 text-xs text-warning">
               No-limit mode keeps every synthesized paragraph until the browser&apos;s storage quota
               is hit. On low-space devices this can trigger panics that evict half the cache at
               once. Use Standard if you&apos;re unsure.
@@ -330,7 +335,7 @@ export function Settings() {
               aria-pressed={cleaning.enabled}
               aria-label="Toggle text cleaning"
               className={[
-                'rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors',
+                'border px-3 py-1.5 text-sm font-medium transition-colors',
                 cleaning.enabled
                   ? 'border-accent bg-accent-soft text-accent'
                   : 'border-line text-muted',
@@ -356,7 +361,7 @@ export function Settings() {
                   }
                   aria-pressed={cleaning.filters[f.key]}
                   className={[
-                    'flex w-full items-center justify-between rounded-lg border p-3 text-left transition-colors',
+                    'flex w-full items-center justify-between border p-3 text-left transition-colors',
                     cleaning.filters[f.key]
                       ? 'border-accent bg-elevated'
                       : 'border-line hover:border-muted',
@@ -387,8 +392,11 @@ export function Settings() {
 
       <BackupSection onImported={() => void reloadSettings()} />
 
-      <section className="space-y-3 rounded-xl border border-danger/40 bg-surface p-5">
-        <h2 className="text-base font-semibold text-fg">Danger zone</h2>
+      <section className="space-y-3 border border-danger/40 bg-surface p-5">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.15em] text-danger">
+          <span aria-hidden>❯</span>
+          Danger zone
+        </h2>
         <p className="text-xs text-muted">
           Permanently delete every book, voice model, cached audio, and setting from this device.
           There is no undo — export a backup first if you want to keep anything.
@@ -396,7 +404,7 @@ export function Settings() {
         <button
           type="button"
           onClick={() => setDeleteDialogOpen(true)}
-          className="inline-flex items-center gap-2 rounded-lg border border-danger px-4 py-2 text-sm font-medium text-danger transition-colors hover:bg-danger hover:text-white"
+          className="inline-flex items-center gap-2 border border-danger px-4 py-2 text-sm font-medium text-danger transition-colors hover:bg-danger hover:text-white"
         >
           <Trash2 className="h-4 w-4" /> Delete all data
         </button>
@@ -418,8 +426,13 @@ export function Settings() {
 
 function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="space-y-5 rounded-xl border border-line bg-surface p-5">
-      <h2 className="text-base font-semibold text-fg">{title}</h2>
+    <section className="space-y-5 border border-line bg-surface p-5">
+      <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.15em] text-fg">
+        <span className="text-accent" aria-hidden>
+          ❯
+        </span>
+        {title}
+      </h2>
       {children}
     </section>
   )
@@ -453,7 +466,7 @@ function PronunciationEditor({
               onChange={(e) => update(entry.id, { find: e.target.value })}
               placeholder="word"
               aria-label="word to replace"
-              className="w-1/3 rounded-md border border-line bg-surface px-3 py-1.5 text-sm"
+              className="w-1/3 border border-line bg-surface px-3 py-1.5 text-sm"
             />
             <ArrowRight className="h-4 w-4 shrink-0 text-muted" />
             <input
@@ -462,13 +475,13 @@ function PronunciationEditor({
               onChange={(e) => update(entry.id, { replace: e.target.value })}
               placeholder="replacement"
               aria-label="replacement"
-              className="flex-1 rounded-md border border-line bg-surface px-3 py-1.5 text-sm"
+              className="flex-1 border border-line bg-surface px-3 py-1.5 text-sm"
             />
             <button
               type="button"
               onClick={() => remove(entry.id)}
               aria-label={`remove ${entry.find || 'entry'}`}
-              className="rounded-md border border-line px-2.5 py-1.5 text-sm text-muted transition-colors hover:border-danger hover:text-danger"
+              className="border border-line px-2.5 py-1.5 text-sm text-muted transition-colors hover:border-danger hover:text-danger"
             >
               <X className="h-4 w-4" />
             </button>
@@ -478,7 +491,7 @@ function PronunciationEditor({
       <button
         type="button"
         onClick={add}
-        className="rounded-lg border border-dashed border-line px-3 py-2 text-sm text-muted transition-colors hover:border-accent hover:text-accent"
+        className="border border-dashed border-line px-3 py-2 text-sm text-muted transition-colors hover:border-accent hover:text-accent"
       >
         + Add word
       </button>
@@ -553,8 +566,13 @@ function BackupSection({ onImported }: { onImported: () => void }) {
   }
 
   return (
-    <section className="space-y-5 rounded-xl border border-line bg-surface p-5">
-      <h2 className="text-base font-semibold text-fg">Backup &amp; transfer</h2>
+    <section className="space-y-5 border border-line bg-surface p-5">
+      <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.15em] text-fg">
+        <span className="text-accent" aria-hidden>
+          ❯
+        </span>
+        Backup &amp; transfer
+      </h2>
       <p className="text-xs text-muted">
         Export your library and settings to a file, then import it on another device to pick up
         where you left off. Books already on the target device are kept as-is. Audio cache
@@ -565,11 +583,11 @@ function BackupSection({ onImported }: { onImported: () => void }) {
           type="button"
           onClick={() => void handleExport()}
           disabled={status.type === 'busy'}
-          className="inline-flex items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm font-medium transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+          className="inline-flex items-center gap-2 border border-line px-4 py-2 text-sm font-medium transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
         >
           <Download className="h-4 w-4" /> Export backup
         </button>
-        <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm font-medium transition-colors hover:border-accent hover:text-accent">
+        <label className="inline-flex cursor-pointer items-center gap-2 border border-line px-4 py-2 text-sm font-medium transition-colors hover:border-accent hover:text-accent">
           <Upload className="h-4 w-4" /> Import backup
           <input
             type="file"

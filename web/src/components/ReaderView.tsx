@@ -49,14 +49,19 @@ export function ReaderView({
   return (
     <article className="space-y-6 sm:space-y-8">
       <header className="space-y-1">
-        <h1 className="text-2xl font-bold sm:text-3xl">{book.title}</h1>
-        <p className="text-sm uppercase tracking-wide text-muted">
+        <h1 className="flex items-center gap-2 text-2xl font-bold sm:text-3xl">
+          <span className="text-accent" aria-hidden>
+            ❯
+          </span>
+          {book.title}
+        </h1>
+        <p className="text-xs text-muted">
           {book.format} · {chapters.length} chapter{multi ? 's' : ''}
         </p>
       </header>
       {chapters.map((chapter) => (
         <section key={chapter.id} className="space-y-4">
-          {multi && <h2 className="text-lg font-semibold text-fg">{chapter.title}</h2>}
+          {multi && <h2 className="text-base font-semibold text-fg">{chapter.title}</h2>}
           <div className="tt-reader-text space-y-4 text-fg">
             {paragraphItems(chapter.paragraphs, chapter.id).map((item) => {
               const active = item.id === currentParagraphId
@@ -82,7 +87,7 @@ export function ReaderView({
                   ref={active && activeParagraphRef ? activeParagraphRef : undefined}
                   className={[
                     active
-                      ? 'rounded bg-accent-soft p-2 -mx-2 ring-1 ring-accent'
+                      ? 'bg-accent-soft p-2 -mx-2 ring-1 ring-accent'
                       : seekable
                         ? 'cursor-pointer'
                         : '',

@@ -406,7 +406,7 @@ function ReaderPane({
         <button
           type="button"
           onClick={scrollToCurrent}
-          className="fixed bottom-24 right-4 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-line bg-accent text-bg shadow-lg"
+          className="fixed bottom-24 right-4 z-30 flex h-11 w-11 items-center justify-center border border-accent bg-accent text-bg shadow-lg"
           aria-label="Go to current paragraph"
         >
           <Locate className="h-5 w-5" />

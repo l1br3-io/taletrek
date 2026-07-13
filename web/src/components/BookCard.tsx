@@ -1,6 +1,5 @@
 import { AudioLines, List, MoreVertical, Pencil, SpellCheck, Trash2 } from 'lucide-react'
 import type { Book, BookId } from '../types'
-import { BookCover } from './BookCover'
 import { Menu } from './Menu'
 
 const DAY = 86_400_000
@@ -31,8 +30,6 @@ interface BookCardProps {
   onOutline?: (id: BookId) => void
   /** When provided (synth mode enabled), shows a "Synthesize" action on the card. */
   onResynthesize?: (id: BookId) => void
-  /** Layout: vertical cover card (grid, default) or horizontal row (list). */
-  variant?: 'grid' | 'list'
 }
 
 export function BookCard({
@@ -43,7 +40,6 @@ export function BookCard({
   onPronunciation,
   onOutline,
   onResynthesize,
-  variant = 'grid',
 }: BookCardProps) {
   const pct = Math.round((book.progressFraction ?? 0) * 100)
   const showOutline = onOutline && book.format !== 'epub'
@@ -51,13 +47,13 @@ export function BookCard({
   const actionsMenu = (
     <Menu
       placement="bottom-end"
-      panelClassName="w-48 rounded-lg border border-line bg-surface p-1 shadow-xl"
+      panelClassName="w-48 border border-line bg-surface p-1 shadow-xl"
       trigger={(props) => (
         <button
           type="button"
           {...props}
           aria-label={`More actions for ${book.title}`}
-          className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-muted transition-colors hover:text-fg"
+          className="inline-flex items-center gap-1 px-1.5 py-1 text-muted transition-colors hover:text-fg"
         >
           <MoreVertical className="h-4 w-4" />
         </button>
@@ -72,7 +68,7 @@ export function BookCard({
                 onResynthesize(book.id)
                 close()
               }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
+              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
               aria-label={`Synthesize ${book.title}`}
             >
               <AudioLines className="h-4 w-4" /> Synthesize
@@ -85,7 +81,7 @@ export function BookCard({
                 onOutline?.(book.id)
                 close()
               }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
+              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
               aria-label={`Generate outline for ${book.title}`}
             >
               <List className="h-4 w-4" /> Outline
@@ -98,7 +94,7 @@ export function BookCard({
                 onEdit(book.id)
                 close()
               }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
+              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
               aria-label={`Edit ${book.title}`}
             >
               <Pencil className="h-4 w-4" /> Edit
@@ -111,7 +107,7 @@ export function BookCard({
                 onPronunciation(book.id)
                 close()
               }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
+              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
               aria-label={`Review pronunciation for ${book.title}`}
             >
               <SpellCheck className="h-4 w-4" /> Hints
@@ -124,7 +120,7 @@ export function BookCard({
               onDelete(book.id)
               close()
             }}
-            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-danger transition-colors hover:bg-danger/10"
+            className="flex w-full items-center gap-2 px-2 py-1.5 text-sm text-danger transition-colors hover:bg-danger/10"
             aria-label={`Delete ${book.title}`}
           >
             <Trash2 className="h-4 w-4" /> Delete
@@ -134,70 +130,44 @@ export function BookCard({
     </Menu>
   )
 
-  if (variant === 'list') {
-    return (
-      <li className="flex items-center gap-3 rounded-lg border border-line bg-surface p-3">
+  return (
+    <li className="group border-b border-line last:border-b-0">
+      <div className="flex items-center">
         <button
           type="button"
           onClick={() => onOpen(book.id)}
-          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          className="flex min-w-0 flex-1 items-center gap-3 py-3 text-left"
           aria-label={`Open ${book.title}`}
         >
-          <div className="w-16 shrink-0">
-            <BookCover title={book.title} className="w-full" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="tt-line-clamp-2 line-clamp-2 font-medium text-fg">{book.title}</div>
-            <div className="mt-1 flex items-center gap-2 text-xs text-muted">
-              <span className="uppercase tracking-wide">{book.format}</span>
-              <span aria-hidden>·</span>
-              <span>{formatRelativeTime(book.updatedAt)}</span>
+          <span
+            className="text-accent opacity-0 transition-opacity group-hover:opacity-100"
+            aria-hidden
+          >
+            ❯
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium text-fg">{book.title}</span>
+            <span className="mt-0.5 flex items-center gap-2 text-xs text-muted">
+              <span>{book.format}</span>
               <span aria-hidden>·</span>
               <span>{pct}%</span>
-            </div>
-            <div
-              className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-elevated"
-              role="progressbar"
-              aria-valuenow={pct}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-label={`${pct}% read`}
-            >
-              <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
-            </div>
-          </div>
+              <span aria-hidden>·</span>
+              <span>{formatRelativeTime(book.updatedAt)}</span>
+            </span>
+          </span>
         </button>
-        <div className="shrink-0 self-center">{actionsMenu}</div>
-      </li>
-    )
-  }
-
-  return (
-    <li className="flex flex-col">
-      <button
-        type="button"
-        onClick={() => onOpen(book.id)}
-        className="group text-left"
-        aria-label={`Open ${book.title}`}
-      >
-        <BookCover title={book.title} className="transition-transform group-hover:scale-[1.02]" />
-        <div className="tt-line-clamp-2 mt-2 line-clamp-2 font-medium text-fg">{book.title}</div>
-      </button>
-      <div className="mt-1 flex items-center justify-between text-xs text-muted">
-        <span className="uppercase tracking-wide">{book.format}</span>
-        <span>{formatRelativeTime(book.updatedAt)}</span>
+        <div className="flex items-center pr-1">{actionsMenu}</div>
       </div>
       <div
-        className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-elevated"
+        className="h-px w-full bg-line"
         role="progressbar"
         aria-valuenow={pct}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label={`${pct}% read`}
       >
-        <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+        <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
       </div>
-      <div className="mt-2 flex justify-end">{actionsMenu}</div>
     </li>
   )
 }

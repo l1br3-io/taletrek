@@ -15,9 +15,9 @@ function Spinner() {
 function ProgressBar({ fraction }: { fraction: number }) {
   const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100)
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-accent/20">
+    <div className="h-2 w-full bg-accent/20">
       <div
-        className="h-full rounded-full bg-accent transition-[width] duration-300"
+        className="h-full bg-accent transition-[width] duration-300"
         style={{ width: `${pct}%` }}
       />
     </div>
@@ -63,7 +63,7 @@ export function GlobalUploadBanner() {
           <button
             type="button"
             onClick={() => navigate(`/reader/${state.book.id}`)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-accent px-3 py-1.5 text-xs font-medium transition-colors hover:bg-elevated"
+            className="inline-flex items-center gap-1.5 border border-accent px-3 py-1.5 text-xs font-medium transition-colors hover:bg-elevated"
           >
             <BookOpen className="h-3.5 w-3.5" />
             Open
@@ -104,7 +104,7 @@ export function GlobalUploadBanner() {
           <button
             type="button"
             onClick={() => navigate(`/reader/${state.book.id}`)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-accent px-3 py-1.5 text-xs font-medium transition-colors hover:bg-elevated"
+            className="inline-flex items-center gap-1.5 border border-accent px-3 py-1.5 text-xs font-medium transition-colors hover:bg-elevated"
           >
             <BookOpen className="h-3.5 w-3.5" />
             Open

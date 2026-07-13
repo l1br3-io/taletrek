@@ -1,4 +1,3 @@
-import { useMediaQuery } from '../hooks/useMediaQuery'
 import type { Book, BookId } from '../types'
 import { BookCard } from './BookCard'
 
@@ -25,44 +24,25 @@ export function LibraryList({
   onOutline,
   onResynthesize,
 }: LibraryListProps) {
-  // Single-column horizontal list on phones; multi-column cover grid from sm up.
-  const isGrid = useMediaQuery('(min-width: 640px)')
-
   if (books.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-line bg-surface p-10 text-center">
-        <p className="text-muted">Your library is empty. Upload a book to start reading.</p>
+      <div className="border border-dashed border-line bg-surface p-10 text-center">
+        <p className="text-muted">
+          <span className="text-accent" aria-hidden>
+            ❯
+          </span>{' '}
+          Your library is empty. Upload a book to start reading.
+        </p>
       </div>
     )
   }
 
-  if (!isGrid) {
-    return (
-      <ul className="flex flex-col gap-3">
-        {books.map((book) => (
-          <BookCard
-            key={book.id}
-            book={book}
-            variant="list"
-            onOpen={onOpen}
-            onDelete={onDelete}
-            onEdit={onEdit}
-            onPronunciation={onPronunciation}
-            onOutline={onOutline}
-            onResynthesize={onResynthesize}
-          />
-        ))}
-      </ul>
-    )
-  }
-
   return (
-    <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+    <ul className="border border-line bg-surface px-4">
       {books.map((book) => (
         <BookCard
           key={book.id}
           book={book}
-          variant="grid"
           onOpen={onOpen}
           onDelete={onDelete}
           onEdit={onEdit}

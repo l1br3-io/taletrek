@@ -1,12 +1,3 @@
-const COVER_GRADIENTS = [
-  'from-emerald-500/30 to-emerald-900/50',
-  'from-sky-500/30 to-sky-900/50',
-  'from-amber-500/30 to-amber-900/50',
-  'from-violet-500/30 to-violet-900/50',
-  'from-rose-500/30 to-rose-900/50',
-  'from-teal-500/30 to-teal-900/50',
-] as const
-
 function hashString(str: string): number {
   let h = 0
   for (let i = 0; i < str.length; i++) {
@@ -29,26 +20,36 @@ export function coverInitials(title: string): string {
   return (a + b).toUpperCase() || '?'
 }
 
+/**
+ * Deterministic accent tint index (0–3) from the title hash. Each maps to a
+ * fixed opacity of the accent color so covers vary subtly but stay within
+ * the palette.
+ */
+const TINTS = [
+  'bg-elevated text-accent',
+  'bg-elevated text-accent',
+  'bg-accent-soft text-accent',
+  'bg-elevated text-fg',
+] as const
+
 interface BookCoverProps {
   title: string
   className?: string
 }
 
-/** Generated typography cover — initials on a deterministic gradient (no art). */
+/** Generated typography cover — monospace initials on a solid field (no art). */
 export function BookCover({ title, className }: BookCoverProps) {
-  const gradient = COVER_GRADIENTS[hashString(title) % COVER_GRADIENTS.length]
+  const tint = TINTS[hashString(title) % TINTS.length]
   return (
     <div
       aria-hidden
       className={[
-        'flex aspect-[3/4] items-center justify-center rounded-lg bg-gradient-to-br',
-        gradient,
+        'flex aspect-[3/4] items-center justify-center border border-line',
+        tint,
         className ?? '',
       ].join(' ')}
     >
-      <span className="text-3xl font-bold tracking-tight text-fg/90 drop-shadow-sm">
-        {coverInitials(title)}
-      </span>
+      <span className="text-2xl font-bold tracking-tight">{coverInitials(title)}</span>
     </div>
   )
 }
