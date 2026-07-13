@@ -283,14 +283,19 @@ export function Library() {
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Library</h1>
+        <h1 className="flex items-center gap-2 text-xl font-semibold">
+          <span className="text-accent" aria-hidden>
+            ❯
+          </span>
+          Library
+        </h1>
         <UploadButton onSelect={handleSelect} disabled={uploadBusy} />
       </div>
 
       {parseState.type === 'parsing' && (
         <div
           role="status"
-          className="flex items-center gap-3 rounded-lg border border-accent bg-accent-soft p-4 text-accent"
+          className="flex items-center gap-3 border border-accent bg-accent-soft p-4 text-accent"
         >
           <span
             className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
@@ -302,7 +307,7 @@ export function Library() {
       {parseState.type === 'error' && (
         <div
           role="alert"
-          className="flex items-center justify-between rounded-lg border border-danger bg-danger/10 p-4 text-danger"
+          className="flex items-center justify-between border border-danger bg-danger/10 p-4 text-danger"
         >
           <span className="text-sm">{parseState.message}</span>
           <button
@@ -317,17 +322,14 @@ export function Library() {
       )}
 
       {outline.state.type === 'running' && (
-        <div
-          role="status"
-          className="rounded-lg border border-accent bg-accent-soft p-4 text-accent"
-        >
+        <div role="status" className="border border-accent bg-accent-soft p-4 text-accent">
           Generating outline…
         </div>
       )}
       {outline.state.type === 'done' && (
         <div
           role="status"
-          className="flex items-center justify-between rounded-lg border border-accent bg-accent-soft p-4 text-accent"
+          className="flex items-center justify-between border border-accent bg-accent-soft p-4 text-accent"
         >
           <span>{outline.state.message}</span>
           <button
@@ -343,7 +345,7 @@ export function Library() {
       {outline.state.type === 'error' && (
         <div
           role="alert"
-          className="flex items-center justify-between rounded-lg border border-danger bg-danger/10 p-4 text-danger"
+          className="flex items-center justify-between border border-danger bg-danger/10 p-4 text-danger"
         >
           <span>{outline.state.message}</span>
           <button

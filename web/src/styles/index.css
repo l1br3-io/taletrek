@@ -5,6 +5,10 @@
  * SettingsProvider overrides per theme (dark default, sepia alt). Tailwind
  * generates utilities from the --color-* names: bg-bg, bg-surface, bg-elevated,
  * text-fg, text-muted, text-accent, border-line, etc.
+ *
+ * Design direction: "Terminal reader" — warm phosphor ink on dark, or
+ * green-on-paper for sepia. Monospace chrome (JetBrains Mono) frames the
+ * serif body (Iowan Old Style). The ❯ prompt is the signature motif.
  */
 @theme {
   --color-bg: var(--tt-bg);
@@ -19,37 +23,38 @@
   --color-success: var(--tt-success);
   --color-danger: var(--tt-danger);
   --font-reader: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
-/* Dark — default. */
+/* Dark — "Phosphor ink": warm near-black with amber phosphor accent. */
 :root {
-  --tt-bg: #0b1120;
-  --tt-surface: #111827;
-  --tt-elevated: #1f2937;
-  --tt-fg: #e5e7eb;
-  --tt-muted: #9ca3af;
-  --tt-line: #1f2937;
-  --tt-accent: #4ade80;
-  --tt-accent-soft: rgba(74, 222, 128, 0.18);
-  --tt-warning: #fde047;
-  --tt-success: #4ade80;
-  --tt-danger: #f87171;
+  --tt-bg: #0e0d0b;
+  --tt-surface: #16140f;
+  --tt-elevated: #211e16;
+  --tt-fg: #e8e4d8;
+  --tt-muted: #8a8474;
+  --tt-line: #2a2620;
+  --tt-accent: #e8a838;
+  --tt-accent-soft: rgba(232, 168, 56, 0.14);
+  --tt-warning: #e8a838;
+  --tt-success: #7a9a5a;
+  --tt-danger: #c6553e;
   --font-scale: 1;
 }
 
-/* Sepia — warm, paper-like. Darker status tones for legibility on cream. */
+/* Sepia — "Green screen paper": phosphor-green ink on tractor-feed cream. */
 :root[data-theme='sepia'] {
-  --tt-bg: #f4ecd8;
-  --tt-surface: #ece2c9;
-  --tt-elevated: #e0d4b4;
-  --tt-fg: #3d2f1f;
-  --tt-muted: #6a5538;
-  --tt-line: #ddcfac;
-  --tt-accent: #8a5a2b;
-  --tt-accent-soft: rgba(138, 90, 43, 0.16);
-  --tt-warning: #8a5a09;
-  --tt-success: #3f7d4f;
-  --tt-danger: #b03a3a;
+  --tt-bg: #f2ede0;
+  --tt-surface: #e8e1d0;
+  --tt-elevated: #ddd4be;
+  --tt-fg: #2a3328;
+  --tt-muted: #6a7560;
+  --tt-line: #c9c0a8;
+  --tt-accent: #4a7a3a;
+  --tt-accent-soft: rgba(74, 122, 58, 0.12);
+  --tt-warning: #8a6a1a;
+  --tt-success: #4a7a3a;
+  --tt-danger: #a04030;
 }
 
 html,
@@ -69,8 +74,7 @@ body {
   margin: 0;
   background-color: var(--color-bg);
   color: var(--color-fg);
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-mono);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   transition:
@@ -78,7 +82,30 @@ body {
     color 0.2s ease;
 }
 
-/* Reader text scale — used by the reader view and the settings preview. */
+/*
+ * Blinking prompt cursor — used on the landing hero. Step timing for a
+ * hardware-terminal feel. Respects reduced motion.
+ */
+@keyframes tt-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+.tt-cursor {
+  animation: tt-blink 1.1s step-end infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tt-cursor {
+    animation: none;
+  }
+}
+
+/* Reader text scale — serif body inside the mono chrome. */
 .tt-reader-text {
   font-family: var(--font-reader);
   font-size: calc(1.125rem * var(--font-scale));
@@ -88,11 +115,11 @@ body {
 
 /*
  * Outline-navigation "arrival" marker. DELIBERATELY distinct from the
- * current-paragraph highlight (a soft background fill + inset ring): this
- * draws a solid accent bar down the left edge plus a brief outer glow that
- * fades out, so "you just jumped here" reads clearly apart from "this is
- * playing now". Transient — reverts to the current-paragraph styling once it
- * ends.
+ * current-paragraph highlight (a soft background fill + accent gutter):
+ * this draws a solid accent bar down the left edge plus a brief outer glow
+ * that fades out, so "you just jumped here" reads clearly apart from "this
+ * is playing now". Transient — reverts to the current-paragraph styling
+ * once it ends.
  */
 @keyframes tt-nav-target {
   0%,
