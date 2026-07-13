@@ -1,3 +1,17 @@
+import {
+  ArrowUp,
+  ChevronsLeft,
+  ChevronsRight,
+  List,
+  Locate,
+  MoreHorizontal,
+  Pause,
+  Play,
+  SkipBack,
+  SkipForward,
+  Square,
+  Wand2,
+} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { PlaybackStatus } from '../hooks/useParagraphPlayer'
 
@@ -109,26 +123,26 @@ export function PlayerBar({
         className="rounded border border-line px-2 py-1 disabled:opacity-40"
         aria-label="Previous paragraph"
       >
-        ⏮
+        <SkipBack className="h-5 w-5" />
       </button>
       {isPlaying ? (
         <button
           type="button"
           onClick={onPause}
-          className="rounded border border-accent bg-accent px-4 py-1 text-bg"
+          className="inline-flex items-center justify-center gap-1 rounded border border-accent bg-accent px-4 py-1 text-bg"
           aria-label="Pause"
         >
-          ⏸ <span className="hidden sm:inline">Pause</span>
+          <Pause className="h-4 w-4" /> <span className="hidden sm:inline">Pause</span>
         </button>
       ) : (
         <button
           type="button"
           onClick={onPlay}
           disabled={busy}
-          className="rounded border border-accent bg-accent px-4 py-1 text-bg disabled:opacity-40"
+          className="inline-flex items-center justify-center gap-1 rounded border border-accent bg-accent px-4 py-1 text-bg disabled:opacity-40"
           aria-label="Play"
         >
-          ▶ <span className="hidden sm:inline">Play</span>
+          <Play className="h-4 w-4" /> <span className="hidden sm:inline">Play</span>
         </button>
       )}
       <button
@@ -138,7 +152,7 @@ export function PlayerBar({
         className="rounded border border-line px-2 py-1 disabled:opacity-40"
         aria-label="Next paragraph"
       >
-        ⏭
+        <SkipForward className="h-5 w-5" />
       </button>
       <span className="min-w-0 flex-1 truncate text-sm text-muted" aria-live="polite">
         {statusLabel(status, bufferedAhead)}
@@ -152,7 +166,7 @@ export function PlayerBar({
           aria-expanded={menuOpen}
           className="rounded border border-line px-2 py-1 text-muted hover:text-fg"
         >
-          ⋯
+          <MoreHorizontal className="h-5 w-5" />
         </button>
       )}
 
@@ -168,9 +182,9 @@ export function PlayerBar({
                     setMenuOpen(false)
                   }}
                   disabled={busy}
-                  className="flex-1 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                  className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
                 >
-                  « Prev chapter
+                  <ChevronsLeft className="h-4 w-4" /> Prev chapter
                 </button>
               )}
               {onNextChapter && (
@@ -181,9 +195,9 @@ export function PlayerBar({
                     setMenuOpen(false)
                   }}
                   disabled={busy}
-                  className="flex-1 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                  className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
                 >
-                  Next chapter »
+                  Next chapter <ChevronsRight className="h-4 w-4" />
                 </button>
               )}
             </div>
@@ -194,9 +208,9 @@ export function PlayerBar({
               onStop()
               setMenuOpen(false)
             }}
-            className="mt-1 block w-full rounded border border-line px-2 py-1 text-left text-sm"
+            className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
           >
-            ⏹ Stop
+            <Square className="h-4 w-4" /> Stop
           </button>
           <label className="mt-1 flex items-center justify-between gap-2 rounded px-1 py-1 text-sm text-muted">
             Speed
@@ -220,9 +234,9 @@ export function PlayerBar({
                 setMenuOpen(false)
               }}
               disabled={!hasCurrentParagraph}
-              className="mt-1 block w-full rounded border border-line px-2 py-1 text-left text-sm disabled:opacity-40"
+              className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
             >
-              ⊙ Go to current paragraph
+              <Locate className="h-4 w-4" /> Go to current paragraph
             </button>
           )}
           {onScrollToTop && (
@@ -232,9 +246,9 @@ export function PlayerBar({
                 onScrollToTop()
                 setMenuOpen(false)
               }}
-              className="mt-1 block w-full rounded border border-line px-2 py-1 text-left text-sm"
+              className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
             >
-              ↑ Back to top
+              <ArrowUp className="h-4 w-4" /> Back to top
             </button>
           )}
           {onOpenOutline && (
@@ -244,9 +258,9 @@ export function PlayerBar({
                 onOpenOutline()
                 setMenuOpen(false)
               }}
-              className="mt-1 block w-full rounded border border-line px-2 py-1 text-left text-sm"
+              className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
             >
-              ☰ Outline
+              <List className="h-4 w-4" /> Outline
             </button>
           )}
           {onTransformParagraph && (
@@ -257,9 +271,9 @@ export function PlayerBar({
                 setMenuOpen(false)
               }}
               disabled={!hasCurrentParagraph}
-              className="mt-1 block w-full rounded border border-line px-2 py-1 text-left text-sm disabled:opacity-40"
+              className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
             >
-              ✎ Transform paragraph
+              <Wand2 className="h-4 w-4" /> Transform paragraph
             </button>
           )}
         </div>

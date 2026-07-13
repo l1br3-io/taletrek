@@ -59,6 +59,7 @@ spike/piper/   throwaway Piper TTS validation app
 - IndexedDB via `idb`; OPFS for large blobs (models, audio) lands in M2/M5
 - Tests co-located (`*.test.tsx`), Vitest + Testing Library + fake-indexeddb
 - No comments unless asked; Biome handles format/import-order
+- **Icons: [`lucide-react`](https://lucide.dev) (tree-shaken ESM, `stroke="currentColor"`).** Import each icon by name (`import { Play } from 'lucide-react'`) — never import the whole lib. Decorative icons are auto-`aria-hidden`; the button's `aria-label`/visible text is the accessible name. Size via Tailwind: `h-4 w-4` inline with `text-sm`, `h-5 w-5` standalone/FAB; color flows from the button's `text-*` token (never hard-coded). The `❯~` brand mark in `Nav.tsx` stays as ASCII (not an icon).
 
 ## Critical gotchas (do not relearn these)
 

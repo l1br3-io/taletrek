@@ -1,3 +1,4 @@
+import { Eraser, FileText, GraduationCap, Languages, Replace, Sparkles, Undo2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { TransformOp } from '../lib/ai/types'
 import type { CaseMode, DeterministicOp } from '../lib/transforms/deterministic'
@@ -105,9 +106,9 @@ export function ParagraphTransformModal({
             <button
               type="button"
               onClick={() => onApplyDeterministic({ kind: 'normalize' })}
-              className="rounded-md border border-line px-2.5 py-1 text-sm transition-colors hover:border-accent hover:text-accent"
+              className="inline-flex items-center gap-1.5 rounded-md border border-line px-2.5 py-1 text-sm transition-colors hover:border-accent hover:text-accent"
             >
-              Normalize spaces & quotes
+              <Eraser className="h-3.5 w-3.5" /> Normalize spaces &amp; quotes
             </button>
           </div>
           <div className="space-y-1 rounded-md border border-line p-2">
@@ -140,9 +141,9 @@ export function ParagraphTransformModal({
                     wholeWord,
                   })
                 }
-                className="rounded-md border border-line px-2.5 py-1 text-sm transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-md border border-line px-2.5 py-1 text-sm transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
               >
-                Replace
+                <Replace className="h-3.5 w-3.5" /> Replace
               </button>
             </div>
             <label className="flex items-center gap-3 text-xs text-muted">
@@ -179,25 +180,25 @@ export function ParagraphTransformModal({
                 type="button"
                 disabled={aiBusy}
                 onClick={() => onApplyAi({ kind: 'cleanup' })}
-                className="rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
               >
-                Clean up
+                <Sparkles className="h-3.5 w-3.5" /> Clean up
               </button>
               <button
                 type="button"
                 disabled={aiBusy}
                 onClick={() => onApplyAi({ kind: 'summarize', ratio })}
-                className="rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
               >
-                Summarize
+                <FileText className="h-3.5 w-3.5" /> Summarize
               </button>
               <button
                 type="button"
                 disabled={aiBusy}
                 onClick={() => onApplyAi({ kind: 'simplify', level })}
-                className="rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
               >
-                Simplify
+                <GraduationCap className="h-3.5 w-3.5" /> Simplify
               </button>
               <div className="flex items-center gap-1 text-xs text-muted">
                 <label className="flex items-center gap-1">
@@ -220,9 +221,9 @@ export function ParagraphTransformModal({
                 type="button"
                 disabled={aiBusy}
                 onClick={() => onApplyAi({ kind: 'translate', target })}
-                className="rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
               >
-                Translate
+                <Languages className="h-3.5 w-3.5" /> Translate
               </button>
               <input
                 type="text"
@@ -254,9 +255,9 @@ export function ParagraphTransformModal({
             type="button"
             onClick={onUndo}
             disabled={!canUndo}
-            className="rounded-md border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
           >
-            Undo
+            <Undo2 className="h-4 w-4" /> Undo
           </button>
           <button
             type="button"

@@ -1,3 +1,4 @@
+import { Check, Download, Trash2 } from 'lucide-react'
 import type { Voice } from '../lib/tts/types'
 import type { VoiceId } from '../types'
 
@@ -56,16 +57,16 @@ export function VoicePicker({
             </button>
             {stored ? (
               <>
-                <span className="rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent">
-                  downloaded
+                <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent">
+                  <Check className="h-3 w-3" /> downloaded
                 </span>
                 <button
                   type="button"
                   onClick={() => onRemove(voice.id)}
                   aria-label={`remove ${voice.name}`}
-                  className="rounded border border-line px-2 py-1 text-sm transition-colors hover:border-red-500 hover:text-red-400"
+                  className="inline-flex items-center gap-1 rounded border border-line px-2 py-1 text-sm transition-colors hover:border-red-500 hover:text-red-400"
                 >
-                  remove
+                  <Trash2 className="h-3.5 w-3.5" /> remove
                 </button>
               </>
             ) : isDownloading ? (
@@ -76,9 +77,9 @@ export function VoicePicker({
               <button
                 type="button"
                 onClick={() => onDownload(voice.id)}
-                className="rounded border border-line px-2 py-1 text-sm hover:border-accent"
+                className="inline-flex items-center gap-1 rounded border border-line px-2 py-1 text-sm hover:border-accent"
               >
-                download
+                <Download className="h-3.5 w-3.5" /> download
               </button>
             )}
           </li>

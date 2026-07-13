@@ -1,4 +1,16 @@
-import { type ReactElement, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Cloud,
+  Cpu,
+  ExternalLink,
+  Pencil,
+  Plug,
+  Star,
+  Trash2,
+  XCircle,
+} from 'lucide-react'
+import { type ReactElement, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { type ConnectionTestResult, testConnection } from '../lib/ai/connection-test'
 import { parseKeyFile } from '../lib/ai/importKey'
 import { clearApiKey, getApiKey, setApiKey } from '../lib/ai/keyring'
@@ -16,11 +28,13 @@ const BACKENDS = [
     value: 'in-browser' as const,
     label: 'On-device',
     hint: 'WebGPU · offline · no key',
+    Icon: Cpu,
   },
   {
     value: 'cloud' as const,
     label: 'Cloud',
     hint: 'Your key · higher quality',
+    Icon: Cloud,
   },
 ]
 
@@ -75,7 +89,10 @@ export function AiSettingsSection({ ai, onChange }: AiSettingsSectionProps) {
                     : 'border-line hover:border-muted',
                 ].join(' ')}
               >
-                <span className="block font-medium">{b.label}</span>
+                <span className="flex items-center gap-2 font-medium">
+                  <b.Icon className="h-5 w-5" />
+                  {b.label}
+                </span>
                 <span className="block text-xs text-muted">{b.hint}</span>
               </button>
             ))}
@@ -296,6 +313,34 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
   const [testing, setTesting] = useState(false)
   const hasKey = !!getApiKey(provider.id)
 
+  const statusEl: ReactNode = !hasKey ? (
+    'Key: not set'
+  ) : testing ? (
+    'Testing…'
+  ) : testResult?.type === 'success' ? (
+    <>
+      <CheckCircle2 className="h-3.5 w-3.5" /> Connected
+    </>
+  ) : testResult?.type === 'auth-error' ? (
+    <>
+      <XCircle className="h-3.5 w-3.5" /> Invalid key
+    </>
+  ) : testResult?.type === 'model-not-found' ? (
+    <>
+      <XCircle className="h-3.5 w-3.5" /> Model not found
+    </>
+  ) : testResult?.type === 'cors' ? (
+    <>
+      <AlertTriangle className="h-3.5 w-3.5" /> Blocked by CORS
+    </>
+  ) : testResult?.type === 'error' ? (
+    <>
+      <XCircle className="h-3.5 w-3.5" /> {testResult.status}
+    </>
+  ) : (
+    'Key: ●●●●●● (untested)'
+  )
+
   const handleTest = async (): Promise<void> => {
     const key = getApiKey(provider.id)
     if (!key) return
@@ -334,7 +379,7 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
           <div className="mt-1 flex items-center gap-2">
             <span
               className={[
-                'text-xs',
+                'inline-flex items-center gap-1 text-xs',
                 testResult?.type === 'success'
                   ? 'text-green-400'
                   : testResult
@@ -342,21 +387,7 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
                     : 'text-muted',
               ].join(' ')}
             >
-              {!hasKey
-                ? 'Key: not set'
-                : testing
-                  ? 'Testing…'
-                  : testResult?.type === 'success'
-                    ? '✓ Connected'
-                    : testResult?.type === 'auth-error'
-                      ? '✗ Invalid key'
-                      : testResult?.type === 'model-not-found'
-                        ? '✗ Model not found'
-                        : testResult?.type === 'cors'
-                          ? '⚠ Blocked by CORS'
-                          : testResult?.type === 'error'
-                            ? `✗ ${testResult.status}`
-                            : 'Key: ●●●●●● (untested)'}
+              {statusEl}
             </span>
           </div>
         </div>
@@ -366,33 +397,39 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
           <button
             type="button"
             onClick={onSetActive}
-            className="rounded-md border border-line px-2.5 py-1 text-xs font-medium transition-colors hover:border-accent hover:text-accent"
+            className="inline-flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium transition-colors hover:border-accent hover:text-accent"
           >
-            Set active
+            <Star className="h-3.5 w-3.5" /> Set active
           </button>
         )}
         <button
           type="button"
           onClick={() => void handleTest()}
           disabled={!hasKey || testing}
-          className="rounded-md border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+          className="inline-flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
         >
-          {testing ? 'Testing…' : 'Test'}
+          {testing ? (
+            'Testing…'
+          ) : (
+            <>
+              <Plug className="h-3.5 w-3.5" /> Test
+            </>
+          )}
         </button>
         <button
           type="button"
           onClick={onEdit}
-          className="rounded-md border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-accent hover:text-accent"
+          className="inline-flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-accent hover:text-accent"
         >
-          Edit
+          <Pencil className="h-3.5 w-3.5" /> Edit
         </button>
         <button
           type="button"
           onClick={onRemove}
           aria-label={`Remove ${label}`}
-          className="rounded-md border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-red-500 hover:text-red-400"
+          className="inline-flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-red-500 hover:text-red-400"
         >
-          Remove
+          <Trash2 className="h-3.5 w-3.5" /> Remove
         </button>
       </div>
     </div>
@@ -426,7 +463,9 @@ function PresetPicker({ onPick, onCancel }: PresetPickerProps) {
             <span className="block text-xs text-muted">{p.description}</span>
             <span className="mt-1 block text-xs">
               {p.corsSafe ? (
-                <span className="text-green-400">CORS ✓</span>
+                <span className="inline-flex items-center gap-1 text-green-400">
+                  CORS <CheckCircle2 className="h-3.5 w-3.5" />
+                </span>
               ) : p.id === 'custom' ? (
                 <span className="text-muted">Enter URL manually</span>
               ) : (
@@ -667,9 +706,10 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
             href={preset.signupUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="block text-xs text-accent hover:underline"
+            className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
           >
-            Get a key at {preset.signupUrl.replace(/^https?:\/\//, '').replace(/\/.*$/, '')} ↗
+            Get a key at {preset.signupUrl.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}
+            <ExternalLink className="h-3 w-3" />
           </a>
         )}
         <span className="block text-xs text-muted">{preset.keyScopeHint}</span>
@@ -761,9 +801,12 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
       </div>
 
       {isFreeModel && (
-        <p className="rounded-md border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-yellow-300">
-          ⚠ Free models may use submitted text for training. Avoid sending content you wouldn't
-          share publicly. Use a paid model for sensitive books.
+        <p className="flex items-center gap-1.5 rounded-md border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-yellow-300">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            Free models may use submitted text for training. Avoid sending content you wouldn't
+            share publicly. Use a paid model for sensitive books.
+          </span>
         </p>
       )}
 
@@ -825,14 +868,34 @@ function formatContextLength(tokens: number): string {
 function TestResultPill({ result }: { result: ConnectionTestResult }): ReactElement {
   switch (result.type) {
     case 'success':
-      return <span className="text-xs font-medium text-green-400">✓ Connected</span>
+      return (
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-green-400">
+          <CheckCircle2 className="h-3.5 w-3.5" /> Connected
+        </span>
+      )
     case 'auth-error':
-      return <span className="text-xs font-medium text-red-400">✗ Invalid key</span>
+      return (
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-red-400">
+          <XCircle className="h-3.5 w-3.5" /> Invalid key
+        </span>
+      )
     case 'model-not-found':
-      return <span className="text-xs font-medium text-red-400">✗ Model not found</span>
+      return (
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-red-400">
+          <XCircle className="h-3.5 w-3.5" /> Model not found
+        </span>
+      )
     case 'cors':
-      return <span className="text-xs font-medium text-yellow-300">⚠ Blocked by CORS</span>
+      return (
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-yellow-300">
+          <AlertTriangle className="h-3.5 w-3.5" /> Blocked by CORS
+        </span>
+      )
     case 'error':
-      return <span className="text-xs font-medium text-red-400">✗ {result.status}</span>
+      return (
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-red-400">
+          <XCircle className="h-3.5 w-3.5" /> {result.status}
+        </span>
+      )
   }
 }

@@ -81,7 +81,7 @@ describe('PlayerBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Previous paragraph' }))
     fireEvent.click(screen.getByRole('button', { name: 'Next paragraph' }))
     openMenu()
-    fireEvent.click(screen.getByRole('button', { name: '⏹ Stop' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     expect(onPrev).toHaveBeenCalledOnce()
     expect(onNext).toHaveBeenCalledOnce()
     expect(onStop).toHaveBeenCalledOnce()
@@ -126,7 +126,7 @@ describe('PlayerBar', () => {
   it('calls onOpenOutline from the overflow menu', () => {
     const { onOpenOutline } = renderBar()
     openMenu()
-    fireEvent.click(screen.getByRole('button', { name: '☰ Outline' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Outline' }))
     expect(onOpenOutline).toHaveBeenCalledOnce()
   })
 

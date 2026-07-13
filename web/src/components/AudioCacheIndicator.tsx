@@ -1,3 +1,4 @@
+import { Trash2 } from 'lucide-react'
 import { AUDIO_CACHE_BUDGET_BYTES } from '../lib/db'
 
 interface AudioCacheIndicatorProps {
@@ -39,9 +40,15 @@ export function AudioCacheIndicator({
         type="button"
         onClick={onClear}
         disabled={clearing || sizeBytes === 0}
-        className="rounded-md border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:border-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:border-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {clearing ? 'Clearing…' : 'Clear'}
+        {clearing ? (
+          'Clearing…'
+        ) : (
+          <>
+            <Trash2 className="h-4 w-4" /> Clear
+          </>
+        )}
       </button>
     </div>
   )

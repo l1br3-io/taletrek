@@ -1,3 +1,4 @@
+import { ArrowRight, Download, Upload, X } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { AiSettingsSection } from '../components/AiSettingsSection'
 import { AudioCacheIndicator } from '../components/AudioCacheIndicator'
@@ -397,7 +398,7 @@ function PronunciationEditor({
               aria-label="word to replace"
               className="w-1/3 rounded-md border border-line bg-surface px-3 py-1.5 text-sm"
             />
-            <span className="text-muted">→</span>
+            <ArrowRight className="h-4 w-4 shrink-0 text-muted" />
             <input
               type="text"
               value={entry.replace}
@@ -412,7 +413,7 @@ function PronunciationEditor({
               aria-label={`remove ${entry.find || 'entry'}`}
               className="rounded-md border border-line px-2.5 py-1.5 text-sm text-muted transition-colors hover:border-red-500 hover:text-red-400"
             >
-              ✕
+              <X className="h-4 w-4" />
             </button>
           </li>
         ))}
@@ -507,12 +508,12 @@ function BackupSection({ onImported }: { onImported: () => void }) {
           type="button"
           onClick={() => void handleExport()}
           disabled={status.type === 'busy'}
-          className="rounded-lg border border-line px-4 py-2 text-sm font-medium transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm font-medium transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
         >
-          Export backup
+          <Download className="h-4 w-4" /> Export backup
         </button>
-        <label className="cursor-pointer rounded-lg border border-line px-4 py-2 text-sm font-medium transition-colors hover:border-accent hover:text-accent">
-          Import backup
+        <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm font-medium transition-colors hover:border-accent hover:text-accent">
+          <Upload className="h-4 w-4" /> Import backup
           <input
             type="file"
             accept="application/json,.json"

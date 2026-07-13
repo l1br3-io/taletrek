@@ -123,7 +123,7 @@ describe('UploadBookModal — outline section', () => {
         format: 'txt',
       },
     })
-    expect(screen.getByRole('button', { name: /auto-detect outline/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /auto-detect chapters/i })).toBeInTheDocument()
   })
 
   it('hides the outline section for EPUB books', () => {
@@ -134,7 +134,7 @@ describe('UploadBookModal — outline section', () => {
         format: 'epub',
       },
     })
-    expect(screen.queryByRole('button', { name: /auto-detect outline/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /auto-detect chapters/i })).not.toBeInTheDocument()
   })
 
   it('hides the AI button when onGenerateAi is not provided', () => {
@@ -142,7 +142,7 @@ describe('UploadBookModal — outline section', () => {
       outline: { state: { type: 'idle' }, onGenerate: vi.fn(), format: 'pdf' },
     })
     expect(
-      screen.queryByRole('button', { name: /generate outline with ai/i }),
+      screen.queryByRole('button', { name: /detect chapters with ai/i }),
     ).not.toBeInTheDocument()
   })
 
@@ -155,7 +155,7 @@ describe('UploadBookModal — outline section', () => {
         format: 'pdf',
       },
     })
-    expect(screen.getByRole('button', { name: /generate outline with ai/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /detect chapters with ai/i })).toBeInTheDocument()
   })
 
   it('calls onGenerate when the Auto-detect button is clicked', () => {
@@ -163,7 +163,7 @@ describe('UploadBookModal — outline section', () => {
     renderModal({
       outline: { state: { type: 'idle' }, onGenerate, format: 'pdf' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /auto-detect outline/i }))
+    fireEvent.click(screen.getByRole('button', { name: /auto-detect chapters/i }))
     expect(onGenerate).toHaveBeenCalledOnce()
   })
 
@@ -172,7 +172,7 @@ describe('UploadBookModal — outline section', () => {
     renderModal({
       outline: { state: { type: 'idle' }, onGenerate: vi.fn(), onGenerateAi, format: 'pdf' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /generate outline with ai/i }))
+    fireEvent.click(screen.getByRole('button', { name: /detect chapters with ai/i }))
     expect(onGenerateAi).toHaveBeenCalledOnce()
   })
 
@@ -192,7 +192,7 @@ describe('UploadBookModal — outline section', () => {
       state: { type: 'running', fraction: 0.5, stage: 'Clean up (1/1)' },
       outline: { state: { type: 'idle' }, onGenerate: vi.fn(), format: 'txt' },
     })
-    expect(screen.queryByRole('button', { name: /auto-detect outline/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /auto-detect chapters/i })).not.toBeInTheDocument()
   })
 
   it('hides the Process button while outline is running', () => {

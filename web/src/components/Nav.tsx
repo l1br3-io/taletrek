@@ -1,11 +1,12 @@
+import { BookOpen, Home, Library, Menu, Settings } from 'lucide-react'
 import { useState } from 'react'
 import { NavLink } from 'react-router'
 
 const links = [
-  { to: '/', label: 'Home', end: true },
-  { to: '/library', label: 'Library', end: false },
-  { to: '/reader', label: 'Reader', end: false },
-  { to: '/settings', label: 'Settings', end: false },
+  { to: '/', label: 'Home', end: true, Icon: Home },
+  { to: '/library', label: 'Library', end: false, Icon: Library },
+  { to: '/reader', label: 'Reader', end: false, Icon: BookOpen },
+  { to: '/settings', label: 'Settings', end: false, Icon: Settings },
 ] as const
 
 export function Nav() {
@@ -32,11 +33,12 @@ export function Nav() {
                 end={l.end}
                 className={({ isActive }) =>
                   [
-                    'rounded-md px-3 py-1.5 text-sm transition-colors',
+                    'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors',
                     isActive ? 'bg-elevated text-fg' : 'text-muted hover:text-fg',
                   ].join(' ')
                 }
               >
+                <l.Icon className="h-4 w-4" />
                 {l.label}
               </NavLink>
             </li>
@@ -50,7 +52,7 @@ export function Nav() {
           aria-label="Toggle navigation"
           aria-expanded={open}
         >
-          ☰
+          <Menu className="h-5 w-5" />
         </button>
       </nav>
       {/* Mobile drawer */}
@@ -65,11 +67,12 @@ export function Nav() {
                   onClick={() => setOpen(false)}
                   className={({ isActive }) =>
                     [
-                      'block rounded-md px-3 py-2 text-sm transition-colors',
+                      'flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors',
                       isActive ? 'bg-elevated text-fg' : 'text-muted hover:text-fg',
                     ].join(' ')
                   }
                 >
+                  <l.Icon className="h-4 w-4" />
                   {l.label}
                 </NavLink>
               </li>

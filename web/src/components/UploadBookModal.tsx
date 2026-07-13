@@ -78,10 +78,11 @@ function seedParams(initialOps: TransformOp[] | undefined): {
 }
 
 /**
- * Presentational post-process modal (M6). Owns only the selection + param form
- * state; the transform `state` (idle/running/done/error) and the engine are the
- * caller's. On Process, builds the ordered {@link TransformOp} list (cleanup →
- * translate → summarize → simplify) and hands it to `onProcess`.
+ * Presentational modal shown after upload (and on reprocess). Owns only the
+ * selection + param form state; the transform `state` (idle/running/done/error)
+ * and the engine are the caller's. On Process, builds the ordered
+ * {@link TransformOp} list (cleanup → translate → summarize → simplify) and
+ * hands it to `onProcess`.
  */
 export function UploadBookModal({
   open,
@@ -142,17 +143,17 @@ export function UploadBookModal({
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="ppm-title"
+      aria-labelledby="upload-book-title"
     >
       <div className="w-full max-w-md space-y-4 rounded-xl border border-line bg-surface p-5">
         <header className="space-y-1">
-          <h2 id="ppm-title" className="text-lg font-semibold">
-            Process book
+          <h2 id="upload-book-title" className="text-lg font-semibold">
+            Prepare book
           </h2>
           <p className="text-xs text-muted">
-            Pick one or more transforms to run on the book&apos;s text before TTS. Your original
-            file is kept — you can always re-parse it to revert. After processing, the book resumes
-            at the start of its current chapter.
+            Optionally name the book, detect chapters, and apply text transforms before TTS. Your
+            original file is kept — you can always re-process to revert. Skip to go straight to the
+            reader.
           </p>
         </header>
 
@@ -323,10 +324,10 @@ function OutlineSectionView({
     <div className="rounded-lg border border-line p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <span className="text-sm font-medium">Outline</span>
+          <span className="text-sm font-medium">Chapters</span>
           <p className="mt-0.5 text-xs text-muted">
-            Detect chapter headings from the book&apos;s text (e.g. &ldquo;Chapter 1&rdquo;,
-            &ldquo;PART II&rdquo;).
+            Split the book into chapters by detecting headings like &ldquo;Chapter 1&rdquo; or
+            &ldquo;PART II&rdquo;.
           </p>
         </div>
         <div className="flex shrink-0 gap-1.5">
@@ -334,7 +335,8 @@ function OutlineSectionView({
             type="button"
             onClick={onGenerate}
             disabled={running}
-            aria-label="Auto-detect outline"
+            aria-label="Auto-detect chapters"
+            title="Fast pattern-based detection (offline)"
             className="rounded-md border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:border-muted disabled:opacity-50"
           >
             {running ? '…' : state.type === 'done' ? 'Redo' : 'Auto-detect'}
@@ -344,10 +346,11 @@ function OutlineSectionView({
               type="button"
               onClick={onGenerateAi}
               disabled={running}
-              aria-label="Generate outline with AI"
+              aria-label="Detect chapters with AI"
+              title="Smarter AI-based detection (uses configured model)"
               className="rounded-md border border-accent bg-accent-soft px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
             >
-              {running ? '…' : state.type === 'done' ? 'Redo AI' : 'AI'}
+              {running ? '…' : state.type === 'done' ? 'Redo AI' : 'Use AI'}
             </button>
           )}
         </div>

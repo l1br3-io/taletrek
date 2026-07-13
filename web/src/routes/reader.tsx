@@ -1,3 +1,4 @@
+import { Locate } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { Outline } from '../components/Outline'
@@ -333,7 +334,7 @@ function ReaderPane({
           className="fixed bottom-24 right-4 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-line bg-accent text-bg shadow-lg"
           aria-label="Go to current paragraph"
         >
-          ⊙
+          <Locate className="h-5 w-5" />
         </button>
       )}
       <Outline
