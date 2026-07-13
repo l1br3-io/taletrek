@@ -1,5 +1,13 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb'
-import type { Book, BookFile, BookId, BookPosition, Chapter, ChapterId } from '../types'
+import type {
+  AudioCacheRecord,
+  Book,
+  BookFile,
+  BookId,
+  BookPosition,
+  Chapter,
+  ChapterId,
+} from '../types'
 import type { AppliedProcessing } from './ai/types'
 
 /**
@@ -7,6 +15,7 @@ import type { AppliedProcessing } from './ai/types'
  *
  * v1 (M0): `settings` store only.
  * v2 (M1): adds `books`, `chapters`, and `files` stores for the ingest pipeline.
+ * v3 (M8): adds `audioCache` store for the persistent TTS audio cache.
  */
 export interface TaleTrekDB extends DBSchema {
   settings: {
@@ -27,10 +36,18 @@ export interface TaleTrekDB extends DBSchema {
     key: BookId
     value: BookFile
   }
+  audioCache: {
+    key: string
+    value: AudioCacheRecord
+    indexes: { bookId: BookId; lastUsed: number }
+  }
 }
 
 const DB_NAME = 'taletrek'
-const DB_VERSION = 2
+const DB_VERSION = 3
+
+/** Soft cap on the audio cache (M8). ~1,700 paragraphs at ~300 KB/para. */
+export const AUDIO_CACHE_BUDGET_BYTES = 500 * 1024 * 1024
 
 let dbPromise: Promise<IDBPDatabase<TaleTrekDB>> | null = null
 
@@ -38,18 +55,32 @@ let dbPromise: Promise<IDBPDatabase<TaleTrekDB>> | null = null
 export function getDB(): Promise<IDBPDatabase<TaleTrekDB>> {
   if (!dbPromise) {
     dbPromise = openDB<TaleTrekDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        if (!db.objectStoreNames.contains('settings')) {
-          db.createObjectStore('settings')
+      upgrade(db, oldVersion) {
+        // v1
+        if (oldVersion < 1) {
+          if (!db.objectStoreNames.contains('settings')) {
+            db.createObjectStore('settings')
+          }
         }
-        if (!db.objectStoreNames.contains('books')) {
-          db.createObjectStore('books', { keyPath: 'id' }).createIndex('updatedAt', 'updatedAt')
+        // v2
+        if (oldVersion < 2) {
+          if (!db.objectStoreNames.contains('books')) {
+            db.createObjectStore('books', { keyPath: 'id' }).createIndex('updatedAt', 'updatedAt')
+          }
+          if (!db.objectStoreNames.contains('chapters')) {
+            db.createObjectStore('chapters', { keyPath: 'id' }).createIndex('bookId', 'bookId')
+          }
+          if (!db.objectStoreNames.contains('files')) {
+            db.createObjectStore('files', { keyPath: 'bookId' })
+          }
         }
-        if (!db.objectStoreNames.contains('chapters')) {
-          db.createObjectStore('chapters', { keyPath: 'id' }).createIndex('bookId', 'bookId')
-        }
-        if (!db.objectStoreNames.contains('files')) {
-          db.createObjectStore('files', { keyPath: 'bookId' })
+        // v3 (M8)
+        if (oldVersion < 3) {
+          if (!db.objectStoreNames.contains('audioCache')) {
+            const store = db.createObjectStore('audioCache', { keyPath: 'key' })
+            store.createIndex('bookId', 'bookId')
+            store.createIndex('lastUsed', 'lastUsed')
+          }
         }
       },
     })
@@ -70,6 +101,7 @@ export async function _clearDBForTests(): Promise<void> {
     db.clear('books'),
     db.clear('chapters'),
     db.clear('files'),
+    db.clear('audioCache'),
   ])
 }
 
@@ -110,17 +142,19 @@ export async function deleteBook(id: BookId): Promise<void> {
 }
 
 /**
- * Remove a book together with all of its chapters and its uploaded file.
- * Runs in a single transaction so the cascade is atomic.
+ * Remove a book together with all of its chapters, its uploaded file, and its
+ * cached audio (M8). Runs in a single transaction so the cascade is atomic.
  */
 export async function deleteBookCascade(id: BookId): Promise<void> {
   const db = await getDB()
   const chapterKeys = await db.getAllKeysFromIndex('chapters', 'bookId', id)
-  const tx = db.transaction(['books', 'chapters', 'files'], 'readwrite')
+  const audioKeys = await db.getAllKeysFromIndex('audioCache', 'bookId', id)
+  const tx = db.transaction(['books', 'chapters', 'files', 'audioCache'], 'readwrite')
   await Promise.all([
     tx.objectStore('books').delete(id),
     ...chapterKeys.map((key) => tx.objectStore('chapters').delete(key)),
     tx.objectStore('files').delete(id),
+    ...audioKeys.map((key) => tx.objectStore('audioCache').delete(key)),
   ])
   await tx.done
 }
@@ -247,4 +281,132 @@ export async function getBookFile(bookId: BookId): Promise<BookFile | undefined>
 export async function deleteBookFile(bookId: BookId): Promise<void> {
   const db = await getDB()
   await db.delete('files', bookId)
+}
+
+// ---------------------------------------------------------------------------
+// Audio cache (M8) — persistent content-addressed TTS audio. See
+// `lib/audio-cache.ts` for key construction + the higher-level lookup/put API
+// used by `PiperEngine`. These helpers are the thin IDB layer.
+// ---------------------------------------------------------------------------
+
+/**
+ * Lookup a cached audio entry by its content-addressed key. Bumps `lastUsed`
+ * on hit so the LRU eviction policy treats recently-played entries as hot.
+ * Returns `undefined` on miss.
+ */
+export async function getAudioCacheEntry(key: string): Promise<AudioCacheRecord | undefined> {
+  const db = await getDB()
+  const record = await db.get('audioCache', key)
+  if (!record) return undefined
+  const bumped: AudioCacheRecord = { ...record, lastUsed: Date.now() }
+  await db.put('audioCache', bumped)
+  return bumped
+}
+
+/**
+ * Insert (or overwrite) a cache entry. After the write, if total cache size
+ * exceeds {@link AUDIO_CACHE_BUDGET_BYTES}, runs an LRU sweep. On
+ * `QuotaExceededError`, evicts half the cache by `lastUsed` and retries once;
+ * if it still fails the put is dropped silently (synthesis already succeeded
+ * — the cache is best-effort).
+ */
+export async function putAudioCacheEntry(record: AudioCacheRecord): Promise<void> {
+  const db = await getDB()
+  try {
+    await db.put('audioCache', record)
+  } catch (err) {
+    if (!isQuotaExceededError(err)) throw err
+    await evictAudioCacheFraction(0.5)
+    try {
+      await db.put('audioCache', record)
+    } catch {
+      // Best-effort: synthesis already produced the audio; drop the cache write.
+    }
+    return
+  }
+  // Reactive sweep: keep total at or below the soft cap after each write.
+  const size = await getAudioCacheSize()
+  if (size > AUDIO_CACHE_BUDGET_BYTES) {
+    await evictAudioCacheToBudget(AUDIO_CACHE_BUDGET_BYTES)
+  }
+}
+
+/** Total bytes across all cache entries. */
+export async function getAudioCacheSize(): Promise<number> {
+  const db = await getDB()
+  const tx = db.transaction('audioCache', 'readonly')
+  let total = 0
+  let cursor = await tx.store.openCursor()
+  while (cursor) {
+    total += cursor.value.sizeBytes
+    cursor = await cursor.continue()
+  }
+  await tx.done
+  return total
+}
+
+/** All cache keys for a book (for cascade delete + diagnostics). Uses the `bookId` index. */
+export async function getAudioCacheKeysByBook(bookId: BookId): Promise<string[]> {
+  const db = await getDB()
+  return db.getAllKeysFromIndex('audioCache', 'bookId', bookId)
+}
+
+/**
+ * Evict oldest entries by `lastUsed` until total ≤ `budgetBytes`. Returns the
+ * count removed. Walks the `lastUsed` index ascending (oldest first).
+ */
+export async function evictAudioCacheToBudget(budgetBytes: number): Promise<number> {
+  const db = await getDB()
+  let total = await getAudioCacheSize()
+  if (total <= budgetBytes) return 0
+  let removed = 0
+  const tx = db.transaction('audioCache', 'readwrite')
+  let cursor = await tx.store.index('lastUsed').openCursor()
+  while (cursor && total > budgetBytes) {
+    total -= cursor.value.sizeBytes
+    await cursor.delete()
+    removed++
+    cursor = await cursor.continue()
+  }
+  await tx.done
+  return removed
+}
+
+/**
+ * Evict a fraction (0..1) of the cache by oldest-first. Used as the panic
+ * recovery path on `QuotaExceededError` — frees up substantial space fast.
+ */
+export async function evictAudioCacheFraction(fraction: number): Promise<number> {
+  const db = await getDB()
+  const count = await db.count('audioCache')
+  const toRemove = Math.max(1, Math.ceil(count * fraction))
+  let removed = 0
+  const tx = db.transaction('audioCache', 'readwrite')
+  let cursor = await tx.store.index('lastUsed').openCursor()
+  while (cursor && removed < toRemove) {
+    await cursor.delete()
+    removed++
+    cursor = await cursor.continue()
+  }
+  await tx.done
+  return removed
+}
+
+/** Clear the entire audio cache. Returns the count removed. */
+export async function clearAudioCache(): Promise<number> {
+  const db = await getDB()
+  const count = await db.count('audioCache')
+  await db.clear('audioCache')
+  return count
+}
+
+/** Best-effort detection of quota-exceeded across browsers. */
+function isQuotaExceededError(err: unknown): boolean {
+  if (!(err instanceof DOMException)) return false
+  return (
+    err.name === 'QuotaExceededError' ||
+    err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    err.code === 22 ||
+    err.code === 1014
+  )
 }

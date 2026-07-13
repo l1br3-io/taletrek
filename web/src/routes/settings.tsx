@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AiSettingsSection } from '../components/AiSettingsSection'
+import { AudioCacheIndicator } from '../components/AudioCacheIndicator'
 import { InstallPrompt } from '../components/InstallPrompt'
 import { OfflineBadge } from '../components/OfflineBadge'
 import { type DownloadState, VoicePicker } from '../components/VoicePicker'
 import { DEFAULT_AI_SETTINGS } from '../context/settings'
+import { useAudioCacheStats } from '../hooks/useAudioCacheStats'
 import { useOnline } from '../hooks/useOnline'
 import { type Theme, useSetting } from '../hooks/useSetting'
 import type { CleaningFilters, PronunciationEntry } from '../lib/clean/types'
+import { clearAudioCache } from '../lib/db'
 import { ttsClient } from '../lib/tts/client'
 import { CURATED_VOICES } from '../lib/tts/voices'
 import type { VoiceId } from '../types'
@@ -34,7 +37,9 @@ export function Settings() {
 
   const [storedIds, setStoredIds] = useState<ReadonlySet<string>>(new Set())
   const [downloading, setDownloading] = useState<DownloadState | null>(null)
+  const [clearingCache, setClearingCache] = useState(false)
   const online = useOnline()
+  const cacheStats = useAudioCacheStats()
 
   // Refresh which voice models are already in OPFS.
   const refreshStored = useCallback(async () => {
@@ -64,6 +69,16 @@ export function Settings() {
       return next
     })
   }
+
+  const handleClearCache = useCallback(async () => {
+    setClearingCache(true)
+    try {
+      await clearAudioCache()
+      await cacheStats.refresh()
+    } finally {
+      setClearingCache(false)
+    }
+  }, [cacheStats])
 
   return (
     <div className="space-y-8">
@@ -131,6 +146,19 @@ export function Settings() {
           onSelect={setVoiceId}
           onDownload={handleDownload}
           onRemove={handleRemove}
+        />
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Storage</h2>
+        <p className="text-xs text-muted">
+          TaleTrek caches the audio it synthesizes so reopening a book picks up instantly where you
+          left off. Clearing it frees up space; the audio is re-created on demand.
+        </p>
+        <AudioCacheIndicator
+          sizeBytes={cacheStats.sizeBytes}
+          clearing={clearingCache}
+          onClear={() => void handleClearCache()}
         />
       </section>
 

@@ -2,8 +2,14 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsProvider } from '../context/settings'
-import { _clearDBForTests, _resetDBForTests, getSetting, setSetting } from '../lib/db'
-import { type VoiceId, voiceId } from '../types'
+import {
+  _clearDBForTests,
+  _resetDBForTests,
+  getSetting,
+  putAudioCacheEntry,
+  setSetting,
+} from '../lib/db'
+import { type AudioCacheRecord, newBookId, type VoiceId, voiceId } from '../types'
 import { Settings } from './settings'
 
 const isStoredMock = vi.fn<(id: VoiceId) => Promise<boolean>>()
@@ -300,5 +306,41 @@ describe('Settings — AI transforms (M6)', () => {
     })
     const stored = await getSetting<{ ai: { modal: { beforeUpload: boolean } } }>('app')
     expect(stored?.ai.modal.beforeUpload).toBe(true)
+  })
+
+  it('shows the audio cache Storage section with the current size', async () => {
+    const record: AudioCacheRecord = {
+      key: 'test-cache',
+      blob: new Blob([new Uint8Array(2 * 1024 * 1024)]),
+      sizeBytes: 2 * 1024 * 1024,
+      synthMs: 1,
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      lastUsed: Date.now(),
+      createdAt: Date.now(),
+      bookId: newBookId(),
+    }
+    await putAudioCacheEntry(record)
+    render(withProviders(<Settings />))
+    expect(await screen.findByText(/Cached audio: 2 MB \/ 500 MB/)).toBeInTheDocument()
+  })
+
+  it('clears the audio cache when the Clear button is clicked', async () => {
+    const record: AudioCacheRecord = {
+      key: 'to-clear',
+      blob: new Blob(['x']),
+      sizeBytes: 1024,
+      synthMs: 1,
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      lastUsed: Date.now(),
+      createdAt: Date.now(),
+      bookId: newBookId(),
+    }
+    await putAudioCacheEntry(record)
+    render(withProviders(<Settings />))
+    const clearButton = await screen.findByRole('button', { name: /^Clear$/ })
+    await act(async () => {
+      fireEvent.click(clearButton)
+    })
+    expect(await screen.findByText(/Cached audio: 0 MB \/ 500 MB/)).toBeInTheDocument()
   })
 })

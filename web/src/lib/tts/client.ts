@@ -70,7 +70,12 @@ export class TtsClient implements TtsEngine {
   }
 
   async synthesize(req: SynthesisRequest): Promise<SynthesisResult> {
-    const res = await request({ op: 'synthesize', text: req.text, voiceId: req.voiceId })
+    const res = await request({
+      op: 'synthesize',
+      text: req.text,
+      voiceId: req.voiceId,
+      ...(req.bookId !== undefined ? { bookId: req.bookId } : {}),
+    })
     if (res.op !== 'synthesize') throw new Error(`unexpected response op: ${res.op}`)
     return { audio: res.audio, synthMs: res.synthMs }
   }

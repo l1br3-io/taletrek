@@ -1,16 +1,32 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { type Book, type BookFile, type Chapter, newBookId, newChapterId } from '../types'
+import {
+  type AudioCacheRecord,
+  type Book,
+  type BookFile,
+  type Chapter,
+  newBookId,
+  newChapterId,
+  voiceId,
+} from '../types'
 import type { AppliedProcessing } from './ai/types'
 import {
   _clearDBForTests,
   _resetDBForTests,
+  AUDIO_CACHE_BUDGET_BYTES,
+  clearAudioCache,
   deleteBookCascade,
   deleteSetting,
+  evictAudioCacheFraction,
+  evictAudioCacheToBudget,
   getAllBooks,
+  getAudioCacheEntry,
+  getAudioCacheKeysByBook,
+  getAudioCacheSize,
   getBook,
   getBookFile,
   getChaptersByBook,
   getSetting,
+  putAudioCacheEntry,
   putBook,
   putBookFile,
   putChapters,
@@ -237,7 +253,7 @@ describe('library + progress (M5)', () => {
     await expect(updateBookProcessing(newBookId(), undefined)).resolves.toBeUndefined()
   })
 
-  it('deleteBookCascade removes the book, its chapters, and its file', async () => {
+  it('deleteBookCascade removes the book, its chapters, its file, and its audio cache (M8)', async () => {
     const target = makeBook()
     const other = makeBook()
     await putBook(target)
@@ -254,12 +270,139 @@ describe('library + progress (M5)', () => {
       type: 'text/plain',
       size: 1,
     })
+    const targetAudio = makeAudioCacheRecord({ bookId: target.id, key: 'target-1' })
+    const otherAudio = makeAudioCacheRecord({ bookId: other.id, key: 'other-1' })
+    await putAudioCacheEntry(targetAudio)
+    await putAudioCacheEntry(otherAudio)
+
     await deleteBookCascade(target.id)
+
     expect(await getBook(target.id)).toBeUndefined()
     expect(await getChaptersByBook(target.id)).toEqual([])
     expect(await getBookFile(target.id)).toBeUndefined()
+    // target's audio entries gone; sibling's untouched (atomic cascade)
+    expect(await getAudioCacheEntry('target-1')).toBeUndefined()
+    expect(await getAudioCacheKeysByBook(target.id)).toEqual([])
+    expect(await getAudioCacheEntry('other-1')).toBeDefined()
+    expect(await getAudioCacheKeysByBook(other.id)).toEqual(['other-1'])
     // sibling book untouched
     expect(await getBook(other.id)).toEqual(other)
     expect((await getChaptersByBook(other.id)).map((c) => c.title)).toEqual(['O0'])
+  })
+})
+
+function makeAudioCacheRecord(overrides: Partial<AudioCacheRecord> = {}): AudioCacheRecord {
+  const blob = overrides.blob ?? new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/x-wav' })
+  return {
+    key: 'k1',
+    blob,
+    bookId: newBookId(),
+    sizeBytes: overrides.sizeBytes ?? blob.size,
+    synthMs: 12,
+    voiceId: voiceId('en_US-hfc_female-medium'),
+    lastUsed: Date.now(),
+    createdAt: Date.now(),
+    ...overrides,
+  }
+}
+
+describe('audio cache store (M8)', () => {
+  it('round-trips an entry and returns undefined on miss', async () => {
+    const record = makeAudioCacheRecord({ key: 'round-trip' })
+    await putAudioCacheEntry(record)
+    const hit = await getAudioCacheEntry('round-trip')
+    expect(hit?.key).toBe('round-trip')
+    expect(hit?.blob).toBeDefined()
+    expect(hit?.sizeBytes).toBe(record.sizeBytes)
+    expect(hit?.voiceId).toEqual(record.voiceId)
+    expect(await getAudioCacheEntry('missing')).toBeUndefined()
+  })
+
+  it('getAudioCacheEntry bumps lastUsed on hit', async () => {
+    const old = Date.now() - 10_000
+    const record = makeAudioCacheRecord({ key: 'lru', lastUsed: old })
+    await putAudioCacheEntry(record)
+    const before = Date.now()
+    const hit = await getAudioCacheEntry('lru')
+    expect(hit?.lastUsed).toBeGreaterThanOrEqual(before)
+    expect(hit?.lastUsed).toBeGreaterThan(old)
+  })
+
+  it('getAudioCacheSize sums sizeBytes across entries', async () => {
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'a', sizeBytes: 100 }))
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'b', sizeBytes: 250 }))
+    expect(await getAudioCacheSize()).toBe(350)
+  })
+
+  it('getAudioCacheKeysByBook returns only the requested book keys', async () => {
+    const bookA = newBookId()
+    const bookB = newBookId()
+    await putAudioCacheEntry(makeAudioCacheRecord({ bookId: bookA, key: 'a-1' }))
+    await putAudioCacheEntry(makeAudioCacheRecord({ bookId: bookA, key: 'a-2' }))
+    await putAudioCacheEntry(makeAudioCacheRecord({ bookId: bookB, key: 'b-1' }))
+    expect(await getAudioCacheKeysByBook(bookA).then((ks) => ks.sort())).toEqual(['a-1', 'a-2'])
+  })
+
+  it('evictAudioCacheToBudget removes oldest-first until under budget', async () => {
+    // Insert 3 entries: oldest, middle, newest. Budget = 200 forces 2 evictions.
+    await putAudioCacheEntry(
+      makeAudioCacheRecord({ key: 'oldest', sizeBytes: 100, lastUsed: 1000 }),
+    )
+    await putAudioCacheEntry(
+      makeAudioCacheRecord({ key: 'middle', sizeBytes: 100, lastUsed: 2000 }),
+    )
+    await putAudioCacheEntry(
+      makeAudioCacheRecord({ key: 'newest', sizeBytes: 100, lastUsed: 3000 }),
+    )
+    const removed = await evictAudioCacheToBudget(200)
+    expect(removed).toBe(1)
+    expect(await getAudioCacheEntry('oldest')).toBeUndefined()
+    expect(await getAudioCacheEntry('middle')).toBeDefined()
+    expect(await getAudioCacheEntry('newest')).toBeDefined()
+  })
+
+  it('evictAudioCacheToBudget is a no-op when already under budget', async () => {
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'only', sizeBytes: 10 }))
+    expect(await evictAudioCacheToBudget(1000)).toBe(0)
+    expect(await getAudioCacheEntry('only')).toBeDefined()
+  })
+
+  it('evictAudioCacheFraction removes the oldest N*fraction entries', async () => {
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'a', lastUsed: 1 }))
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'b', lastUsed: 2 }))
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'c', lastUsed: 3 }))
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'd', lastUsed: 4 }))
+    const removed = await evictAudioCacheFraction(0.5)
+    expect(removed).toBe(2)
+    expect(await getAudioCacheEntry('a')).toBeUndefined()
+    expect(await getAudioCacheEntry('b')).toBeUndefined()
+    expect(await getAudioCacheEntry('c')).toBeDefined()
+    expect(await getAudioCacheEntry('d')).toBeDefined()
+  })
+
+  it('putAudioCacheEntry triggers an LRU sweep when over budget', async () => {
+    // Drop the budget temporarily by evicting to a tiny number after seeding.
+    // Easier: seed 4 small entries, set budget via direct evict, then add one
+    // more that pushes over and verify oldest got pruned by the put path.
+    for (let i = 0; i < 4; i++) {
+      await putAudioCacheEntry(
+        makeAudioCacheRecord({
+          key: `e${i}`,
+          sizeBytes: AUDIO_CACHE_BUDGET_BYTES / 2,
+          lastUsed: 1000 + i,
+        }),
+      )
+    }
+    // Each entry is half the budget; 2 entries already exceed it. The put path
+    // should have pruned back to one entry after each over-budget write.
+    expect(await getAudioCacheSize()).toBeLessThanOrEqual(AUDIO_CACHE_BUDGET_BYTES)
+  })
+
+  it('clearAudioCache empties the store and returns the count', async () => {
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'a' }))
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'b' }))
+    const removed = await clearAudioCache()
+    expect(removed).toBe(2)
+    expect(await getAudioCacheSize()).toBe(0)
   })
 })

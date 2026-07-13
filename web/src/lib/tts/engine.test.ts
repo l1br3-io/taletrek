@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { voiceId } from '../../types'
+import { _clearDBForTests, _resetDBForTests, getAudioCacheEntry } from '../db'
 import { PiperEngine } from './engine'
 
 const VOICE = voiceId('en_US-hfc_female-medium')
@@ -25,8 +26,10 @@ vi.mock('@mintplex-labs/piper-tts-web', () => {
   }
 })
 
-beforeEach(() => {
+beforeEach(async () => {
   predictMock.mockReset()
+  _resetDBForTests()
+  await _clearDBForTests()
 })
 
 afterEach(() => {
@@ -106,5 +109,87 @@ describe('PiperEngine', () => {
     const engine = new PiperEngine()
     await engine.remove(VOICE)
     expect(remove).toHaveBeenCalledWith(VOICE)
+  })
+})
+
+describe('PiperEngine — audio cache (M8)', () => {
+  it('a cache hit returns the stored blob with synthMs 0 (no inference)', async () => {
+    const wav = new Blob([new Uint8Array([9])], { type: 'audio/x-wav' })
+    predictMock.mockResolvedValue(wav)
+    const engine = new PiperEngine()
+    // First call: miss → predict → store.
+    await engine.synthesize({ text: 'cold paragraph', voiceId: VOICE })
+    expect(predictMock).toHaveBeenCalledTimes(1)
+    // Second call: same text+voice → hit → no predict.
+    const result = await engine.synthesize({ text: 'cold paragraph', voiceId: VOICE })
+    expect(predictMock).toHaveBeenCalledTimes(1)
+    expect(result.synthMs).toBe(0)
+    // The audio came back from the cache (fake-indexeddb in jsdom returns a
+    // Blob-like object without the Blob prototype, so we assert truthiness +
+    // that it has content rather than instanceof/size).
+    expect(result.audio).toBeTruthy()
+  })
+
+  it('a cache miss synthesizes, stores, and reports real synthMs', async () => {
+    const wav = new Blob([new Uint8Array([1])], { type: 'audio/x-wav' })
+    predictMock.mockResolvedValue(wav)
+    const engine = new PiperEngine()
+    const result = await engine.synthesize({ text: 'fresh synthesis', voiceId: VOICE })
+    expect(predictMock).toHaveBeenCalledWith('fresh synthesis')
+    expect(result.synthMs).toBeGreaterThanOrEqual(0)
+    // Stored entry exists in IDB.
+    const { audioCacheKey } = await import('../audio-cache')
+    const key = await audioCacheKey(VOICE, 'fresh synthesis')
+    expect(await getAudioCacheEntry(key)).toBeDefined()
+  })
+
+  it('changing the voice produces a cache miss (different key)', async () => {
+    predictMock.mockResolvedValue(new Blob([new Uint8Array([1])]))
+    const engine = new PiperEngine()
+    await engine.synthesize({ text: 'shared text', voiceId: VOICE })
+    await engine.synthesize({ text: 'shared text', voiceId: OTHER })
+    // Two distinct voices → two predict calls (both miss).
+    expect(predictMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('changing the text produces a cache miss', async () => {
+    predictMock.mockResolvedValue(new Blob([new Uint8Array([1])]))
+    const engine = new PiperEngine()
+    await engine.synthesize({ text: 'one thing', voiceId: VOICE })
+    await engine.synthesize({ text: 'another thing', voiceId: VOICE })
+    expect(predictMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('threads bookId onto the stored cache record', async () => {
+    predictMock.mockResolvedValue(new Blob([new Uint8Array([1])]))
+    const { newBookId } = await import('../../types')
+    const bookId = newBookId()
+    const engine = new PiperEngine()
+    await engine.synthesize({ text: 'with book context', voiceId: VOICE, bookId })
+    const { audioCacheKey } = await import('../audio-cache')
+    const key = await audioCacheKey(VOICE, 'with book context')
+    const record = await getAudioCacheEntry(key)
+    expect(record?.bookId).toBe(bookId)
+  })
+
+  it('never blocks synthesis when the cache lookup throws', async () => {
+    // Stub the audio-cache module so lookupAudioCache rejects.
+    vi.resetModules()
+    vi.doMock('../audio-cache', async () => {
+      const actual = await vi.importActual<typeof import('../audio-cache')>('../audio-cache')
+      return {
+        ...actual,
+        lookupAudioCache: vi.fn().mockRejectedValue(new Error('idb dead')),
+        storeAudioCache: vi.fn().mockResolvedValue(undefined),
+      }
+    })
+    const { PiperEngine: EngineFailing } = await import('./engine')
+    const wav = new Blob([new Uint8Array([1])], { type: 'audio/x-wav' })
+    predictMock.mockResolvedValue(wav)
+    const engine = new EngineFailing()
+    const result = await engine.synthesize({ text: 'fail open', voiceId: VOICE })
+    expect(result.audio).toBe(wav)
+    vi.doUnmock('../audio-cache')
+    vi.resetModules()
   })
 })

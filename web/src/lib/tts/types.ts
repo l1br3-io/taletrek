@@ -1,4 +1,4 @@
-import type { VoiceId } from '../../types'
+import type { BookId, VoiceId } from '../../types'
 
 export type VoiceQuality = 'low' | 'medium' | 'high'
 
@@ -17,6 +17,12 @@ export interface Voice {
 export interface SynthesisRequest {
   text: string
   voiceId: VoiceId
+  /**
+   * Optional: the book this paragraph belongs to. Threaded through to the
+   * audio cache (M8) so `deleteBookCascade` reclaims the entry. When omitted,
+   * the audio is still cached but only LRU-reapable (no per-book cascade).
+   */
+  bookId?: BookId
 }
 
 export interface SynthesisResult {

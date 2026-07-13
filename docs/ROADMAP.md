@@ -79,14 +79,15 @@ The app becomes a complete reading companion. A library view manages multiple bo
 
 ---
 
-## Beyond the core — M6 & M7
+## Beyond the core — M6, M7 & M8
 
-With the read-aloud core (M0–M5) shipped, two follow-on milestones deepen the experience: **M6** adds an optional AI transform layer, and **M7** makes the reader comfortable on any screen.
+With the read-aloud core (M0–M5) shipped, three follow-on milestones deepen the experience: **M6** adds an optional AI transform layer, **M7** makes the reader comfortable on any screen, and **M8** makes resume instant by caching synthesized audio.
 
 | # | Milestone | Ships (user-visible) |
 |---|-----------|----------------------|
 | M6 | **AI Transforms** | Optional post-processing (on-device WebLLM or your own OpenAI-compatible cloud key) that cleans OCR noise, translates, summarizes, or simplifies a book — plus per-paragraph transforms (AI + deterministic) and an importable key/config |
 | M7 | **Reader UX & Mobile** | A responsive, mobile-first reader: a chapter outline, minimized playback controls with an overflow menu, a "go to current paragraph" affordance, and auto-scroll to the resumed position on first Play |
+| M8 | **Audio Cache** | Synthesized audio persists across sessions: reopening a book resumes playback instantly because paragraphs already rendered are reused. A content-addressed IndexedDB cache (keyed by voice + normalized text), LRU-bounded to ~500 MB, cleared per-book on delete. Purely on-device; no sync, no upload. |
 
 ### M6 — AI Transforms
 An optional layer on top of ingest. Disabled by default, so it adds zero overhead until the user opts in. Two interchangeable backends behind one engine contract: **on-device WebLLM** (a Qwen2.5 model running via WebGPU, cached in OPFS for offline reuse) and **cloud** (any OpenAI-compatible endpoint, your key, held in-memory only and never written to disk). The v1 transforms — cleanup, translate, summarize, simplify — run over the whole book from the library; results replace the source text and the original file stays recoverable via re-parse. Pronunciation hints propose candidates the user reviews into the global dictionary.
@@ -95,6 +96,9 @@ The M6 extension adds: a **per-paragraph transform** menu in the reader (tap a p
 
 ### M7 — Reader UX & Mobile
 The reader becomes comfortable on a phone. The layout is mobile-first: the nav collapses into a hamburger drawer below `sm`, spacing and type scale adapt, and the playback bar collapses to primary controls (prev ¶, play/pause, next ¶) with a **`⋯` overflow menu** for chapter skip, stop, speed, outline, "go to current paragraph", and "transform paragraph". A **chapter outline** drawer lists chapters, highlights the current one, and jumps on tap. A **"go to current paragraph"** button (in the overflow menu, plus a floating button that appears when the active paragraph is scrolled out of view) recenters the reader on what's playing. And on the **first Play** of a session, if the book has a saved position, the view automatically scrolls to the resumed paragraph — so pressing play drops you exactly where you left off.
+
+### M8 — Audio Cache
+Resume becomes instant. Every paragraph Piper synthesizes is stored in a **content-addressed IndexedDB cache** keyed by `voiceId + NORM_VERSION + sha256(normalizedText)`, so reopening a book days later picks up the existing audio instead of re-running ~1 s × N of WASM inference the device has already done. Tier 1 (M3's in-memory look-ahead queue) stays as-is; the new persistent tier sits below it, inside `PiperEngine.synthesize`. The cache is LRU-bounded to ~500 MB, cleared per-book when a book is deleted, and survives reloads within the browser's storage window (indefinitely when installed to the home screen). It's a purely local optimization — no sync, no upload, no new permission; if evicted, the app transparently re-synthesizes, with the uploaded file as source of truth. A Settings indicator shows the cached total with a Clear button. This milestone closes the gap between M5's "resume anywhere" promise and the cost of re-rendering long books on every cold start.
 
 ---
 
@@ -112,4 +116,4 @@ Revisited once the read-aloud core + M6/M7 are shipped and adopted:
 
 ## Status
 
-M0–M5 shipped (read-aloud core complete). M6 (AI Transforms, incl. per-paragraph transforms + importable key/config) and M7 (Reader UX & Mobile) shipped. See [`AGENTS.md`](../AGENTS.md) for the current milestone status table.
+M0–M5 shipped (read-aloud core complete). M6 (AI Transforms, incl. per-paragraph transforms + importable key/config), M7 (Reader UX & Mobile), and M8 (Audio Cache) shipped. See [`AGENTS.md`](../AGENTS.md) for the current milestone status table.

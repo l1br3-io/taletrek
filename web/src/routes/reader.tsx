@@ -97,6 +97,7 @@ function ReaderPane({
     playbackRate: settings.playbackRate,
     engine: ttsClient,
     initialIndex,
+    bookId: book.id,
   })
   useMediaSession({
     player,

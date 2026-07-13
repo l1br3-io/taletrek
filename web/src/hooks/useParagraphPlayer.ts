@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TtsEngine } from '../lib/tts/types'
-import type { Chapter, VoiceId } from '../types'
+import type { BookId, Chapter, VoiceId } from '../types'
 
 /** Default look-ahead depth: paragraphs pre-rendered ahead of the pointer. */
 const DEFAULT_LOOKAHEAD = 3
@@ -113,6 +113,12 @@ export interface UseParagraphPlayerArgs {
    * first `play()` begins here. Ignored after mount.
    */
   initialIndex?: number
+  /**
+   * Optional book id, threaded through to `engine.synthesize` so cached audio
+   * can be cascade-cleared with `deleteBookCascade` (M8). When omitted, audio
+   * is still cached but only LRU-reapable.
+   */
+  bookId?: BookId
 }
 
 export interface UseParagraphPlayerResult {
@@ -180,6 +186,7 @@ export function useParagraphPlayer({
   lookahead = DEFAULT_LOOKAHEAD,
   audio,
   initialIndex,
+  bookId,
 }: UseParagraphPlayerArgs): UseParagraphPlayerResult {
   const paragraphs = useMemo(() => flattenParagraphs(chapters), [chapters])
   const la = Math.max(0, Math.trunc(lookahead))
@@ -192,11 +199,13 @@ export function useParagraphPlayer({
   const [bufferedAhead, setBufferedAhead] = useState(0)
 
   // Refs for values that must NOT trigger re-subscription when they change:
-  // engine + voiceId affect only the *next* synthesis, not in-flight playback.
+  // engine + voiceId + bookId affect only the *next* synthesis, not in-flight playback.
   const engineRef = useRef(engine)
   const voiceIdRef = useRef(voiceId)
+  const bookIdRef = useRef(bookId)
   engineRef.current = engine
   voiceIdRef.current = voiceId
+  bookIdRef.current = bookId
 
   const pointerRef = useRef(initialIndex ?? 0)
   const urlRef = useRef<string | null>(null)
@@ -258,6 +267,7 @@ export function useParagraphPlayer({
           const result = await engineRef.current.synthesize({
             text: para.text,
             voiceId: voiceIdRef.current,
+            ...(bookIdRef.current !== undefined ? { bookId: bookIdRef.current } : {}),
           })
           if (gen !== genRef.current) return
           queueRef.current.set(para.id, { blob: result.audio, index: i })
@@ -290,6 +300,7 @@ export function useParagraphPlayer({
             const result = await engineRef.current.synthesize({
               text: para.text,
               voiceId: voiceIdRef.current,
+              ...(bookIdRef.current !== undefined ? { bookId: bookIdRef.current } : {}),
             })
             if (token !== tokenRef.current) return
             queueRef.current.set(para.id, { blob: result.audio, index })
