@@ -6,6 +6,15 @@
  * before `predict()`, so the reader still displays the original (cleaned)
  * text while the synthesizer receives something it can handle reliably.
  */
+
+/**
+ * Version tag for the audio cache key (M8). Bump this when the normalization
+ * logic above changes — old cache entries will miss on next synth and be
+ * reaped by LRU. The cache key shape is
+ * `${voiceId}:${NORM_VERSION}:${sha256(normalizedText)}`.
+ */
+export const NORM_VERSION = '1'
+
 export function normalizeForSpeech(text: string): string {
   let out = text
   // Smart single/double quotes + apostrophes → ASCII.

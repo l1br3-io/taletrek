@@ -12,6 +12,7 @@ ctx.onmessage = async (event: MessageEvent<TtsRequest>) => {
         const { audio, synthMs } = await engine.synthesize({
           text: req.text,
           voiceId: req.voiceId,
+          ...(req.bookId !== undefined ? { bookId: req.bookId } : {}),
         })
         const res: TtsResponse = { id: req.id, type: 'success', op: 'synthesize', audio, synthMs }
         ctx.postMessage(res)

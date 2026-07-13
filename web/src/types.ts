@@ -42,6 +42,35 @@ export interface BookFile {
   size: number
 }
 
+/**
+ * A cached TTS audio blob keyed content-addressedly (M8). The key is
+ * `${voiceId}:${NORM_VERSION}:${sha256(normalizeForSpeech(text))}`; this record
+ * is the value. Stored in the `audioCache` IndexedDB store (v3).
+ */
+export interface AudioCacheRecord {
+  /** Denormalized cache key — `${voiceId}:${NORM_VERSION}:${sha256(normalized)}`. */
+  key: string
+  /** WAV blob (22050 Hz mono 16-bit per the Piper spike). */
+  blob: Blob
+  /**
+   * Book this entry belongs to. Optional: entries synthesized without a book
+   * context (e.g. tests, ad-hoc synth) are still cached but not reachable via
+   * the `bookId` index — IndexedDB skips undefined index values, so they're
+   * immune to cascade clear and only reaped by LRU.
+   */
+  bookId?: BookId
+  /** blob.size at write time — drives budget accounting. */
+  sizeBytes: number
+  /** Original synthesis wall-clock ms — for diagnostics only. */
+  synthMs: number
+  /** Voice that produced this audio — for future per-voice clear. */
+  voiceId: VoiceId
+  /** Date.now() at last hit/insert — drives LRU eviction. */
+  lastUsed: number
+  /** Date.now() at first insert. */
+  createdAt: number
+}
+
 export function bookId(value: string): BookId {
   return value as BookId
 }

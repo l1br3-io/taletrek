@@ -1,7 +1,7 @@
-import type { VoiceId } from '../../types'
+import type { BookId, VoiceId } from '../../types'
 
 export type TtsRequest =
-  | { id: number; op: 'synthesize'; text: string; voiceId: VoiceId }
+  | { id: number; op: 'synthesize'; text: string; voiceId: VoiceId; bookId?: BookId }
   | { id: number; op: 'download'; voiceId: VoiceId }
   | { id: number; op: 'isStored'; voiceId: VoiceId }
   | { id: number; op: 'remove'; voiceId: VoiceId }
