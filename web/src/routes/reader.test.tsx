@@ -72,10 +72,6 @@ function renderAt(path: string) {
   )
 }
 
-function fileInput(): HTMLInputElement {
-  return document.querySelector('input[type="file"]') as HTMLInputElement
-}
-
 beforeEach(async () => {
   _resetDBForTests()
   await _clearDBForTests()
@@ -266,30 +262,76 @@ describe('Reader per-paragraph transform (F8)', () => {
     expect(screen.getByText('hello world')).toBeInTheDocument()
     expect(screen.queryByText('HELLO WORLD')).not.toBeInTheDocument()
   })
-})
 
-describe('Reader upload', () => {
-  it('parses an uploaded file and navigates to the new book', async () => {
-    parseInWorker.mockResolvedValue({
-      title: 'Uploaded',
-      chapters: [{ title: 'Uploaded', paragraphs: ['fresh content'] }],
-    })
-    renderAt(`/reader/${newBookId()}`)
-    // unknown id → redirected to /library; but upload is still reachable there
-    expect(await screen.findByTestId('capture')).toHaveTextContent('/library')
-  })
-
-  it('shows an error for an unsupported file type on upload', async () => {
+  it('auto re-synthesizes the transformed paragraph when synth mode is on', async () => {
     const id = newBookId()
-    await putBook(makeBook({ id, title: 'Host' }))
+    await putBook(makeBook({ id, title: 'Auto' }))
     await putChapters([
-      { id: newChapterId(), bookId: id, index: 0, title: 'Host', paragraphs: ['x'] },
+      {
+        id: newChapterId(),
+        bookId: id,
+        index: 0,
+        title: 'Auto',
+        paragraphs: ['hello world'],
+      },
     ])
     renderAt(`/reader/${id}`)
-    await screen.findByRole('heading', { name: 'Host' })
-    fireEvent.change(fileInput(), {
-      target: { files: [new File(['x'], 'bad.unknown', { type: 'application/octet-stream' })] },
+    await screen.findByRole('heading', { name: 'Auto' })
+
+    fireEvent.click(screen.getByText('hello world'))
+    fireEvent.click(screen.getByRole('button', { name: 'More playback controls' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Transform paragraph/i })).toBeEnabled(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Transform paragraph/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'UPPER' }))
+
+    // The fire-and-forget auto re-synth should have been called with the
+    // transformed text. Filter out player-driven synth calls by text.
+    await waitFor(() => {
+      const calls = synthesize.mock.calls.map((args) => (args[0] as { text?: string }).text)
+      expect(calls).toContain('HELLO WORLD')
     })
-    expect(await screen.findByRole('alert')).toHaveTextContent(/Unsupported file type/)
+  })
+
+  it('does not auto re-synthesize when synth mode is off', async () => {
+    const id = newBookId()
+    await putBook(makeBook({ id, title: 'NoSynth' }))
+    await putChapters([
+      {
+        id: newChapterId(),
+        bookId: id,
+        index: 0,
+        title: 'NoSynth',
+        paragraphs: ['hello world'],
+      },
+    ])
+    // Seed settings with synth mode 'off' and wait for hydration.
+    const { setSetting } = await import('../lib/db')
+    await setSetting('app', { synthesizeOnUpload: 'off' })
+    renderAt(`/reader/${id}`)
+    await screen.findByRole('heading', { name: 'NoSynth' })
+
+    fireEvent.click(screen.getByText('hello world'))
+    fireEvent.click(screen.getByRole('button', { name: 'More playback controls' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Transform paragraph/i })).toBeEnabled(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Transform paragraph/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'UPPER' }))
+
+    // No auto re-synth call with the uppercase text should fire. Give it a
+    // tick to ensure the fire-and-forget path would have run if it were going
+    // to, then assert it wasn't called with the transformed text.
+    await new Promise((r) => setTimeout(r, 20))
+    const calls = synthesize.mock.calls.map((args) => (args[0] as { text?: string }).text)
+    expect(calls).not.toContain('HELLO WORLD')
+  })
+})
+
+describe('Reader — unknown book redirect', () => {
+  it('redirects to /library when the book id does not exist', async () => {
+    renderAt(`/reader/${newBookId()}`)
+    expect(await screen.findByTestId('capture')).toHaveTextContent('/library')
   })
 })

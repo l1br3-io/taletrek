@@ -11,6 +11,13 @@ export interface BookPosition {
   paragraphIndex: number
 }
 
+/** A navigable sub-heading within a chapter (Level 2 outline entry). */
+export interface ChapterHeading {
+  /** Index within the chapter's `paragraphs` array. */
+  paragraphIndex: number
+  title: string
+}
+
 export interface Book {
   id: BookId
   title: string
@@ -32,6 +39,8 @@ export interface Chapter {
   index: number
   title: string
   paragraphs: string[]
+  /** Sub-headings within this chapter (Level 2 outline entries). Optional — older books have none. */
+  headings?: ChapterHeading[]
 }
 
 export interface BookFile {

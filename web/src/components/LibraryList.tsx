@@ -9,6 +9,10 @@ interface LibraryListProps {
   onReprocess?: (id: BookId) => void
   /** When provided (AI enabled), shows a "Hints" action on each card. */
   onPronunciation?: (id: BookId) => void
+  /** When provided, shows an "Outline" action on each card (hidden for EPUB). */
+  onOutline?: (id: BookId) => void
+  /** When provided (synth mode enabled), shows a "Synthesize" action on each card. */
+  onResynthesize?: (id: BookId) => void
 }
 
 export function LibraryList({
@@ -17,6 +21,8 @@ export function LibraryList({
   onDelete,
   onReprocess,
   onPronunciation,
+  onOutline,
+  onResynthesize,
 }: LibraryListProps) {
   if (books.length === 0) {
     return (
@@ -26,7 +32,7 @@ export function LibraryList({
     )
   }
   return (
-    <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+    <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
       {books.map((book) => (
         <BookCard
           key={book.id}
@@ -35,6 +41,8 @@ export function LibraryList({
           onDelete={onDelete}
           onReprocess={onReprocess}
           onPronunciation={onPronunciation}
+          onOutline={onOutline}
+          onResynthesize={onResynthesize}
         />
       ))}
     </ul>

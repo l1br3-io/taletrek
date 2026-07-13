@@ -15,6 +15,13 @@ export type TransformKind = 'cleanup' | 'translate' | 'summarize' | 'simplify'
 /** Category hint the LLM attaches to a pronunciation candidate. */
 export type PronunciationCategory = 'proper-noun' | 'foreign' | 'neologism' | 'other'
 
+/** A chapter boundary detected by AI outline detection. */
+export interface AiOutlineChapter {
+  /** Paragraph index in the original flat text where this chapter starts. */
+  paragraphIndex: number
+  title: string
+}
+
 /** Parameterized op passed to {@link AiTransformEngine.transform}. */
 export type TransformOp =
   | { kind: 'cleanup' }
@@ -70,6 +77,16 @@ export interface AiTransformEngine {
     onProgress?: (fraction: number) => void,
     signal?: AbortSignal,
   ): Promise<PronunciationCandidate[]>
+  /**
+   * Scan the book's flat paragraph list for chapter headings using the LLM.
+   * Returns one entry per detected chapter boundary (paragraph index + title).
+   * Callers split the paragraphs at those indices, mirroring `detectOutline`.
+   */
+  detectOutline(
+    paragraphs: string[],
+    onProgress?: (fraction: number) => void,
+    signal?: AbortSignal,
+  ): Promise<AiOutlineChapter[]>
 }
 
 /** Per-book record of the last applied processing. Additive on `Book`. */
@@ -79,11 +96,31 @@ export interface AppliedProcessing {
   params: TransformParams
 }
 
+/**
+ * A configured cloud provider. Multiple can coexist; the user switches
+ * between them by setting {@link AiSettings.cloud.activeProviderId}.
+ * The API key for each provider lives in-memory only (`keyring.ts`),
+ * keyed by `provider.id` — never persisted (ADR-0004).
+ */
+export interface CloudProvider {
+  /** Stable unique id (crypto.randomUUID). */
+  id: string
+  /** Preset id from `providers.ts`, or `'custom'`. */
+  presetId: string
+  baseUrl: string
+  model: string
+  /** Optional user-customizable display label. */
+  label?: string
+}
+
 /** Additive `ai?` field on {@link Settings}. Key is NOT here (ADR-0004). */
 export interface AiSettings {
   enabled: boolean
   backend: 'in-browser' | 'cloud'
   inBrowser: { modelId: string }
-  cloud: { baseUrl: string; model: string }
-  modal: { beforeUpload: boolean; afterUpload: boolean }
+  cloud: {
+    providers: CloudProvider[]
+    /** Which provider in `providers` is active, or `null` if none configured. */
+    activeProviderId: string | null
+  }
 }

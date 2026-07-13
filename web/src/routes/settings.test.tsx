@@ -24,12 +24,14 @@ vi.mock('../lib/tts/client', () => ({
   },
 }))
 
-const setApiKeyMock = vi.fn<(key: string) => void>()
-const clearApiKeyMock = vi.fn<() => void>()
+const setApiKeyMock = vi.fn<(providerId: string, key: string) => void>()
+const clearApiKeyMock = vi.fn<(providerId: string) => void>()
 vi.mock('../lib/ai/keyring', () => ({
   getApiKey: (): string | undefined => undefined,
-  setApiKey: (key: string) => setApiKeyMock(key),
-  clearApiKey: () => clearApiKeyMock(),
+  setApiKey: (providerId: string, key: string) => setApiKeyMock(providerId, key),
+  clearApiKey: (providerId: string) => clearApiKeyMock(providerId),
+  clearAllKeys: () => undefined,
+  hasAnyKey: () => false,
 }))
 
 function withProviders(node: React.ReactElement) {
@@ -102,7 +104,7 @@ describe('Settings — voices & offline (M5)', () => {
     isStoredMock.mockImplementation((id) => Promise.resolve(id === voiceId('en_US-ryan-medium')))
     render(withProviders(<Settings />))
     await waitFor(() => expect(isStoredMock).toHaveBeenCalledTimes(8))
-    const removeBtn = screen.getByRole('button', { name: /remove Ryan/i })
+    const removeBtn = await screen.findByRole('button', { name: /remove Ryan/i })
     await act(async () => {
       fireEvent.click(removeBtn)
     })
@@ -218,9 +220,7 @@ describe('Settings — AI transforms (M6)', () => {
     expect(
       screen.getByRole('button', { name: /toggle AI transforms/i, pressed: false }),
     ).toBeInTheDocument()
-    // backend radio + fields are hidden until enabled
     expect(screen.queryByRole('button', { name: /use on-device backend/i })).not.toBeInTheDocument()
-    expect(screen.queryByLabelText(/cloud base url/i)).not.toBeInTheDocument()
   })
 
   it('reveals the config + default in-browser backend when enabled', async () => {
@@ -236,7 +236,7 @@ describe('Settings — AI transforms (M6)', () => {
     )
   })
 
-  it('swaps to cloud fields on backend change and persists it', async () => {
+  it('swaps to cloud provider list on backend change and persists it', async () => {
     await renderHydrated()
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
@@ -244,13 +244,12 @@ describe('Settings — AI transforms (M6)', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /use cloud backend/i }))
     })
-    expect(screen.getByLabelText(/cloud base url/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/cloud model/i)).toBeInTheDocument()
+    expect(screen.getByText(/no providers configured yet/i)).toBeInTheDocument()
     const stored = await getSetting<{ ai: { backend: string } }>('app')
     expect(stored?.ai.backend).toBe('cloud')
   })
 
-  it('saves the API key to the in-memory keyring (not to settings)', async () => {
+  it('adds a provider via the preset picker and saves key to keyring', async () => {
     await renderHydrated()
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
@@ -258,54 +257,22 @@ describe('Settings — AI transforms (M6)', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /use cloud backend/i }))
     })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /\+ add provider/i }))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /openrouter/i }))
+    })
     const keyInput = screen.getByLabelText(/cloud api key/i)
     await act(async () => {
-      fireEvent.change(keyInput, { target: { value: 'sk-secret-123' } })
+      fireEvent.change(keyInput, { target: { value: 'sk-or-secret' } })
     })
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /save api key/i }))
+      fireEvent.click(screen.getByRole('button', { name: /save key/i }))
     })
-    expect(setApiKeyMock).toHaveBeenCalledWith('sk-secret-123')
-    // The key must never be persisted to settings (ADR-0004)
+    expect(setApiKeyMock).toHaveBeenCalledWith(expect.any(String), 'sk-or-secret')
     const stored = await getSetting<{ ai?: { key?: string } }>('app')
     expect(stored?.ai?.key).toBeUndefined()
-  })
-
-  it('forgets the key via the keyring', async () => {
-    // Seed the in-memory keyring as "has key" so the Forget button enables.
-    setApiKeyMock.mockImplementation(() => undefined)
-    await renderHydrated()
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
-    })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /use cloud backend/i }))
-    })
-    const keyInput = screen.getByLabelText(/cloud api key/i)
-    await act(async () => {
-      fireEvent.change(keyInput, { target: { value: 'sk-x' } })
-    })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /save api key/i }))
-    })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /forget api key/i }))
-    })
-    expect(clearApiKeyMock).toHaveBeenCalled()
-  })
-
-  it('persists the modal-timing flags', async () => {
-    await renderHydrated()
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
-    })
-    const beforeCheckbox = screen.getByLabelText(/before upload/i)
-    expect(beforeCheckbox).not.toBeChecked()
-    await act(async () => {
-      fireEvent.click(beforeCheckbox)
-    })
-    const stored = await getSetting<{ ai: { modal: { beforeUpload: boolean } } }>('app')
-    expect(stored?.ai.modal.beforeUpload).toBe(true)
   })
 
   it('shows the audio cache Storage section with the current size', async () => {
@@ -342,5 +309,74 @@ describe('Settings — AI transforms (M6)', () => {
       fireEvent.click(clearButton)
     })
     expect(await screen.findByText(/Cached audio: 0 MB \/ 500 MB/)).toBeInTheDocument()
+  })
+
+  it('selects Standard as the default synth mode', async () => {
+    await renderHydrated()
+    expect(
+      screen.getByRole('button', { name: /Standard.*bounded by a cache budget/i, pressed: true }),
+    ).toBeInTheDocument()
+  })
+
+  it('switches synth mode and persists it', async () => {
+    await renderHydrated()
+    const offButton = screen.getByRole('button', { name: /^Off.*Synthesize on demand/i })
+    await act(async () => {
+      fireEvent.click(offButton)
+    })
+    expect(offButton).toHaveAttribute('aria-pressed', 'true')
+    const stored = await getSetting<{ synthesizeOnUpload: string }>('app')
+    expect(stored?.synthesizeOnUpload).toBe('off')
+  })
+
+  it('migrates a stored boolean true → standard', async () => {
+    await setSetting('app', { synthesizeOnUpload: true, fontScale: 1.25 })
+    render(withProviders(<Settings />))
+    await screen.findByText('×1.25')
+    expect(
+      screen.getByRole('button', { name: /Standard.*bounded by a cache budget/i, pressed: true }),
+    ).toBeInTheDocument()
+  })
+
+  it('migrates a stored boolean false → off', async () => {
+    await setSetting('app', { synthesizeOnUpload: false, fontScale: 1.25 })
+    render(withProviders(<Settings />))
+    await screen.findByText('×1.25')
+    expect(
+      screen.getByRole('button', { name: /^Off.*Synthesize on demand/i, pressed: true }),
+    ).toBeInTheDocument()
+  })
+
+  it('hides the budget slider when synth mode is Off', async () => {
+    await renderHydrated()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Off.*Synthesize on demand/i }))
+    })
+    expect(screen.queryByLabelText(/audio cache size/i)).not.toBeInTheDocument()
+  })
+
+  it('hides the budget slider and shows no-limit indicator when mode is No limit', async () => {
+    await renderHydrated()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /No limit.*power user/i }))
+    })
+    expect(screen.queryByLabelText(/audio cache size/i)).not.toBeInTheDocument()
+    expect(await screen.findByText(/\/ no limit/i)).toBeInTheDocument()
+  })
+
+  it('renders the cache budget slider with the default value', async () => {
+    await renderHydrated()
+    const slider = screen.getByLabelText(/audio cache size/i)
+    expect(slider).toHaveValue('500')
+  })
+
+  it('changes the cache budget and persists it', async () => {
+    await renderHydrated()
+    const slider = screen.getByLabelText(/audio cache size/i)
+    await act(async () => {
+      fireEvent.change(slider, { target: { value: '1000' } })
+    })
+    const stored = await getSetting<{ audioCacheBudgetMb: number }>('app')
+    expect(stored?.audioCacheBudgetMb).toBe(1000)
   })
 })

@@ -37,6 +37,46 @@ export function assemblePageText(items: readonly TextItem[]): string {
   return out
 }
 
+/**
+ * Compute the max font size for each paragraph on a page. Mirrors the
+ * paragraph-break logic of {@link assemblePageText} (gap > h * 1.5 = paragraph
+ * boundary) so the result aligns 1:1 with `splitParagraphs(assemblePageText(items))`.
+ * Empty paragraph groups (no text) are skipped to match `splitParagraphs`'s
+ * `.filter(Boolean)` behavior.
+ */
+export function assemblePageSignals(items: readonly TextItem[]): number[] {
+  if (items.length === 0) return []
+  const yOf = (it: TextItem): number => it.transform[5] ?? 0
+  const hOf = (it: TextItem): number => Math.abs(it.transform[3] ?? 0) || it.height || 12
+
+  const first = items[0]
+  if (!first) return []
+
+  const signals: number[] = []
+  let currentMax = hOf(first)
+  let currentHasText = first.str.length > 0
+  let prevY = yOf(first)
+  let prevH = hOf(first)
+
+  for (let i = 1; i < items.length; i++) {
+    const item = items[i]
+    if (!item) continue
+    const gap = prevY - yOf(item)
+    const h = prevH || hOf(item)
+    if (gap > h * 1.5) {
+      if (currentHasText) signals.push(currentMax)
+      currentMax = 0
+      currentHasText = false
+    }
+    if (item.str) currentHasText = true
+    currentMax = Math.max(currentMax, hOf(item))
+    prevY = yOf(item)
+    prevH = h
+  }
+  if (currentHasText) signals.push(currentMax)
+  return signals
+}
+
 export const pdfParser: Parser = {
   format: 'pdf' satisfies BookFormat,
   matches(file) {
@@ -57,11 +97,15 @@ export const pdfParser: Parser = {
       const title = metaTitle || titleFromFilename(file.name)
 
       const paragraphs: string[] = []
+      const headingSignals: number[] = []
       for (let i = 1; i <= doc.numPages; i++) {
         const page = await doc.getPage(i)
         const content = await page.getTextContent()
-        const text = assemblePageText(content.items.filter(hasStr).map(toTextItem))
+        const items = content.items.filter(hasStr).map(toTextItem)
+        const text = assemblePageText(items)
+        const pageSignals = assemblePageSignals(items)
         paragraphs.push(...splitParagraphs(text))
+        headingSignals.push(...pageSignals)
         page.cleanup()
       }
 
@@ -72,7 +116,13 @@ export const pdfParser: Parser = {
         )
       }
 
-      const chapters: ParsedChapter[] = [{ title, paragraphs }]
+      const chapters: ParsedChapter[] = [
+        {
+          title,
+          paragraphs,
+          headingSignals: headingSignals.length === paragraphs.length ? headingSignals : undefined,
+        },
+      ]
       return { title, chapters }
     } finally {
       await doc.cleanup()

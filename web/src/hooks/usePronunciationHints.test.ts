@@ -16,6 +16,7 @@ function stubEngine(
       if (opts.failWith) throw opts.failWith
       return candidates
     }),
+    detectOutline: vi.fn(async () => []),
   }
 }
 

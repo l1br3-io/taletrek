@@ -49,6 +49,24 @@ const DB_VERSION = 3
 /** Soft cap on the audio cache (M8). ~1,700 paragraphs at ~300 KB/para. */
 export const AUDIO_CACHE_BUDGET_BYTES = 500 * 1024 * 1024
 
+/** Private settings key for the current audio cache budget in bytes. Written
+ * by `SettingsProvider`, read by `getEffectiveAudioCacheBudget` (which runs
+ * inside the TTS worker — can't share module state with the main thread). */
+const AUDIO_CACHE_BUDGET_KEY = '__audioCacheBudgetBytes'
+
+/** Write the effective audio cache budget (bytes) to IDB so the TTS worker
+ * can read it. Called by `SettingsProvider` on hydration + budget changes. */
+export async function syncAudioCacheBudget(bytes: number): Promise<void> {
+  await setSetting(AUDIO_CACHE_BUDGET_KEY, bytes)
+}
+
+/** Read the effective audio cache budget from IDB, falling back to the
+ * 500 MB default. Safe to call from the TTS worker (shared IDB). */
+export async function getEffectiveAudioCacheBudget(): Promise<number> {
+  const stored = await getSetting<number>(AUDIO_CACHE_BUDGET_KEY)
+  return stored ?? AUDIO_CACHE_BUDGET_BYTES
+}
+
 let dbPromise: Promise<IDBPDatabase<TaleTrekDB>> | null = null
 
 /** Open (and memoize) the TaleTrek database. Safe to call repeatedly. */
@@ -265,6 +283,29 @@ export async function deleteChaptersByIds(ids: ChapterId[]): Promise<void> {
   await tx.done
 }
 
+/**
+ * Atomically replace all chapters for a book with `newChapters` and update
+ * `chapterCount` + `updatedAt` on the book record. Used by outline
+ * regeneration — the new chapter structure is unrelated to the old one, so
+ * all old chapters are deleted and fresh IDs are assigned. Runs in a single
+ * transaction so a crash mid-write never leaves the book chapter-less.
+ */
+export async function replaceBookChapters(bookId: BookId, newChapters: Chapter[]): Promise<void> {
+  const db = await getDB()
+  const tx = db.transaction(['chapters', 'books'], 'readwrite')
+  const chapterStore = tx.objectStore('chapters')
+  const chapterKeys = await chapterStore.index('bookId').getAllKeys(bookId)
+  await Promise.all(chapterKeys.map((key) => chapterStore.delete(key)))
+  await Promise.all(newChapters.map((c) => chapterStore.put(c)))
+  const book = await tx.objectStore('books').get(bookId)
+  if (book) {
+    book.chapterCount = newChapters.length
+    book.updatedAt = Date.now()
+    await tx.objectStore('books').put(book)
+  }
+  await tx.done
+}
+
 /** Store the raw uploaded blob for a book (source of truth). */
 export async function putBookFile(file: BookFile): Promise<void> {
   const db = await getDB()
@@ -305,10 +346,14 @@ export async function getAudioCacheEntry(key: string): Promise<AudioCacheRecord 
 
 /**
  * Insert (or overwrite) a cache entry. After the write, if total cache size
- * exceeds {@link AUDIO_CACHE_BUDGET_BYTES}, runs an LRU sweep. On
- * `QuotaExceededError`, evicts half the cache by `lastUsed` and retries once;
- * if it still fails the put is dropped silently (synthesis already succeeded
- * — the cache is best-effort).
+ * exceeds the effective budget, runs an LRU sweep. On `QuotaExceededError`,
+ * evicts half the cache by `lastUsed` and retries once; if it still fails
+ * the put is dropped silently (synthesis already succeeded — the cache is
+ * best-effort).
+ *
+ * A budget of `Infinity` (no-limit synth mode) disables the reactive sweep
+ * entirely; the QuotaExceeded panic path still runs because physical quota
+ * is unavoidable.
  */
 export async function putAudioCacheEntry(record: AudioCacheRecord): Promise<void> {
   const db = await getDB()
@@ -324,10 +369,15 @@ export async function putAudioCacheEntry(record: AudioCacheRecord): Promise<void
     }
     return
   }
-  // Reactive sweep: keep total at or below the soft cap after each write.
-  const size = await getAudioCacheSize()
-  if (size > AUDIO_CACHE_BUDGET_BYTES) {
-    await evictAudioCacheToBudget(AUDIO_CACHE_BUDGET_BYTES)
+  // Reactive sweep: keep total at or below the effective budget after each
+  // write. Skip when the budget is Infinity (no-limit mode lets the cache
+  // grow until the browser's physical quota is hit).
+  const budget = await getEffectiveAudioCacheBudget()
+  if (Number.isFinite(budget)) {
+    const size = await getAudioCacheSize()
+    if (size > budget) {
+      await evictAudioCacheToBudget(budget)
+    }
   }
 }
 
@@ -349,6 +399,20 @@ export async function getAudioCacheSize(): Promise<number> {
 export async function getAudioCacheKeysByBook(bookId: BookId): Promise<string[]> {
   const db = await getDB()
   return db.getAllKeysFromIndex('audioCache', 'bookId', bookId)
+}
+
+/**
+ * Delete specific cache entries by key. Used by per-book re-synthesize to
+ * clear the book's stale audio before rebuilding it (without touching other
+ * books' cache). Runs in a single transaction. Returns the count removed.
+ */
+export async function deleteAudioCacheKeys(keys: string[]): Promise<number> {
+  if (keys.length === 0) return 0
+  const db = await getDB()
+  const tx = db.transaction('audioCache', 'readwrite')
+  await Promise.all(keys.map((k) => tx.store.delete(k)))
+  await tx.done
+  return keys.length
 }
 
 /**

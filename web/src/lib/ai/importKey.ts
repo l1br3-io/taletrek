@@ -1,13 +1,14 @@
 /** Result of parsing a key file: either a usable config or an error message. */
 export type KeyFileResult =
-  | { ok: true; apiKey: string; baseUrl?: string; model?: string }
+  | { ok: true; apiKey: string; baseUrl?: string; model?: string; presetId?: string }
   | { ok: false; error: string }
 
 /**
  * Parse an imported key file. Accepts two shapes:
  *
- * 1. A JSON object with an `apiKey` string (and optional `baseUrl` / `model`):
- *    `{ "apiKey": "sk-…", "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini" }`
+ * 1. A JSON object with an `apiKey` string (and optional `baseUrl` / `model` /
+ *    `presetId`):
+ *    `{ "apiKey": "sk-…", "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini", "presetId": "openai" }`
  * 2. A plain-text file whose entire (trimmed) contents are the key itself.
  *
  * JSON without a usable `apiKey` is rejected; a non-JSON document is treated as
@@ -27,7 +28,12 @@ export function parseKeyFile(text: string): KeyFileResult {
 
   if (parsedOk) {
     if (parsed && typeof parsed === 'object' && 'apiKey' in parsed) {
-      const obj = parsed as { apiKey?: unknown; baseUrl?: unknown; model?: unknown }
+      const obj = parsed as {
+        apiKey?: unknown
+        baseUrl?: unknown
+        model?: unknown
+        presetId?: unknown
+      }
       const apiKey = obj.apiKey
       if (typeof apiKey !== 'string' || !apiKey.trim()) {
         return { ok: false, error: 'JSON "apiKey" must be a non-empty string.' }
@@ -35,7 +41,9 @@ export function parseKeyFile(text: string): KeyFileResult {
       const baseUrl =
         typeof obj.baseUrl === 'string' && obj.baseUrl.trim() ? obj.baseUrl : undefined
       const model = typeof obj.model === 'string' && obj.model.trim() ? obj.model : undefined
-      return { ok: true, apiKey: apiKey.trim(), baseUrl, model }
+      const presetId =
+        typeof obj.presetId === 'string' && obj.presetId.trim() ? obj.presetId : undefined
+      return { ok: true, apiKey: apiKey.trim(), baseUrl, model, presetId }
     }
     return { ok: false, error: 'JSON config must include an "apiKey" string field.' }
   }

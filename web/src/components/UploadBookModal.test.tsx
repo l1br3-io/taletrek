@@ -1,26 +1,38 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { TransformState } from '../hooks/useAiTransform'
+import type { OutlineState } from '../hooks/useOutline'
 import type { TransformOp } from '../lib/ai/types'
-import { PostProcessModal } from './PostProcessModal'
+import type { BookFormat } from '../types'
+import { UploadBookModal } from './UploadBookModal'
 
 function renderModal(
-  overrides: { state?: TransformState; onProcess?: (ops: TransformOp[]) => void } = {},
+  overrides: {
+    state?: TransformState
+    onProcess?: (ops: TransformOp[]) => void
+    outline?: {
+      state: OutlineState
+      onGenerate: () => void
+      onGenerateAi?: () => void
+      format: BookFormat
+    }
+  } = {},
 ) {
   const onProcess = overrides.onProcess ?? vi.fn()
   const onCancel = vi.fn()
   render(
-    <PostProcessModal
+    <UploadBookModal
       open
       state={overrides.state ?? { type: 'idle' }}
       onCancel={onCancel}
       onProcess={onProcess}
+      outline={overrides.outline}
     />,
   )
   return { onProcess, onCancel }
 }
 
-describe('PostProcessModal', () => {
+describe('UploadBookModal', () => {
   it('renders the four transform checkboxes', () => {
     renderModal()
     expect(screen.getByLabelText(/clean up/i)).toBeInTheDocument()
@@ -55,7 +67,10 @@ describe('PostProcessModal', () => {
     fireEvent.change(screen.getByLabelText(/target language code/i), { target: { value: 'fr' } })
     fireEvent.click(processBtn)
 
-    expect(onProcess).toHaveBeenCalledWith([{ kind: 'translate', target: 'fr' }] as never)
+    expect(onProcess).toHaveBeenCalledWith(
+      [{ kind: 'translate', target: 'fr' }] as never,
+      undefined,
+    )
   })
 
   it('emits ops in canonical order (cleanup → translate → summarize → simplify)', () => {
@@ -71,7 +86,7 @@ describe('PostProcessModal', () => {
 
   it('Cancel calls onCancel', () => {
     const { onCancel } = renderModal()
-    fireEvent.click(screen.getByRole('button', { name: /close/i }))
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }))
     expect(onCancel).toHaveBeenCalled()
   })
 
@@ -96,5 +111,94 @@ describe('PostProcessModal', () => {
     renderModal({ state: { type: 'error', message: 'No API key set.' } })
     expect(screen.getByText(/no api key set/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /process book/i })).toBeInTheDocument()
+  })
+})
+
+describe('UploadBookModal — outline section', () => {
+  it('renders the auto-detect button when provided for a non-EPUB book', () => {
+    renderModal({
+      outline: {
+        state: { type: 'idle' },
+        onGenerate: vi.fn(),
+        format: 'txt',
+      },
+    })
+    expect(screen.getByRole('button', { name: /auto-detect outline/i })).toBeInTheDocument()
+  })
+
+  it('hides the outline section for EPUB books', () => {
+    renderModal({
+      outline: {
+        state: { type: 'idle' },
+        onGenerate: vi.fn(),
+        format: 'epub',
+      },
+    })
+    expect(screen.queryByRole('button', { name: /auto-detect outline/i })).not.toBeInTheDocument()
+  })
+
+  it('hides the AI button when onGenerateAi is not provided', () => {
+    renderModal({
+      outline: { state: { type: 'idle' }, onGenerate: vi.fn(), format: 'pdf' },
+    })
+    expect(
+      screen.queryByRole('button', { name: /generate outline with ai/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows the AI button when onGenerateAi is provided', () => {
+    renderModal({
+      outline: {
+        state: { type: 'idle' },
+        onGenerate: vi.fn(),
+        onGenerateAi: vi.fn(),
+        format: 'pdf',
+      },
+    })
+    expect(screen.getByRole('button', { name: /generate outline with ai/i })).toBeInTheDocument()
+  })
+
+  it('calls onGenerate when the Auto-detect button is clicked', () => {
+    const onGenerate = vi.fn()
+    renderModal({
+      outline: { state: { type: 'idle' }, onGenerate, format: 'pdf' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /auto-detect outline/i }))
+    expect(onGenerate).toHaveBeenCalledOnce()
+  })
+
+  it('calls onGenerateAi when the AI button is clicked', () => {
+    const onGenerateAi = vi.fn()
+    renderModal({
+      outline: { state: { type: 'idle' }, onGenerate: vi.fn(), onGenerateAi, format: 'pdf' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /generate outline with ai/i }))
+    expect(onGenerateAi).toHaveBeenCalledOnce()
+  })
+
+  it('shows the done message when outline state is done', () => {
+    renderModal({
+      outline: {
+        state: { type: 'done', message: 'Outline generated — 5 chapters detected.' },
+        onGenerate: vi.fn(),
+        format: 'txt',
+      },
+    })
+    expect(screen.getByText(/5 chapters detected/)).toBeInTheDocument()
+  })
+
+  it('hides buttons while transforms are running', () => {
+    renderModal({
+      state: { type: 'running', fraction: 0.5, stage: 'Clean up (1/1)' },
+      outline: { state: { type: 'idle' }, onGenerate: vi.fn(), format: 'txt' },
+    })
+    expect(screen.queryByRole('button', { name: /auto-detect outline/i })).not.toBeInTheDocument()
+  })
+
+  it('hides the Process button while outline is running', () => {
+    renderModal({
+      outline: { state: { type: 'running' }, onGenerate: vi.fn(), format: 'txt' },
+    })
+    expect(screen.queryByRole('button', { name: /process book/i })).not.toBeInTheDocument()
   })
 })

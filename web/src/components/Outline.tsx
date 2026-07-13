@@ -6,7 +6,8 @@ interface OutlineProps {
   chapters: Chapter[]
   /** Index of the chapter currently playing/reading, or null. */
   currentChapterIndex: number | null
-  onSelect: (chapterIndex: number) => void
+  /** Select a chapter (and optionally a specific paragraph within it). */
+  onSelect: (chapterIndex: number, paragraphIndex?: number) => void
   onClose: () => void
 }
 
@@ -16,7 +17,6 @@ function chapterTitle(chapter: Chapter, fallbackIndex: number): string {
 }
 
 export function Outline({ open, chapters, currentChapterIndex, onSelect, onClose }: OutlineProps) {
-  // Close on Escape.
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -74,6 +74,25 @@ export function Outline({ open, chapters, currentChapterIndex, onSelect, onClose
                     <span className="mr-2 text-xs text-muted">{i + 1}.</span>
                     {chapterTitle(chapter, i)}
                   </button>
+                  {chapter.headings && chapter.headings.length > 0 && (
+                    <ul>
+                      {chapter.headings.map((heading) => (
+                        <li key={heading.paragraphIndex}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onSelect(chapter.index, heading.paragraphIndex)
+                              onClose()
+                            }}
+                            className="block w-full border-b border-line/30 px-4 py-2 pl-8 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-fg"
+                          >
+                            <span className="mr-1.5">·</span>
+                            {heading.title}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
               )
             })}

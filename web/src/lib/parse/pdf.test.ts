@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TextItem } from './pdf'
-import { assemblePageText, pdfParser } from './pdf'
+import { assemblePageSignals, assemblePageText, pdfParser } from './pdf'
+import { splitParagraphs } from './util'
 
 function item(str: string, y: number, size = 12): TextItem {
   return { str, transform: [size, 0, 0, size, 0, y], height: size }
@@ -34,6 +35,38 @@ describe('assemblePageText', () => {
 
   it('returns empty for no items', () => {
     expect(assemblePageText([])).toBe('')
+  })
+})
+
+describe('assemblePageSignals', () => {
+  it('returns one signal per paragraph, aligned with splitParagraphs', () => {
+    const items = [item('First paragraph.', 100, 12), item('Second paragraph.', 70, 12)]
+    const text = assemblePageText(items)
+    const signals = assemblePageSignals(items)
+    const paragraphs = splitParagraphs(text)
+    expect(signals.length).toBe(paragraphs.length)
+  })
+
+  it('captures the max font size per paragraph', () => {
+    const items = [item('Chapter 1', 100, 24), item('Body text.', 60, 12)]
+    const signals = assemblePageSignals(items)
+    expect(signals).toEqual([24, 12])
+  })
+
+  it('captures max font size across wrapped lines in the same paragraph', () => {
+    const items = [item('Line one', 100, 12), item('line two', 88, 14)]
+    const signals = assemblePageSignals(items)
+    expect(signals).toEqual([14])
+  })
+
+  it('returns empty for no items', () => {
+    expect(assemblePageSignals([])).toEqual([])
+  })
+
+  it('skips empty paragraph groups (no text)', () => {
+    const items = [item('', 100, 24), item('Real text.', 60, 12)]
+    const signals = assemblePageSignals(items)
+    expect(signals).toEqual([12])
   })
 })
 

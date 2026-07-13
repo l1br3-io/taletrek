@@ -4,7 +4,6 @@ import { Outline } from '../components/Outline'
 import { ParagraphTransformModal } from '../components/ParagraphTransformModal'
 import { PlayerBar } from '../components/PlayerBar'
 import { ReaderView } from '../components/ReaderView'
-import { UploadButton } from '../components/UploadButton'
 import { useSettings } from '../context/settings'
 import { useElementVisible } from '../hooks/useElementVisible'
 import { useMediaSession } from '../hooks/useMediaSession'
@@ -23,9 +22,7 @@ import {
   updateBookProgress,
   updateParagraph,
 } from '../lib/db'
-import { ingestBook } from '../lib/ingest'
-import { formatForFile } from '../lib/parse/util'
-import { scrollIntoViewCenter } from '../lib/scroll'
+import { scrollIntoViewCenter, scrollToTop } from '../lib/scroll'
 import { applyDeterministicOp, type DeterministicOp } from '../lib/transforms/deterministic'
 import { ttsClient } from '../lib/tts/client'
 import {
@@ -41,11 +38,6 @@ type LoadState =
   | { type: 'loading' }
   | { type: 'not-found' }
   | { type: 'ready'; book: Book; chapters: Chapter[] }
-
-type UploadState =
-  | { type: 'idle' }
-  | { type: 'parsing'; fileName: string }
-  | { type: 'error'; message: string }
 
 /** Resolve a saved position to a flat index into the cleaned paragraph stream. */
 function resolveInitialIndex(
@@ -136,11 +128,20 @@ function ReaderPane({
   }, [cleanedParagraphs])
   const currentChapterIndex = player.currentParagraph?.chapterIndex ?? null
   const handleSelectChapter = useCallback(
-    (chapterIndex: number) => {
-      const id = chapterFirstParagraphId.get(chapterIndex)
-      if (id) player.seekToParagraph(id)
+    (chapterIndex: number, paragraphIndex?: number) => {
+      let id: string | undefined
+      if (paragraphIndex !== undefined) {
+        const chapter = chapters.find((c) => c.index === chapterIndex)
+        if (chapter) id = `${chapter.id}:${paragraphIndex}`
+      } else {
+        id = chapterFirstParagraphId.get(chapterIndex)
+      }
+      if (id) {
+        player.seekToParagraph(id)
+        setTimeout(scrollToCurrent, 0)
+      }
     },
-    [chapterFirstParagraphId, player],
+    [chapters, chapterFirstParagraphId, player, scrollToCurrent],
   )
 
   // --- Per-paragraph transform (F8) ---
@@ -177,14 +178,29 @@ function ReaderPane({
     }
   }, [targetId, chapters, settings.cleaning])
 
+  // Auto re-synth: when a paragraph is transformed (F8) and synth mode is not
+  // 'off', fire-and-forget a synthesis of the new text so the cache stays
+  // populated for the power-user flow. Silent + best-effort — the engine
+  // swallows cache-write failures, and the next play will hit the cache if the
+  // synth has completed or re-synthesize on demand if not.
+  const resynthParagraph = useCallback(
+    (text: string) => {
+      if (settings.synthesizeOnUpload === 'off') return
+      if (!text.trim()) return
+      void ttsClient.synthesize({ text, voiceId: settings.voiceId, bookId: book.id })
+    },
+    [settings.synthesizeOnUpload, settings.voiceId, book.id],
+  )
+
   const commitTransform = useCallback(
     (chapterId: ChapterId, rawParagraphIndex: number, prevText: string, nextText: string) => {
       if (nextText === prevText) return
       undoStackRef.current.push({ chapterId, rawParagraphIndex, prevText })
       setUndoCount(undoStackRef.current.length)
       onParagraphChanged(chapterId, rawParagraphIndex, nextText)
+      resynthParagraph(nextText)
     },
-    [onParagraphChanged],
+    [onParagraphChanged, resynthParagraph],
   )
 
   const applyDet = useCallback(
@@ -220,6 +236,9 @@ function ReaderPane({
       setAiBusy(true)
       try {
         const engine = getAiEngine(settings.ai)
+        if (!engine) {
+          throw new Error('No cloud provider configured — add one in Settings.')
+        }
         const ready = await engine.isReady()
         if (!ready) {
           throw new Error(
@@ -243,7 +262,8 @@ function ReaderPane({
     if (!last) return
     setUndoCount(undoStackRef.current.length)
     onParagraphChanged(last.chapterId, last.rawParagraphIndex, last.prevText)
-  }, [onParagraphChanged])
+    resynthParagraph(last.prevText)
+  }, [onParagraphChanged, resynthParagraph])
 
   const openTransform = useCallback(() => {
     setTransformError(null)
@@ -302,6 +322,7 @@ function ReaderPane({
         onPrevChapter={player.prevChapter}
         onRateChange={(rate) => void update({ playbackRate: rate })}
         onGoToCurrent={scrollToCurrent}
+        onScrollToTop={() => scrollToTop()}
         onOpenOutline={cleanedChapters.length > 0 ? () => setOutlineOpen(true) : undefined}
         onTransformParagraph={openTransform}
       />
@@ -355,11 +376,10 @@ function ReaderRedirect() {
   return <p className="text-muted">Loading…</p>
 }
 
-/** `/reader/:bookId` — load by id, handle upload, render the pane. */
+/** `/reader/:bookId` — load by id, render the pane. */
 function ReaderLoader({ id }: { id: BookId }) {
   const navigate = useNavigate()
   const [load, setLoad] = useState<LoadState>({ type: 'loading' })
-  const [upload, setUpload] = useState<UploadState>({ type: 'idle' })
 
   useEffect(() => {
     let cancelled = false
@@ -407,50 +427,8 @@ function ReaderLoader({ id }: { id: BookId }) {
     [],
   )
 
-  const handleSelect = useCallback(
-    async (file: File): Promise<void> => {
-      if (!formatForFile(file.name)) {
-        setUpload({ type: 'error', message: `Unsupported file type: ${file.name}` })
-        return
-      }
-      setUpload({ type: 'parsing', fileName: file.name })
-      try {
-        const { book } = await ingestBook(file)
-        setUpload({ type: 'idle' })
-        navigate(`/reader/${book.id}`, { replace: true })
-      } catch (error) {
-        setUpload({
-          type: 'error',
-          message: error instanceof Error ? error.message : 'Failed to parse file',
-        })
-      }
-    },
-    [navigate],
-  )
-
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
-        <UploadButton onSelect={handleSelect} disabled={upload.type === 'parsing'} />
-      </div>
-
-      {upload.type === 'parsing' && (
-        <div
-          role="status"
-          className="rounded-lg border border-accent bg-accent-soft p-4 text-accent"
-        >
-          Parsing “{upload.fileName}”…
-        </div>
-      )}
-      {upload.type === 'error' && (
-        <div
-          role="alert"
-          className="rounded-lg border border-red-500 bg-red-500/10 p-4 text-red-400"
-        >
-          {upload.message}
-        </div>
-      )}
-
       {load.type === 'loading' && <p className="text-muted">Loading…</p>}
       {load.type === 'not-found' && <p className="text-muted">Book not found.</p>}
       {load.type === 'ready' && (

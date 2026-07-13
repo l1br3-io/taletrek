@@ -7,7 +7,65 @@
  * `chat.completions.create`.
  */
 
-import type { PronunciationCandidate, PronunciationCategory, TransformOp } from './types'
+import type {
+  AiOutlineChapter,
+  PronunciationCandidate,
+  PronunciationCategory,
+  TransformOp,
+} from './types'
+
+/**
+ * Build the JSON-mode messages for AI-based outline detection.
+ *
+ * Sends only short paragraphs (potential headings) with their indices to keep
+ * the prompt small. The LLM classifies which are chapter/part/section starts.
+ */
+export function buildOutlineMessages(paragraphs: string[]): CompletionMessages {
+  const CANDIDATE_MAX_LEN = 120
+  const MAX_CANDIDATES = 300
+  const candidates: { index: number; text: string }[] = []
+  for (let i = 0; i < paragraphs.length; i++) {
+    const text = paragraphs[i]?.trim() ?? ''
+    if (text.length === 0 || text.length > CANDIDATE_MAX_LEN) continue
+    candidates.push({ index: i, text })
+    if (candidates.length >= MAX_CANDIDATES) break
+  }
+  return {
+    json: true,
+    system:
+      'You identify chapter headings in book text. You receive a JSON list of short paragraphs that might be headings, each with its paragraph index. Identify which are chapter, part, book, or major section boundaries. Return ONLY JSON: {"chapters":[{"index":0,"title":"Chapter 1: Beginnings"}]}. Use the heading text as the title, cleaned of page artifacts. Skip page numbers, dates, ornamental lines, and body text fragments. If no headings are found, return {"chapters":[]}.',
+    user: JSON.stringify(candidates),
+  }
+}
+
+/**
+ * Defensively parse an AI outline-detection JSON response into typed chapters.
+ * Tolerates {chapters:[...]} or bare [...]; skips malformed rows. Never throws.
+ */
+export function parseOutlineCandidates(raw: string): AiOutlineChapter[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  const arr = Array.isArray((parsed as { chapters?: unknown })?.chapters)
+    ? (parsed as { chapters: unknown[] }).chapters
+    : Array.isArray(parsed)
+      ? parsed
+      : []
+  const out: AiOutlineChapter[] = []
+  for (const c of arr) {
+    if (!c || typeof c !== 'object') continue
+    const row = c as Record<string, unknown>
+    const idx = Number(row.index)
+    if (!Number.isInteger(idx) || idx < 0) continue
+    const title = String(row.title ?? '').trim()
+    if (!title) continue
+    out.push({ paragraphIndex: idx, title })
+  }
+  return out
+}
 
 /** Separates paragraphs in both the user input and the model's textual output. */
 export const PARAGRAPH_DELIMITER = '\n\n'

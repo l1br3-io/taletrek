@@ -46,6 +46,7 @@ function stubEngine(opts: { failWith?: Error } = {}): AiTransformEngine {
       return input.map((p) => `${op.kind}:${p}`)
     }),
     proposePronunciationHints: vi.fn(async (): Promise<PronunciationCandidate[]> => []),
+    detectOutline: vi.fn(async () => []),
   }
 }
 
@@ -245,6 +246,7 @@ describe('useAiTransform — abort', () => {
         },
       ),
       proposePronunciationHints: vi.fn(async () => []),
+      detectOutline: vi.fn(async () => []),
     }
 
     const { result } = renderHook(() => useAiTransform({ engine }))
