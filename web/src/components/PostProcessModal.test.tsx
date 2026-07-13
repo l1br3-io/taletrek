@@ -29,6 +29,13 @@ describe('PostProcessModal', () => {
     expect(screen.getByLabelText(/simplify/i)).toBeInTheDocument()
   })
 
+  it('renders a longer description and header explainer for each transform', () => {
+    renderModal()
+    expect(screen.getByText(/Your original file is kept/i)).toBeInTheDocument()
+    expect(screen.getByText(/BCP-47 code such as es, fr, or de/i)).toBeInTheDocument()
+    expect(screen.getByText(/easier listening/i)).toBeInTheDocument()
+  })
+
   it('shows per-op params only when an op is checked', () => {
     renderModal()
     expect(screen.queryByLabelText(/target language code/i)).not.toBeInTheDocument()

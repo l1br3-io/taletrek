@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { NavLink } from 'react-router'
 
 const links = [
@@ -8,16 +9,22 @@ const links = [
 ] as const
 
 export function Nav() {
+  const [open, setOpen] = useState(false)
   return (
     <header className="border-b border-line">
-      <nav className="mx-auto flex w-full max-w-3xl items-center justify-between px-5 py-4">
-        <NavLink to="/" className="flex items-center gap-2 font-semibold tracking-tight">
+      <nav className="mx-auto flex w-full max-w-3xl items-center justify-between px-4 py-3 sm:px-5 sm:py-4">
+        <NavLink
+          to="/"
+          className="flex items-center gap-2 font-semibold tracking-tight"
+          onClick={() => setOpen(false)}
+        >
           <span className="text-accent" aria-hidden>
             ❯~
           </span>
           <span>TaleTrek</span>
         </NavLink>
-        <ul className="flex items-center gap-1">
+        {/* Desktop links */}
+        <ul className="hidden items-center gap-1 sm:flex">
           {links.map((l) => (
             <li key={l.to}>
               <NavLink
@@ -35,7 +42,41 @@ export function Nav() {
             </li>
           ))}
         </ul>
+        {/* Mobile hamburger */}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="rounded-md border border-line px-2 py-1 text-muted sm:hidden"
+          aria-label="Toggle navigation"
+          aria-expanded={open}
+        >
+          ☰
+        </button>
       </nav>
+      {/* Mobile drawer */}
+      {open && (
+        <nav aria-label="Mobile navigation" className="border-t border-line bg-surface sm:hidden">
+          <ul className="mx-auto flex w-full max-w-3xl flex-col px-4 py-2">
+            {links.map((l) => (
+              <li key={l.to}>
+                <NavLink
+                  to={l.to}
+                  end={l.end}
+                  onClick={() => setOpen(false)}
+                  className={({ isActive }) =>
+                    [
+                      'block rounded-md px-3 py-2 text-sm transition-colors',
+                      isActive ? 'bg-elevated text-fg' : 'text-muted hover:text-fg',
+                    ].join(' ')
+                  }
+                >
+                  {l.label}
+                </NavLink>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )}
     </header>
   )
 }

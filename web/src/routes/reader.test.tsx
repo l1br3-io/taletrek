@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsProvider } from '../context/settings'
@@ -18,6 +18,18 @@ const parseInWorker = vi.fn()
 vi.mock('../lib/parse/client', () => ({
   parseInWorker: (...args: unknown[]) => parseInWorker(...args),
   _resetWorkerForTests: () => {},
+}))
+
+// Stub the TTS engine so Play in tests doesn't spin up the Piper worker.
+const synthesize = vi.fn()
+vi.mock('../lib/tts/client', () => ({
+  ttsClient: {
+    listVoices: async () => [],
+    isStored: async () => true,
+    download: async () => {},
+    remove: async () => {},
+    synthesize: (...args: unknown[]) => synthesize(...(args as [])),
+  },
 }))
 
 // Real DB reads/writes for seeding (importActual), but intercept the M5
@@ -68,7 +80,11 @@ beforeEach(async () => {
   _resetDBForTests()
   await _clearDBForTests()
   parseInWorker.mockReset()
+  synthesize.mockReset()
+  synthesize.mockResolvedValue({ audio: new Blob(['x']), synthMs: 1 })
   vi.mocked(updateBookProgress).mockClear()
+  // jsdom has no layout; stub scrollIntoView so F5/F4 can be asserted.
+  window.HTMLElement.prototype.scrollIntoView = vi.fn()
 })
 
 describe('Reader routing', () => {
@@ -170,6 +186,85 @@ describe('Reader resume (M5)', () => {
       { chapterIndex: 0, paragraphIndex: 2 },
       0.75,
     )
+  })
+})
+
+describe('Reader auto-scroll (F5)', () => {
+  it('does not scroll on mount, then scrolls on the first Play when a position is saved', async () => {
+    const id = newBookId()
+    await putBook(
+      makeBook({ id, title: 'Resume', position: { chapterIndex: 0, paragraphIndex: 2 } }),
+    )
+    await putChapters([
+      {
+        id: newChapterId(),
+        bookId: id,
+        index: 0,
+        title: 'Resume',
+        paragraphs: ['p0', 'p1', 'p2', 'p3'],
+      },
+    ])
+    renderAt(`/reader/${id}`)
+    await screen.findByRole('heading', { name: 'Resume' })
+    // No scroll on mount — the view respects users who browse before playing.
+    expect(window.HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    // First Play with a saved position brings the resumed paragraph into view.
+    expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled()
+  })
+
+  it('does not auto-scroll on Play when there is no saved position', async () => {
+    const id = newBookId()
+    await putBook(makeBook({ id, title: 'Fresh' }))
+    await putChapters([
+      {
+        id: newChapterId(),
+        bookId: id,
+        index: 0,
+        title: 'Fresh',
+        paragraphs: ['p0', 'p1'],
+      },
+    ])
+    renderAt(`/reader/${id}`)
+    await screen.findByRole('heading', { name: 'Fresh' })
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    expect(window.HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled()
+  })
+})
+
+describe('Reader per-paragraph transform (F8)', () => {
+  it('applies a deterministic transform in place and undoes it', async () => {
+    const id = newBookId()
+    await putBook(makeBook({ id, title: 'T' }))
+    await putChapters([
+      {
+        id: newChapterId(),
+        bookId: id,
+        index: 0,
+        title: 'T',
+        paragraphs: ['hello world', 'second line'],
+      },
+    ])
+    renderAt(`/reader/${id}`)
+    await screen.findByRole('heading', { name: 'T' })
+
+    // Tap the paragraph to make it the current target.
+    fireEvent.click(screen.getByText('hello world'))
+    fireEvent.click(screen.getByRole('button', { name: 'More playback controls' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Transform paragraph/i })).toBeEnabled(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Transform paragraph/i }))
+
+    // Apply a deterministic uppercase transform.
+    fireEvent.click(screen.getByRole('button', { name: 'UPPER' }))
+    expect(screen.getAllByText('HELLO WORLD').length).toBeGreaterThan(0)
+
+    // Undo reverts the raw source paragraph.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.getByText('hello world')).toBeInTheDocument()
+    expect(screen.queryByText('HELLO WORLD')).not.toBeInTheDocument()
   })
 })
 

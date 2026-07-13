@@ -15,6 +15,7 @@ const CSP = [
   "default-src 'self'",
   "connect-src 'self' https: http://localhost:* http://127.0.0.1:*",
   "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self'",
   "worker-src 'self' blob:",

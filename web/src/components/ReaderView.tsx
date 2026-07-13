@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from 'react'
+import type { KeyboardEvent, RefObject } from 'react'
 import type { Book, Chapter } from '../types'
 
 interface ReaderViewProps {
@@ -8,6 +8,11 @@ interface ReaderViewProps {
   currentParagraphId?: string | null
   /** Tap a paragraph to seek playback there. */
   onSeekParagraph?: (id: string) => void
+  /**
+   * Attached to the active `<p>` (the one matching `currentParagraphId`) so the
+   * container can scroll it into view. Re-attached as the active paragraph moves.
+   */
+  activeParagraphRef?: RefObject<HTMLParagraphElement | null>
 }
 
 interface ParagraphItem {
@@ -24,12 +29,13 @@ export function ReaderView({
   chapters,
   currentParagraphId,
   onSeekParagraph,
+  activeParagraphRef,
 }: ReaderViewProps) {
   const multi = chapters.length > 1
   return (
-    <article className="space-y-8">
+    <article className="space-y-6 sm:space-y-8">
       <header className="space-y-1">
-        <h1 className="text-2xl font-bold">{book.title}</h1>
+        <h1 className="text-2xl font-bold sm:text-3xl">{book.title}</h1>
         <p className="text-sm uppercase tracking-wide text-muted">
           {book.format} · {chapters.length} chapter{multi ? 's' : ''}
         </p>
@@ -57,6 +63,7 @@ export function ReaderView({
               return (
                 <p
                   key={item.id}
+                  ref={active && activeParagraphRef ? activeParagraphRef : undefined}
                   className={
                     active
                       ? 'rounded bg-accent-soft p-2 -mx-2 ring-1 ring-accent'

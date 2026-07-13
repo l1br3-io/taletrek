@@ -34,10 +34,16 @@ class FakeAudio implements AudioController {
   private playShouldThrow = false
   private _currentTime = 0
   private _duration = 0
+  /** When set, the next `loadAndPlay` fires a spurious `ended` mid-swap. */
+  fireEndedOnLoad = false
 
   async loadAndPlay(src: string): Promise<void> {
     this.loadedSrcs.push(src)
     if (this.playShouldThrow) throw new Error('play blocked')
+    if (this.fireEndedOnLoad) {
+      this.fireEndedOnLoad = false
+      this.endedHandler?.()
+    }
   }
   async resume(): Promise<void> {
     this.playCount++
@@ -407,6 +413,26 @@ describe('useParagraphPlayer — pre-render queue (lookahead=3)', () => {
     expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:1`)
     expect(result.current.status.type).toBe('playing')
     expect(engine.calls.length).toBe(callsBeforeEnded)
+  })
+
+  it('ignores a spurious ended fired during a buffered advance', async () => {
+    const audio = new FakeAudio()
+    const { result } = renderPlayer(oneChapter(['A.', 'B.', 'C.']), { audio, lookahead: 3 })
+    await act(async () => {
+      result.current.play()
+    })
+    await waitFor(() => {
+      expect(result.current.bufferedAhead).toBeGreaterThan(0)
+    })
+    // The next advance pulls para1 from the buffer; simulate a spurious `ended`
+    // firing during that src swap (as browsers can on src changes). Without the
+    // in-flight guard this skips para1 and jumps straight to para2.
+    audio.fireEndedOnLoad = true
+    await act(async () => {
+      audio.emitEnded()
+    })
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:1`)
+    expect(audio.loadedSrcs).toHaveLength(2)
   })
 
   it('caps look-ahead at the configured depth (back-pressure)', async () => {

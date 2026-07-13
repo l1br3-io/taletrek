@@ -1,5 +1,6 @@
 ---
 description: Snapshot of project state — milestone, task progress, resume notes, working tree, with the next task front and center. Add "verify" to also run pnpm verify (typecheck + test + lint + build).
+model: opencode/big-pickle
 ---
 
 # /status

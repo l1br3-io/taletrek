@@ -1,5 +1,6 @@
 import * as piper from '@mintplex-labs/piper-tts-web'
 import type { VoiceId } from '../../types'
+import { normalizeForSpeech } from './normalize'
 import type { SynthesisRequest, SynthesisResult, TtsEngine, Voice } from './types'
 import { CURATED_VOICES } from './voices'
 import { WASM_PATHS } from './wasm-paths'
@@ -39,7 +40,7 @@ export class PiperEngine implements TtsEngine {
   async synthesize(req: SynthesisRequest): Promise<SynthesisResult> {
     const session = await this.sessionFor(req.voiceId)
     const t0 = performance.now()
-    const audio = await session.predict(req.text)
+    const audio = await session.predict(normalizeForSpeech(req.text))
     return { audio, synthMs: performance.now() - t0 }
   }
 

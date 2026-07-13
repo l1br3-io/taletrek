@@ -192,6 +192,27 @@ export async function getChaptersByBook(bookId: BookId): Promise<Chapter[]> {
   return chapters.sort((a, b) => a.index - b.index)
 }
 
+/**
+ * Overwrite a single paragraph's text within a chapter (M6 per-paragraph
+ * transform). Returns the updated chapter, or `undefined` if the chapter or
+ * paragraph index is out of range.
+ */
+export async function updateParagraph(
+  chapterId: ChapterId,
+  paragraphIndex: number,
+  text: string,
+): Promise<Chapter | undefined> {
+  const db = await getDB()
+  const chapter = await db.get('chapters', chapterId)
+  if (!chapter) return undefined
+  if (paragraphIndex < 0 || paragraphIndex >= chapter.paragraphs.length) return undefined
+  const paragraphs = chapter.paragraphs.slice()
+  paragraphs[paragraphIndex] = text
+  const next: Chapter = { ...chapter, paragraphs }
+  await db.put('chapters', next)
+  return next
+}
+
 /** Remove all chapters belonging to a book. */
 export async function deleteChaptersByBook(bookId: BookId): Promise<void> {
   const db = await getDB()

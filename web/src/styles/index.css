@@ -49,6 +49,13 @@ body,
   height: 100%;
 }
 
+/* Prevent horizontal overflow (e.g. long unbreakable words) from creating a
+   horizontal scrollbar that shifts the centered column off-axis on narrow
+   viewports. Vertical scrolling is unaffected. */
+html {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   background-color: var(--color-bg);
@@ -67,4 +74,5 @@ body {
   font-family: var(--font-reader);
   font-size: calc(1.125rem * var(--font-scale));
   line-height: 1.7;
+  overflow-wrap: break-word;
 }
