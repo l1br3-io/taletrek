@@ -207,6 +207,12 @@ export function useParagraphPlayer({
 
   const audioRef = useRef<AudioController>(audio ?? createAudioController())
   const queueRef = useRef<Map<string, PrerenderedChunk>>(new Map())
+  // True while a `playIndex` call is mid-flight (synthesizing or swapping the
+  // `<audio>` src). Suppresses spurious `ended` events that browsers can fire
+  // when `src` changes mid-loading — without this, a buffered (gapless) advance
+  // stays in the 'playing' state and a spurious `ended` slips past the status
+  // guard, skipping a paragraph (heard as the reader "reading too fast").
+  const advancingRef = useRef(false)
 
   const revokeUrl = useCallback(() => {
     if (urlRef.current !== null) {
@@ -275,47 +281,51 @@ export function useParagraphPlayer({
       pointerRef.current = index
       setCurrentParagraphId(para.id)
       prune(index)
+      advancingRef.current = true
+      try {
+        const buffered = queueRef.current.get(para.id)
+        if (!buffered) {
+          setStatus({ type: 'loading' })
+          try {
+            const result = await engineRef.current.synthesize({
+              text: para.text,
+              voiceId: voiceIdRef.current,
+            })
+            if (token !== tokenRef.current) return
+            queueRef.current.set(para.id, { blob: result.audio, index })
+          } catch (error) {
+            if (token !== tokenRef.current) return
+            setStatus({
+              type: 'error',
+              message: error instanceof Error ? error.message : 'synthesis failed',
+            })
+            return
+          }
+        }
 
-      const buffered = queueRef.current.get(para.id)
-      if (!buffered) {
-        setStatus({ type: 'loading' })
+        if (token !== tokenRef.current) return
+        const chunk = queueRef.current.get(para.id)
+        if (!chunk) return
+        revokeUrl()
+        const url = URL.createObjectURL(chunk.blob)
+        urlRef.current = url
         try {
-          const result = await engineRef.current.synthesize({
-            text: para.text,
-            voiceId: voiceIdRef.current,
-          })
-          if (token !== tokenRef.current) return
-          queueRef.current.set(para.id, { blob: result.audio, index })
+          await audioRef.current.loadAndPlay(url)
         } catch (error) {
           if (token !== tokenRef.current) return
           setStatus({
             type: 'error',
-            message: error instanceof Error ? error.message : 'synthesis failed',
+            message: error instanceof Error ? error.message : 'playback failed',
           })
           return
         }
-      }
-
-      if (token !== tokenRef.current) return
-      const chunk = queueRef.current.get(para.id)
-      if (!chunk) return
-      revokeUrl()
-      const url = URL.createObjectURL(chunk.blob)
-      urlRef.current = url
-      try {
-        await audioRef.current.loadAndPlay(url)
-      } catch (error) {
         if (token !== tokenRef.current) return
-        setStatus({
-          type: 'error',
-          message: error instanceof Error ? error.message : 'playback failed',
-        })
-        return
+        setStatus({ type: 'playing', paragraphId: para.id })
+        syncBufferedAhead()
+        void primeAhead(index + 1)
+      } finally {
+        if (token === tokenRef.current) advancingRef.current = false
       }
-      if (token !== tokenRef.current) return
-      setStatus({ type: 'playing', paragraphId: para.id })
-      syncBufferedAhead()
-      void primeAhead(index + 1)
     },
     [paragraphs, primeAhead, prune, revokeUrl, syncBufferedAhead],
   )
@@ -330,10 +340,12 @@ export function useParagraphPlayer({
   )
 
   // Auto-advance on `ended`. Guarded: a spurious `ended` can fire when we set a
-  // new `src` mid-loading. Only advance from a genuine 'playing' state.
+  // new `src` mid-loading. Only advance from a genuine 'playing' state, and
+  // never while an advance is already in flight (see `advancingRef`).
   // Sequential advance does NOT bump the generation — the buffer is preserved.
   useEffect(() => {
     const unsubscribe = audioRef.current.onEnded(() => {
+      if (advancingRef.current) return
       if (statusRef.current.type !== 'playing') return
       const nextIndex = pointerRef.current + 1
       if (nextIndex < paragraphs.length) {
@@ -413,6 +425,7 @@ export function useParagraphPlayer({
     queueRef.current.clear()
     genRef.current++
     tokenRef.current++
+    advancingRef.current = false
     pointerRef.current = 0
     setCurrentParagraphId(null)
     setStatus({ type: 'idle' })

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import { createRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { type Book, bookId, type Chapter, chapterId } from '../types'
 import { ReaderView } from './ReaderView'
@@ -54,5 +55,18 @@ describe('ReaderView', () => {
     const { container } = render(<ReaderView book={book} chapters={[chapter(['No click.'])]} />)
     const p = container.querySelector('.tt-reader-text p')
     expect(p?.className).not.toMatch(/cursor/)
+  })
+
+  it('attaches activeParagraphRef to the active paragraph', () => {
+    const ref = createRef<HTMLParagraphElement>()
+    render(
+      <ReaderView
+        book={book}
+        chapters={[chapter(['First.', 'Second.'])]}
+        currentParagraphId={`${chapterId('c1')}:1`}
+        activeParagraphRef={ref}
+      />,
+    )
+    expect(ref.current?.textContent).toBe('Second.')
   })
 })

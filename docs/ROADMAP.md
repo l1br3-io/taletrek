@@ -79,12 +79,31 @@ The app becomes a complete reading companion. A library view manages multiple bo
 
 ---
 
+## Beyond the core — M6 & M7
+
+With the read-aloud core (M0–M5) shipped, two follow-on milestones deepen the experience: **M6** adds an optional AI transform layer, and **M7** makes the reader comfortable on any screen.
+
+| # | Milestone | Ships (user-visible) |
+|---|-----------|----------------------|
+| M6 | **AI Transforms** | Optional post-processing (on-device WebLLM or your own OpenAI-compatible cloud key) that cleans OCR noise, translates, summarizes, or simplifies a book — plus per-paragraph transforms (AI + deterministic) and an importable key/config |
+| M7 | **Reader UX & Mobile** | A responsive, mobile-first reader: a chapter outline, minimized playback controls with an overflow menu, a "go to current paragraph" affordance, and auto-scroll to the resumed position on first Play |
+
+### M6 — AI Transforms
+An optional layer on top of ingest. Disabled by default, so it adds zero overhead until the user opts in. Two interchangeable backends behind one engine contract: **on-device WebLLM** (a Qwen2.5 model running via WebGPU, cached in OPFS for offline reuse) and **cloud** (any OpenAI-compatible endpoint, your key, held in-memory only and never written to disk). The v1 transforms — cleanup, translate, summarize, simplify — run over the whole book from the library; results replace the source text and the original file stays recoverable via re-parse. Pronunciation hints propose candidates the user reviews into the global dictionary.
+
+The M6 extension adds: a **per-paragraph transform** menu in the reader (tap a paragraph, then clean up, translate, summarize, or simplify just that paragraph with AI — or apply deterministic adjustments: casing, whitespace/quote normalization, and find-and-replace); an improved transform modal with clear hierarchy and per-transform descriptions; and **importable cloud credentials** (paste, or import a `.txt` key / a `.json` config carrying `apiKey` and optionally `baseUrl`/`model`). Per-paragraph edits replace the source paragraph in place with an in-memory undo stack (full revert is always available via re-parse).
+
+### M7 — Reader UX & Mobile
+The reader becomes comfortable on a phone. The layout is mobile-first: the nav collapses into a hamburger drawer below `sm`, spacing and type scale adapt, and the playback bar collapses to primary controls (prev ¶, play/pause, next ¶) with a **`⋯` overflow menu** for chapter skip, stop, speed, outline, "go to current paragraph", and "transform paragraph". A **chapter outline** drawer lists chapters, highlights the current one, and jumps on tap. A **"go to current paragraph"** button (in the overflow menu, plus a floating button that appears when the active paragraph is scrolled out of view) recenters the reader on what's playing. And on the **first Play** of a session, if the book has a saved position, the view automatically scrolls to the resumed paragraph — so pressing play drops you exactly where you left off.
+
+---
+
 ## Future directions *(not current priorities)*
 
-Revisited once the read-aloud core is shipped and adopted:
+Revisited once the read-aloud core + M6/M7 are shipped and adopted:
 
 - **Native wrappers** — package the PWA with Capacitor for optional App Store / Play Store distribution, unlocking native background services and push notifications.
-- **Reading intelligence** — automatic chapter detection, bookmark syncing, skip-by-paragraph and skip-by-chapter controls, and sleep timers.
+- **Reading intelligence** — bookmark syncing, skip-by-paragraph and skip-by-chapter controls, and sleep timers. *(Chapter outline + skip-by-chapter landed in M7.)*
 - **Platform & ecosystem** — cross-platform desktop app, browser extension to read web articles aloud, and casting to Bluetooth speakers or CarPlay.
 - **Advanced voices** — support for additional open-source TTS engines (Coqui, eSpeak), custom voice training, and multi-language / multilingual books.
 - **Accessibility** — high-contrast themes, dyslexia-friendly fonts, and screen-reader-optimized navigation.
@@ -93,4 +112,4 @@ Revisited once the read-aloud core is shipped and adopted:
 
 ## Status
 
-M0–M5 shipped (read-aloud core complete). M6 (AI Transforms) in progress — code complete, browser-verified, hardware gates (WebLLM Vulkan + iPhone WebGPU) pending. See [`AGENTS.md`](../AGENTS.md) for the current milestone status table + [`tasks/todo.md`](../tasks/todo.md) for checkpoint-level tracking.
+M0–M5 shipped (read-aloud core complete). M6 (AI Transforms, incl. per-paragraph transforms + importable key/config) and M7 (Reader UX & Mobile) shipped. See [`AGENTS.md`](../AGENTS.md) for the current milestone status table.

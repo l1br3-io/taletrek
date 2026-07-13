@@ -11,11 +11,31 @@ interface PostProcessModalProps {
   initialOps?: TransformOp[]
 }
 
-const OPS: { kind: TransformKind; label: string; hint: string }[] = [
-  { kind: 'cleanup', label: 'Clean up', hint: 'Fix OCR noise, page numbers, broken hyphenation' },
-  { kind: 'translate', label: 'Translate', hint: 'Translate into another language' },
-  { kind: 'summarize', label: 'Summarize', hint: 'Condense to a shorter listen' },
-  { kind: 'simplify', label: 'Simplify', hint: 'Rewrite at a simpler reading level' },
+const OPS: { kind: TransformKind; label: string; hint: string; desc: string }[] = [
+  {
+    kind: 'cleanup',
+    label: 'Clean up',
+    hint: 'Fix OCR noise, page numbers, broken hyphenation',
+    desc: 'Repairs scanned-book text before TTS — fixes OCR errors, drops page numbers and “Chapter N” headers, and rejoins soft-hyphenated line breaks.',
+  },
+  {
+    kind: 'translate',
+    label: 'Translate',
+    hint: 'Translate into another language',
+    desc: 'Renders the whole book in a target language. Use a BCP-47 code such as es, fr, or de.',
+  },
+  {
+    kind: 'summarize',
+    label: 'Summarize',
+    hint: 'Condense to a shorter listen',
+    desc: 'Condenses the narrative to a fraction of its length — a shorter listen with the main beats and order preserved.',
+  },
+  {
+    kind: 'simplify',
+    label: 'Simplify',
+    hint: 'Rewrite at a simpler reading level',
+    desc: 'Rewrites each paragraph at a chosen reading level (1 simplest, 5 hardest) for easier listening.',
+  },
 ]
 
 function seedSelection(initialOps: TransformOp[] | undefined): Record<TransformKind, boolean> {
@@ -107,9 +127,16 @@ export function PostProcessModal({
       aria-labelledby="ppm-title"
     >
       <div className="w-full max-w-md space-y-4 rounded-xl border border-line bg-surface p-5">
-        <h2 id="ppm-title" className="text-lg font-semibold">
-          Process book
-        </h2>
+        <header className="space-y-1">
+          <h2 id="ppm-title" className="text-lg font-semibold">
+            Process book
+          </h2>
+          <p className="text-xs text-muted">
+            Pick one or more transforms to run on the book’s text before TTS. Your original file is
+            kept — you can always re-parse it to revert. After processing, the book resumes at the
+            start of its current chapter.
+          </p>
+        </header>
 
         {state.type === 'running' ? (
           <div className="space-y-2">
@@ -135,10 +162,6 @@ export function PostProcessModal({
           </p>
         ) : (
           <>
-            <p className="text-xs text-muted">
-              Optional. Pick the transforms to run now — the book resumes at the start of its
-              current chapter afterwards. Cancel to skip and read as-is.
-            </p>
             {state.type === 'error' && (
               <p className="rounded-md border border-red-500/50 p-2 text-xs text-red-400">
                 {state.message}
@@ -148,7 +171,13 @@ export function PostProcessModal({
               {OPS.map((op) => {
                 const checked = selected[op.kind]
                 return (
-                  <li key={op.kind} className="space-y-1">
+                  <li
+                    key={op.kind}
+                    className={[
+                      'rounded-lg border p-3 transition-colors',
+                      checked ? 'border-accent bg-accent-soft/40' : 'border-line',
+                    ].join(' ')}
+                  >
                     <label className="flex items-start gap-2 text-sm">
                       <input
                         type="checkbox"
@@ -161,7 +190,8 @@ export function PostProcessModal({
                       />
                       <span>
                         <span className="font-medium">{op.label}</span>
-                        <span className="block text-xs text-muted">{op.hint}</span>
+                        <span className="ml-2 text-xs font-normal text-muted">{op.hint}</span>
+                        <span className="mt-1 block text-xs text-muted">{op.desc}</span>
                       </span>
                     </label>
                     {checked && op.kind === 'translate' && (
@@ -172,7 +202,7 @@ export function PostProcessModal({
                         disabled={!interactive}
                         aria-label="Target language code"
                         placeholder="es"
-                        className="ml-6 w-24 rounded-md border border-line bg-surface px-2 py-1 text-sm"
+                        className="mt-2 ml-6 w-24 rounded-md border border-line bg-surface px-2 py-1 text-sm"
                       />
                     )}
                     {checked && op.kind === 'summarize' && (
@@ -185,7 +215,7 @@ export function PostProcessModal({
                         onChange={(e) => setRatio(Number(e.target.value))}
                         disabled={!interactive}
                         aria-label="Summarize to fraction of length"
-                        className="ml-6 w-48 accent-accent"
+                        className="mt-2 ml-6 w-48 accent-accent"
                       />
                     )}
                     {checked && op.kind === 'simplify' && (
@@ -198,7 +228,7 @@ export function PostProcessModal({
                         onChange={(e) => setLevel(Number(e.target.value))}
                         disabled={!interactive}
                         aria-label="Simplify reading level (1 simplest)"
-                        className="ml-6 w-48 accent-accent"
+                        className="mt-2 ml-6 w-48 accent-accent"
                       />
                     )}
                   </li>

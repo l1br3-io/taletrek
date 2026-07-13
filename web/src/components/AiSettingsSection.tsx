@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { parseKeyFile } from '../lib/ai/importKey'
 import { clearApiKey, getApiKey, setApiKey } from '../lib/ai/keyring'
 import type { AiSettings } from '../lib/ai/types'
 
@@ -30,6 +31,8 @@ const BACKENDS = [
 export function AiSettingsSection({ ai, onChange }: AiSettingsSectionProps) {
   const [hasKey, setHasKey] = useState(() => !!getApiKey())
   const [keyDraft, setKeyDraft] = useState('')
+  const [importErr, setImportErr] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const patch = (p: Partial<AiSettings>): void => {
     onChange({ ...ai, ...p })
@@ -46,6 +49,30 @@ export function AiSettingsSection({ ai, onChange }: AiSettingsSectionProps) {
     clearApiKey()
     setHasKey(false)
     setKeyDraft('')
+  }
+
+  const importKey = (file: File): void => {
+    setImportErr(null)
+    const reader = new FileReader()
+    reader.onload = () => {
+      const text = typeof reader.result === 'string' ? reader.result : ''
+      const result = parseKeyFile(text)
+      if (!result.ok) {
+        setImportErr(result.error)
+        return
+      }
+      setApiKey(result.apiKey)
+      setHasKey(true)
+      setKeyDraft('')
+      const cloudPatch: Partial<AiSettings['cloud']> = {}
+      if (result.baseUrl) cloudPatch.baseUrl = result.baseUrl
+      if (result.model) cloudPatch.model = result.model
+      if (Object.keys(cloudPatch).length > 0) {
+        patch({ cloud: { ...ai.cloud, ...cloudPatch } })
+      }
+    }
+    reader.onerror = () => setImportErr('Could not read file.')
+    reader.readAsText(file)
   }
 
   return (
@@ -171,11 +198,35 @@ export function AiSettingsSection({ ai, onChange }: AiSettingsSectionProps) {
                   >
                     Forget
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    aria-label="Import API key from file"
+                    className="rounded-md border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:border-accent hover:text-accent"
+                  >
+                    Import
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".txt,.json,application/json,text/plain"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]
+                      if (f) importKey(f)
+                      e.target.value = ''
+                    }}
+                  />
                 </div>
+                {importErr && (
+                  <span role="alert" className="block text-xs text-red-400">
+                    {importErr}
+                  </span>
+                )}
                 <span className="block text-xs text-muted">
                   {hasKey
                     ? 'Key held in memory for this tab only — not stored, cleared on close.'
-                    : 'Never written to disk. Use a scoped, spend-capped key.'}
+                    : 'Never written to disk. Use a scoped, spend-capped key. Import accepts a .txt key or a .json config with apiKey (and optionally baseUrl/model).'}
                 </span>
               </div>
             </div>

@@ -1,21 +1,41 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { Outline } from '../components/Outline'
+import { ParagraphTransformModal } from '../components/ParagraphTransformModal'
 import { PlayerBar } from '../components/PlayerBar'
 import { ReaderView } from '../components/ReaderView'
 import { UploadButton } from '../components/UploadButton'
 import { useSettings } from '../context/settings'
+import { useElementVisible } from '../hooks/useElementVisible'
 import { useMediaSession } from '../hooks/useMediaSession'
 import {
   flattenParagraphs,
   type ParagraphRef,
   useParagraphPlayer,
 } from '../hooks/useParagraphPlayer'
-import { cleanChapters } from '../lib/clean'
-import { getBook, getChaptersByBook, getMostRecentBook, updateBookProgress } from '../lib/db'
+import { getAiEngine } from '../lib/ai/client'
+import type { TransformOp } from '../lib/ai/types'
+import { cleanChapters, cleanParagraphsWithOrigins } from '../lib/clean'
+import {
+  getBook,
+  getChaptersByBook,
+  getMostRecentBook,
+  updateBookProgress,
+  updateParagraph,
+} from '../lib/db'
 import { ingestBook } from '../lib/ingest'
 import { formatForFile } from '../lib/parse/util'
+import { scrollIntoViewCenter } from '../lib/scroll'
+import { applyDeterministicOp, type DeterministicOp } from '../lib/transforms/deterministic'
 import { ttsClient } from '../lib/tts/client'
-import { type Book, type BookId, type BookPosition, bookId, type Chapter } from '../types'
+import {
+  type Book,
+  type BookId,
+  type BookPosition,
+  bookId,
+  type Chapter,
+  type ChapterId,
+} from '../types'
 
 type LoadState =
   | { type: 'loading' }
@@ -47,7 +67,15 @@ function toPosition(p: ParagraphRef): BookPosition {
 }
 
 /** Playback view for a loaded book — owns the player hook (keyed by book.id). */
-function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
+function ReaderPane({
+  book,
+  chapters,
+  onParagraphChanged,
+}: {
+  book: Book
+  chapters: Chapter[]
+  onParagraphChanged: (chapterId: ChapterId, rawParagraphIndex: number, text: string) => void
+}) {
   const { settings, update } = useSettings()
   const cleanedChapters = useMemo(
     () => cleanChapters(chapters, settings.cleaning),
@@ -77,6 +105,151 @@ function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
     playbackRate: settings.playbackRate,
   })
 
+  // --- Scroll-to-current infrastructure (F4/F5) ---
+  const activeParagraphRef = useRef<HTMLParagraphElement | null>(null)
+  const activeInView = useElementVisible(activeParagraphRef, player.currentParagraphId)
+  const scrollToCurrent = useCallback(() => scrollIntoViewCenter(activeParagraphRef.current), [])
+
+  // On the first Play of this mount, if there is a saved playback position,
+  // bring the resumed paragraph into view (F5). Honors users who browse before
+  // playing: the jump only fires once, and only when a position was saved.
+  const autoScrolledRef = useRef(false)
+  const playRef = useRef(player.play)
+  playRef.current = player.play
+  const handlePlay = useCallback(() => {
+    if (!autoScrolledRef.current && book.position) {
+      autoScrolledRef.current = true
+      scrollIntoViewCenter(activeParagraphRef.current)
+    }
+    playRef.current()
+  }, [book.position])
+
+  // --- Outline (F2) ---
+  const [outlineOpen, setOutlineOpen] = useState(false)
+  const chapterFirstParagraphId = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const p of cleanedParagraphs) {
+      if (!map.has(p.chapterIndex)) map.set(p.chapterIndex, p.id)
+    }
+    return map
+  }, [cleanedParagraphs])
+  const currentChapterIndex = player.currentParagraph?.chapterIndex ?? null
+  const handleSelectChapter = useCallback(
+    (chapterIndex: number) => {
+      const id = chapterFirstParagraphId.get(chapterIndex)
+      if (id) player.seekToParagraph(id)
+    },
+    [chapterFirstParagraphId, player],
+  )
+
+  // --- Per-paragraph transform (F8) ---
+  // Transforms edit the RAW source paragraph (source of truth); cleaning
+  // re-derives the displayed text. The cleaned→raw mapping comes from
+  // `cleanParagraphsWithOrigins`, which mirrors the read-time cleaning exactly.
+  const [transformOpen, setTransformOpen] = useState(false)
+  const [transformError, setTransformError] = useState<string | null>(null)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [undoCount, setUndoCount] = useState(0)
+  const undoStackRef = useRef<
+    Array<{ chapterId: ChapterId; rawParagraphIndex: number; prevText: string }>
+  >([])
+
+  const targetId = player.currentParagraphId
+  const targetPreview = useMemo(() => {
+    if (!targetId) return ''
+    return cleanedParagraphs.find((p) => p.id === targetId)?.text ?? ''
+  }, [targetId, cleanedParagraphs])
+
+  const resolveTarget = useCallback(() => {
+    if (!targetId) return null
+    const sep = targetId.lastIndexOf(':')
+    const chapterIdStr = targetId.slice(0, sep)
+    const cleanedIdx = Number(targetId.slice(sep + 1))
+    const chapter = chapters.find((c) => c.id === chapterIdStr)
+    if (!chapter) return null
+    const origin = cleanParagraphsWithOrigins(chapter.paragraphs, settings.cleaning)[cleanedIdx]
+    if (!origin) return null
+    return {
+      chapterId: chapter.id,
+      rawParagraphIndex: origin.rawIndex,
+      rawText: chapter.paragraphs[origin.rawIndex] ?? '',
+    }
+  }, [targetId, chapters, settings.cleaning])
+
+  const commitTransform = useCallback(
+    (chapterId: ChapterId, rawParagraphIndex: number, prevText: string, nextText: string) => {
+      if (nextText === prevText) return
+      undoStackRef.current.push({ chapterId, rawParagraphIndex, prevText })
+      setUndoCount(undoStackRef.current.length)
+      onParagraphChanged(chapterId, rawParagraphIndex, nextText)
+    },
+    [onParagraphChanged],
+  )
+
+  const applyDet = useCallback(
+    (op: DeterministicOp) => {
+      setTransformError(null)
+      const target = resolveTarget()
+      if (!target) {
+        setTransformError('No paragraph selected — tap a paragraph first.')
+        return
+      }
+      commitTransform(
+        target.chapterId,
+        target.rawParagraphIndex,
+        target.rawText,
+        applyDeterministicOp(target.rawText, op),
+      )
+    },
+    [resolveTarget, commitTransform],
+  )
+
+  const applyAi = useCallback(
+    async (op: TransformOp) => {
+      setTransformError(null)
+      const target = resolveTarget()
+      if (!target) {
+        setTransformError('No paragraph selected — tap a paragraph first.')
+        return
+      }
+      if (!settings.ai?.enabled) {
+        setTransformError('Enable AI transforms in Settings first.')
+        return
+      }
+      setAiBusy(true)
+      try {
+        const engine = getAiEngine(settings.ai)
+        const ready = await engine.isReady()
+        if (!ready) {
+          throw new Error(
+            'AI engine is not ready — load the model or set your API key in Settings.',
+          )
+        }
+        const [out] = await engine.transform([target.rawText], op)
+        if (!out?.trim()) throw new Error('AI returned an empty result.')
+        commitTransform(target.chapterId, target.rawParagraphIndex, target.rawText, out.trim())
+      } catch (e) {
+        setTransformError(e instanceof Error ? e.message : 'AI transform failed.')
+      } finally {
+        setAiBusy(false)
+      }
+    },
+    [resolveTarget, commitTransform, settings.ai],
+  )
+
+  const handleUndo = useCallback(() => {
+    const last = undoStackRef.current.pop()
+    if (!last) return
+    setUndoCount(undoStackRef.current.length)
+    onParagraphChanged(last.chapterId, last.rawParagraphIndex, last.prevText)
+  }, [onParagraphChanged])
+
+  const openTransform = useCallback(() => {
+    setTransformError(null)
+    player.pause()
+    setTransformOpen(true)
+  }, [player.pause])
+
   // Debounced progress persistence: write at most once per ~2s of movement, and
   // flush the final position on unmount. `latestRef` holds the most recent pos.
   const latestRef = useRef<{ position: BookPosition; fraction: number } | null>(null)
@@ -103,6 +276,8 @@ function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
     }
   }, [book.id])
 
+  const showFab = !!player.currentParagraphId && !activeInView
+
   return (
     <div className="space-y-6">
       <ReaderView
@@ -110,12 +285,14 @@ function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
         chapters={cleanedChapters}
         currentParagraphId={player.currentParagraphId}
         onSeekParagraph={player.seekToParagraph}
+        activeParagraphRef={activeParagraphRef}
       />
       <PlayerBar
         status={player.status}
         playbackRate={settings.playbackRate}
         bufferedAhead={player.bufferedAhead}
-        onPlay={player.play}
+        hasCurrentParagraph={!!player.currentParagraphId}
+        onPlay={handlePlay}
         onPause={player.pause}
         onStop={player.stop}
         onNext={player.next}
@@ -123,6 +300,38 @@ function ReaderPane({ book, chapters }: { book: Book; chapters: Chapter[] }) {
         onNextChapter={player.nextChapter}
         onPrevChapter={player.prevChapter}
         onRateChange={(rate) => void update({ playbackRate: rate })}
+        onGoToCurrent={scrollToCurrent}
+        onOpenOutline={cleanedChapters.length > 0 ? () => setOutlineOpen(true) : undefined}
+        onTransformParagraph={openTransform}
+      />
+      {showFab && (
+        <button
+          type="button"
+          onClick={scrollToCurrent}
+          className="fixed bottom-24 right-4 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-line bg-accent text-bg shadow-lg"
+          aria-label="Go to current paragraph"
+        >
+          ⊙
+        </button>
+      )}
+      <Outline
+        open={outlineOpen}
+        chapters={cleanedChapters}
+        currentChapterIndex={currentChapterIndex}
+        onSelect={handleSelectChapter}
+        onClose={() => setOutlineOpen(false)}
+      />
+      <ParagraphTransformModal
+        open={transformOpen}
+        preview={targetPreview}
+        aiEnabled={!!settings.ai?.enabled}
+        aiBusy={aiBusy}
+        error={transformError}
+        canUndo={undoCount > 0}
+        onApplyAi={applyAi}
+        onApplyDeterministic={applyDet}
+        onUndo={handleUndo}
+        onClose={() => setTransformOpen(false)}
       />
     </div>
   )
@@ -173,6 +382,30 @@ function ReaderLoader({ id }: { id: BookId }) {
     if (load.type === 'not-found') navigate('/library', { replace: true })
   }, [load, navigate])
 
+  // Per-paragraph transform (F8): persist the new text and update the in-memory
+  // chapters so the reader + player re-derive from the edited source.
+  const handleParagraphChanged = useCallback(
+    (chapterId: ChapterId, rawParagraphIndex: number, text: string) => {
+      void updateParagraph(chapterId, rawParagraphIndex, text)
+      setLoad((prev) =>
+        prev.type === 'ready'
+          ? {
+              ...prev,
+              chapters: prev.chapters.map((c) =>
+                c.id === chapterId
+                  ? {
+                      ...c,
+                      paragraphs: c.paragraphs.map((p, i) => (i === rawParagraphIndex ? text : p)),
+                    }
+                  : c,
+              ),
+            }
+          : prev,
+      )
+    },
+    [],
+  )
+
   const handleSelect = useCallback(
     async (file: File): Promise<void> => {
       if (!formatForFile(file.name)) {
@@ -220,7 +453,12 @@ function ReaderLoader({ id }: { id: BookId }) {
       {load.type === 'loading' && <p className="text-muted">Loading…</p>}
       {load.type === 'not-found' && <p className="text-muted">Book not found.</p>}
       {load.type === 'ready' && (
-        <ReaderPane key={load.book.id} book={load.book} chapters={load.chapters} />
+        <ReaderPane
+          key={load.book.id}
+          book={load.book}
+          chapters={load.chapters}
+          onParagraphChanged={handleParagraphChanged}
+        />
       )}
     </div>
   )

@@ -13,7 +13,8 @@
 | M3 — Jog Mode | ✅ **Done** (pre-rendered chunks, `<audio>`, Media Session) | [`docs/prds/M3-jog.md`](docs/prds/M3-jog.md) |
 | M4 — Clean Reading | ✅ **Done** (filters + pronunciation dictionary; commit `d57a8bf`) | [`docs/prds/M4-clean-reading.md`](docs/prds/M4-clean-reading.md) |
 | M5 — Library & Offline | ✅ **Done** (library, resume, offline voice mgmt, PWA polish; commit `4115f00`) | [`docs/prds/M5-library-offline.md`](docs/prds/M5-library-offline.md) |
-| M6 — AI Transforms | ✅ **Done** (in-browser WebLLM + opt-in cloud, cleanup/translate/summarize/simplify/pronunciation-hints, all hardware gates passed) | [`docs/prds/M6-ai-transforms.md`](docs/prds/M6-ai-transforms.md) · [`docs/spikes/webllm.md`](docs/spikes/webllm.md) · [`tasks/todo.md`](tasks/todo.md) |
+| M6 — AI Transforms | ✅ **Done** (in-browser WebLLM + opt-in cloud, cleanup/translate/summarize/simplify/pronunciation-hints, per-paragraph transforms + importable key/config) | [`docs/prds/M6-ai-transforms.md`](docs/prds/M6-ai-transforms.md) · [`docs/spikes/webllm.md`](docs/spikes/webllm.md) · [`tasks/todo.md`](tasks/todo.md) |
+| M7 — Reader UX & Mobile | ✅ **Done** (responsive layout + nav drawer, chapter outline, minimized `⋯` playback menu, go-to-current + FAB, auto-scroll to resumed position on first Play) | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 **Read first:** [`docs/VISION.md`](docs/VISION.md) (the why) → [`docs/ROADMAP.md`](docs/ROADMAP.md) (milestones) → [`docs/prds/M0-foundation.md`](docs/prds/M0-foundation.md) (what shipped, patterns, conventions).
 

@@ -48,6 +48,8 @@ TaleTrek solves this by running a neural TTS engine (Piper) entirely in the brow
 | Works fully offline | After first load, no internet connection required — books, TTS, and playback all run on-device |
 | Zero cost to the user | $0 — no app purchase, no subscription, no cloud fees |
 | No app store needed | Installable PWA — works from a URL on iOS and Android |
+| Read comfortably on any screen | Responsive from phone to desktop — reader controls, chapter outline, and navigation adapt to a small screen |
+| Refine any paragraph on the fly | Per-paragraph transforms (AI or deterministic) fix OCR noise, change casing, or translate just the line you're on |
 | Fast from upload to audio | First audio plays within seconds of selecting a book |
 | Open source | MIT-licensed, forkable, community-driven |
 
