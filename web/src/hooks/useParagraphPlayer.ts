@@ -3,7 +3,7 @@ import type { TtsEngine } from '../lib/tts/types'
 import type { BookId, Chapter, VoiceId } from '../types'
 
 /** Default look-ahead depth: paragraphs pre-rendered ahead of the pointer. */
-const DEFAULT_LOOKAHEAD = 3
+const DEFAULT_LOOKAHEAD = 8
 
 /** A flattened, stable reference to a single paragraph within a book. */
 export interface ParagraphRef {
@@ -18,6 +18,7 @@ export interface ParagraphRef {
 export type PlaybackStatus =
   | { type: 'idle' }
   | { type: 'loading' }
+  | { type: 'buffering' }
   | { type: 'playing'; paragraphId: string }
   | { type: 'paused'; paragraphId: string }
   | { type: 'ended' }
@@ -119,6 +120,28 @@ export interface UseParagraphPlayerArgs {
    * is still cached but only LRU-reapable.
    */
   bookId?: BookId
+  /**
+   * True while a background synth job (upload manager) is running for this
+   * book. When active, `primeAhead` is skipped (the background job fills the
+   * cache) and the status shows 'buffering' instead of 'loading' for
+   * paragraphs the background job hasn't reached yet.
+   */
+  backgroundActive?: boolean
+  /** Paragraph ids already synthesized by the background job (for status). */
+  backgroundBufferedIds?: Set<string>
+  /**
+   * Paragraph ids known to be in the persistent audio cache (M8). When a
+   * paragraph is in this set, `playIndex` skips the 'loading'/'buffering'
+   * status — the engine returns from IDB in milliseconds, so flashing a
+   * loading indicator is unnecessary and jarring.
+   */
+  cachedParagraphIds?: Set<string>
+  /**
+   * Fired after each successful synthesis (on-demand or look-ahead). The
+   * caller can use this to update cache-aware indicators (dots/bars) without
+   * re-probing IndexedDB.
+   */
+  onParagraphSynthesized?: (paragraphId: string) => void
 }
 
 export interface UseParagraphPlayerResult {
@@ -194,6 +217,10 @@ export function useParagraphPlayer({
   audio,
   initialIndex,
   bookId,
+  backgroundActive = false,
+  backgroundBufferedIds,
+  cachedParagraphIds,
+  onParagraphSynthesized,
 }: UseParagraphPlayerArgs): UseParagraphPlayerResult {
   const paragraphs = useMemo(() => flattenParagraphs(chapters), [chapters])
   const la = Math.max(0, Math.trunc(lookahead))
@@ -210,9 +237,17 @@ export function useParagraphPlayer({
   const engineRef = useRef(engine)
   const voiceIdRef = useRef(voiceId)
   const bookIdRef = useRef(bookId)
+  const backgroundActiveRef = useRef(backgroundActive)
+  const backgroundBufferedIdsRef = useRef(backgroundBufferedIds)
+  const cachedParagraphIdsRef = useRef(cachedParagraphIds)
+  const onSynthRef = useRef(onParagraphSynthesized)
   engineRef.current = engine
   voiceIdRef.current = voiceId
   bookIdRef.current = bookId
+  backgroundActiveRef.current = backgroundActive
+  backgroundBufferedIdsRef.current = backgroundBufferedIds
+  cachedParagraphIdsRef.current = cachedParagraphIds
+  onSynthRef.current = onParagraphSynthesized
 
   const pointerRef = useRef(initialIndex ?? 0)
   const urlRef = useRef<string | null>(null)
@@ -278,6 +313,7 @@ export function useParagraphPlayer({
           })
           if (gen !== genRef.current) return
           queueRef.current.set(para.id, { blob: result.audio, index: i })
+          onSynthRef.current?.(para.id)
           syncBufferedAhead()
         } catch {
           // Pre-render failures are non-fatal: the chunk will be synthesized
@@ -302,7 +338,12 @@ export function useParagraphPlayer({
       try {
         const buffered = queueRef.current.get(para.id)
         if (!buffered) {
-          setStatus({ type: 'loading' })
+          const bgHas = backgroundBufferedIdsRef.current?.has(para.id) ?? false
+          const persistentHas = cachedParagraphIdsRef.current?.has(para.id) ?? false
+          const isCached = bgHas || persistentHas
+          if (!isCached) {
+            setStatus({ type: 'loading' })
+          }
           try {
             const result = await engineRef.current.synthesize({
               text: para.text,
@@ -311,6 +352,7 @@ export function useParagraphPlayer({
             })
             if (token !== tokenRef.current) return
             queueRef.current.set(para.id, { blob: result.audio, index })
+            onSynthRef.current?.(para.id)
           } catch (error) {
             if (token !== tokenRef.current) return
             setStatus({

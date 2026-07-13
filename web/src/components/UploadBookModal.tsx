@@ -182,7 +182,7 @@ export function UploadBookModal({
         ) : (
           <>
             {state.type === 'error' && (
-              <p className="rounded-md border border-red-500/50 p-2 text-xs text-red-400">
+              <p className="rounded-md border border-danger/50 p-2 text-xs text-danger">
                 {state.message}
               </p>
             )}
@@ -361,7 +361,7 @@ function OutlineSectionView({
         </p>
       )}
       {state.type === 'error' && (
-        <p className="mt-2 text-xs text-red-400" aria-live="polite">
+        <p className="mt-2 text-xs text-danger" aria-live="polite">
           {state.message}
         </p>
       )}

@@ -29,6 +29,14 @@ export interface ProviderPreset {
   corsSafe: boolean
   /** Sensible default model if discovery fails or is skipped. */
   defaultModel?: string
+  /**
+   * When set, the model picker filters the `/models` list to these ids only.
+   * Used by providers (e.g. OpenCode Zen) whose `/models` endpoint returns
+   * models that live on incompatible endpoints (Anthropic `/messages`, OpenAI
+   * `/responses`) — only the OpenAI-compatible `/chat/completions` ids are
+   * listed here. Users can still type any id manually.
+   */
+  compatibleModelIds?: readonly string[]
 }
 
 const CUSTOM_PRESET: ProviderPreset = {
@@ -86,6 +94,43 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     supportsModelsEndpoint: true,
     corsSafe: true,
     defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+  },
+  {
+    id: 'zen',
+    label: 'OpenCode Zen',
+    baseUrl: 'https://opencode.ai/zen/v1',
+    description: 'Curated gateway — 40+ verified models',
+    signupUrl: 'https://opencode.ai/auth',
+    keyScopeHint:
+      'Pay-as-you-go; add credits at opencode.ai/auth. Only OpenAI-compatible ' +
+      '/chat/completions models work in the browser (shown below). Some free ' +
+      'models may use submitted text for training — avoid sensitive books.',
+    supportsModelsEndpoint: true,
+    corsSafe: true,
+    defaultModel: 'glm-5.2',
+    // Zen's /models returns ALL models, but only these route to /chat/completions
+    // (the endpoint TaleTrek's engine calls). Claude/GPT/Gemini models live on
+    // /messages, /responses, /models respectively and would 404 here.
+    compatibleModelIds: [
+      'glm-5.2',
+      'glm-5.1',
+      'glm-5',
+      'deepseek-v4-pro',
+      'deepseek-v4-flash',
+      'kimi-k2.7-code',
+      'kimi-k2.6',
+      'kimi-k2.5',
+      'minimax-m3',
+      'minimax-m2.7',
+      'minimax-m2.5',
+      'grok-4.5',
+      'grok-build-0.1',
+      'big-pickle',
+      'mimo-v2.5-free',
+      'north-mini-code-free',
+      'nemotron-3-ultra-free',
+      'deepseek-v4-flash-free',
+    ],
   },
   CUSTOM_PRESET,
 ]

@@ -12,8 +12,8 @@ import {
   Square,
   Wand2,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
 import type { PlaybackStatus } from '../hooks/useParagraphPlayer'
+import { Menu } from './Menu'
 
 interface PlayerBarProps {
   status: PlaybackStatus
@@ -50,6 +50,8 @@ function statusLabel(status: PlaybackStatus, bufferedAhead: number): string {
       return 'Ready'
     case 'loading':
       return 'Synthesizing…'
+    case 'buffering':
+      return 'Buffering…'
     case 'playing':
       return bufferedAhead > 0 ? 'Playing' : 'Playing · buffering…'
     case 'paused':
@@ -80,27 +82,8 @@ export function PlayerBar({
   onTransformParagraph,
 }: PlayerBarProps) {
   const isPlaying = status.type === 'playing'
-  const isLoading = status.type === 'loading'
+  const isLoading = status.type === 'loading' || status.type === 'buffering'
   const busy = isLoading
-  const [menuOpen, setMenuOpen] = useState(false)
-  const barRef = useRef<HTMLElement | null>(null)
-
-  // Close the menu on outside click.
-  useEffect(() => {
-    if (!menuOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (barRef.current && !barRef.current.contains(e.target as Node)) setMenuOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenuOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [menuOpen])
 
   const hasOverflow =
     !!onNextChapter ||
@@ -112,8 +95,7 @@ export function PlayerBar({
 
   return (
     <section
-      ref={barRef}
-      className="relative sticky bottom-0 flex items-center gap-2 rounded-lg border border-line bg-surface p-2 shadow-lg sm:gap-3 sm:p-3"
+      className="sticky bottom-0 flex items-center gap-2 rounded-lg border border-line bg-surface p-2 shadow-lg sm:gap-3 sm:p-3"
       aria-label="Audio playback"
     >
       <button
@@ -158,125 +140,129 @@ export function PlayerBar({
         {statusLabel(status, bufferedAhead)}
       </span>
       {hasOverflow && (
-        <button
-          type="button"
-          onClick={() => setMenuOpen((v) => !v)}
-          aria-label="More playback controls"
-          aria-haspopup="true"
-          aria-expanded={menuOpen}
-          className="rounded border border-line px-2 py-1 text-muted hover:text-fg"
+        <Menu
+          placement="top-end"
+          panelClassName="w-56 rounded-lg border border-line bg-surface p-2 shadow-xl"
+          trigger={(props) => (
+            <button
+              type="button"
+              {...props}
+              aria-label="More playback controls"
+              className="rounded border border-line px-2 py-1 text-muted hover:text-fg"
+            >
+              <MoreHorizontal className="h-5 w-5" />
+            </button>
+          )}
         >
-          <MoreHorizontal className="h-5 w-5" />
-        </button>
-      )}
-
-      {menuOpen && (
-        <div className="absolute bottom-full right-0 z-20 mb-2 w-56 rounded-lg border border-line bg-surface p-2 shadow-xl">
-          {(!!onPrevChapter || !!onNextChapter) && (
-            <div className="flex gap-2">
-              {onPrevChapter && (
+          {(close) => (
+            <>
+              {(!!onPrevChapter || !!onNextChapter) && (
+                <div className="flex gap-2">
+                  {onPrevChapter && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onPrevChapter()
+                        close()
+                      }}
+                      disabled={busy}
+                      className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                    >
+                      <ChevronsLeft className="h-4 w-4" /> Prev chapter
+                    </button>
+                  )}
+                  {onNextChapter && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNextChapter()
+                        close()
+                      }}
+                      disabled={busy}
+                      className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                    >
+                      Next chapter <ChevronsRight className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  onStop()
+                  close()
+                }}
+                className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
+              >
+                <Square className="h-4 w-4" /> Stop
+              </button>
+              <label className="mt-1 flex items-center justify-between gap-2 rounded px-1 py-1 text-sm text-muted">
+                Speed
+                <select
+                  value={playbackRate}
+                  onChange={(e) => onRateChange(Number(e.target.value))}
+                  className="rounded border border-line bg-surface px-2 py-1"
+                >
+                  {RATES.map((r) => (
+                    <option key={r} value={r}>
+                      {r}×
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {onGoToCurrent && (
                 <button
                   type="button"
                   onClick={() => {
-                    onPrevChapter()
-                    setMenuOpen(false)
+                    onGoToCurrent()
+                    close()
                   }}
-                  disabled={busy}
-                  className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                  disabled={!hasCurrentParagraph}
+                  className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
                 >
-                  <ChevronsLeft className="h-4 w-4" /> Prev chapter
+                  <Locate className="h-4 w-4" /> Go to current paragraph
                 </button>
               )}
-              {onNextChapter && (
+              {onScrollToTop && (
                 <button
                   type="button"
                   onClick={() => {
-                    onNextChapter()
-                    setMenuOpen(false)
+                    onScrollToTop()
+                    close()
                   }}
-                  disabled={busy}
-                  className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                  className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
                 >
-                  Next chapter <ChevronsRight className="h-4 w-4" />
+                  <ArrowUp className="h-4 w-4" /> Back to top
                 </button>
               )}
-            </div>
+              {onOpenOutline && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenOutline()
+                    close()
+                  }}
+                  className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
+                >
+                  <List className="h-4 w-4" /> Outline
+                </button>
+              )}
+              {onTransformParagraph && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onTransformParagraph()
+                    close()
+                  }}
+                  disabled={!hasCurrentParagraph}
+                  className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
+                >
+                  <Wand2 className="h-4 w-4" /> Transform paragraph
+                </button>
+              )}
+            </>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              onStop()
-              setMenuOpen(false)
-            }}
-            className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
-          >
-            <Square className="h-4 w-4" /> Stop
-          </button>
-          <label className="mt-1 flex items-center justify-between gap-2 rounded px-1 py-1 text-sm text-muted">
-            Speed
-            <select
-              value={playbackRate}
-              onChange={(e) => onRateChange(Number(e.target.value))}
-              className="rounded border border-line bg-surface px-2 py-1"
-            >
-              {RATES.map((r) => (
-                <option key={r} value={r}>
-                  {r}×
-                </option>
-              ))}
-            </select>
-          </label>
-          {onGoToCurrent && (
-            <button
-              type="button"
-              onClick={() => {
-                onGoToCurrent()
-                setMenuOpen(false)
-              }}
-              disabled={!hasCurrentParagraph}
-              className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
-            >
-              <Locate className="h-4 w-4" /> Go to current paragraph
-            </button>
-          )}
-          {onScrollToTop && (
-            <button
-              type="button"
-              onClick={() => {
-                onScrollToTop()
-                setMenuOpen(false)
-              }}
-              className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
-            >
-              <ArrowUp className="h-4 w-4" /> Back to top
-            </button>
-          )}
-          {onOpenOutline && (
-            <button
-              type="button"
-              onClick={() => {
-                onOpenOutline()
-                setMenuOpen(false)
-              }}
-              className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm"
-            >
-              <List className="h-4 w-4" /> Outline
-            </button>
-          )}
-          {onTransformParagraph && (
-            <button
-              type="button"
-              onClick={() => {
-                onTransformParagraph()
-                setMenuOpen(false)
-              }}
-              disabled={!hasCurrentParagraph}
-              className="mt-1 flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-sm disabled:opacity-40"
-            >
-              <Wand2 className="h-4 w-4" /> Transform paragraph
-            </button>
-          )}
-        </div>
+        </Menu>
       )}
     </section>
   )

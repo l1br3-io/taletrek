@@ -6,6 +6,7 @@ import { ParagraphTransformModal } from '../components/ParagraphTransformModal'
 import { PlayerBar } from '../components/PlayerBar'
 import { ReaderView } from '../components/ReaderView'
 import { useSettings } from '../context/settings'
+import { useCachedParagraphs } from '../hooks/useCachedParagraphs'
 import { useElementVisible } from '../hooks/useElementVisible'
 import { useMediaSession } from '../hooks/useMediaSession'
 import {
@@ -26,6 +27,7 @@ import {
 import { scrollIntoViewCenter, scrollToTop } from '../lib/scroll'
 import { applyDeterministicOp, type DeterministicOp } from '../lib/transforms/deterministic'
 import { ttsClient } from '../lib/tts/client'
+import { useUploadState } from '../lib/upload/useUpload'
 import {
   type Book,
   type BookId,
@@ -76,6 +78,66 @@ function ReaderPane({
   )
   const cleanedParagraphs = useMemo(() => flattenParagraphs(cleanedChapters), [cleanedChapters])
 
+  // Background synth (upload manager): if a job is running for THIS book,
+  // surface buffer state so the player, ReaderView, and Outline can show
+  // per-paragraph "ready/pending" indicators and the player skips its own
+  // redundant primeAhead (the background job fills the cache).
+  const jobState = useUploadState()
+  const backgroundActive =
+    (jobState.type === 'synthesizing' || jobState.type === 'voiceDownload') &&
+    jobState.book.id === book.id
+  const backgroundBufferedIds =
+    jobState.type === 'synthesizing' && jobState.book.id === book.id
+      ? jobState.synthesizedParagraphIds
+      : undefined
+
+  // Persistent cache probe: which paragraphs are pre-rendered even when no
+  // background synth job is running. Bumps after a job completes to pick up
+  // newly-synthesized entries.
+  const [cacheRefreshToken, setCacheRefreshToken] = useState(0)
+  const prevBackgroundActive = useRef(false)
+  useEffect(() => {
+    if (prevBackgroundActive.current && !backgroundActive) {
+      setCacheRefreshToken((n) => n + 1)
+    }
+    prevBackgroundActive.current = backgroundActive
+  }, [backgroundActive])
+  const persistentCachedIds = useCachedParagraphs(
+    book.id,
+    settings.voiceId,
+    cleanedChapters,
+    cacheRefreshToken,
+  )
+
+  // Session-synthesized IDs: paragraphs the player synthesized on-demand or
+  // via look-ahead during this session. These are in the M8 cache but the
+  // persistent probe hasn't refreshed to reflect them. Cleared on voice /
+  // chapters change (stale keys after voice switch).
+  const [sessionSynthIds, setSessionSynthIds] = useState<Set<string>>(new Set())
+  // biome-ignore lint/correctness/useExhaustiveDependencies: trigger-only deps — clear stale IDs when voice/text changes
+  useEffect(() => {
+    setSessionSynthIds(new Set())
+  }, [settings.voiceId, cleanedChapters])
+  const handleParagraphSynthesized = useCallback((id: string) => {
+    setSessionSynthIds((prev) => {
+      if (prev.has(id)) return prev
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+  }, [])
+
+  // ReaderView / Outline: merge all sources of "has audio" — persistent cache,
+  // background job progress, and session on-demand synth.
+  const bufferedParagraphIds = useMemo(() => {
+    const merged = new Set(persistentCachedIds)
+    if (backgroundBufferedIds) {
+      for (const id of backgroundBufferedIds) merged.add(id)
+    }
+    for (const id of sessionSynthIds) merged.add(id)
+    return merged
+  }, [persistentCachedIds, backgroundBufferedIds, sessionSynthIds])
+
   // Resume: compute the seed index from the saved position + cleaned view. The
   // player only honors `initialIndex` on first render (mount), so later
   // recomputes (e.g. cleaning toggled) are intentionally ignored by the hook.
@@ -91,6 +153,10 @@ function ReaderPane({
     engine: ttsClient,
     initialIndex,
     bookId: book.id,
+    backgroundActive,
+    backgroundBufferedIds,
+    cachedParagraphIds: persistentCachedIds,
+    onParagraphSynthesized: handleParagraphSynthesized,
   })
   useMediaSession({
     player,
@@ -307,7 +373,7 @@ function ReaderPane({
   const showFab = !!player.currentParagraphId && !activeInView
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-3xl space-y-6">
       <ReaderView
         book={book}
         chapters={cleanedChapters}
@@ -316,6 +382,7 @@ function ReaderPane({
         activeParagraphRef={activeParagraphRef}
         pulseParagraphId={pulseId}
         onPulseEnd={() => setPulseId(null)}
+        bufferedParagraphIds={bufferedParagraphIds}
       />
       <PlayerBar
         status={player.status}
@@ -351,6 +418,7 @@ function ReaderPane({
         currentChapterIndex={currentChapterIndex}
         onSelect={handleSelectChapter}
         onClose={() => setOutlineOpen(false)}
+        bufferedParagraphIds={bufferedParagraphIds}
       />
       <ParagraphTransformModal
         open={transformOpen}

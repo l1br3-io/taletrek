@@ -79,7 +79,45 @@ describe('ReaderView', () => {
       />,
     )
     const paragraphs = container.querySelectorAll('.tt-reader-text p')
-    expect(paragraphs[1]?.className).toMatch(/tt-nav-pulse/)
-    expect(paragraphs[0]?.className).not.toMatch(/tt-nav-pulse/)
+    expect(paragraphs[1]?.className).toMatch(/tt-nav-target/)
+    expect(paragraphs[0]?.className).not.toMatch(/tt-nav-target/)
+  })
+
+  it('renders a subtle dot only for cached paragraphs', () => {
+    const ch = chapter(['Ready.', 'Pending.'])
+    const { container } = render(
+      <ReaderView book={book} chapters={[ch]} bufferedParagraphIds={new Set([`${ch.id}:0`])} />,
+    )
+    const dots = container.querySelectorAll('.tt-reader-text p span[aria-hidden]')
+    // Only the cached paragraph (index 0) gets a dot.
+    expect(dots).toHaveLength(1)
+    expect(dots[0]?.className).toMatch(/bg-accent/)
+  })
+
+  it('renders dots for all cached paragraphs', () => {
+    const ch = chapter(['First.', 'Second.'])
+    const { container } = render(
+      <ReaderView
+        book={book}
+        chapters={[ch]}
+        bufferedParagraphIds={new Set([`${ch.id}:0`, `${ch.id}:1`])}
+      />,
+    )
+    const dots = container.querySelectorAll('.tt-reader-text p span[aria-hidden]')
+    expect(dots).toHaveLength(2)
+  })
+
+  it('does not render dots when the cache set is empty', () => {
+    const { container } = render(
+      <ReaderView book={book} chapters={[chapter(['Hello.'])]} bufferedParagraphIds={new Set()} />,
+    )
+    const dots = container.querySelectorAll('.tt-reader-text p span[aria-hidden]')
+    expect(dots).toHaveLength(0)
+  })
+
+  it('does not render buffer dots when bufferedParagraphIds is undefined', () => {
+    const { container } = render(<ReaderView book={book} chapters={[chapter(['Hello.'])]} />)
+    const dots = container.querySelectorAll('.tt-reader-text p span[aria-hidden]')
+    expect(dots).toHaveLength(0)
   })
 })

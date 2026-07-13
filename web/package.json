@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@floating-ui/react": "^0.27.20",
     "@mintplex-labs/piper-tts-web": "1.0.4",
     "fast-xml-parser": "^5.9.3",
     "idb": "8.0.3",

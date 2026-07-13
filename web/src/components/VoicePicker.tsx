@@ -64,7 +64,7 @@ export function VoicePicker({
                   type="button"
                   onClick={() => onRemove(voice.id)}
                   aria-label={`remove ${voice.name}`}
-                  className="inline-flex items-center gap-1 rounded border border-line px-2 py-1 text-sm transition-colors hover:border-red-500 hover:text-red-400"
+                  className="inline-flex items-center gap-1 rounded border border-line px-2 py-1 text-sm transition-colors hover:border-danger hover:text-danger"
                 >
                   <Trash2 className="h-3.5 w-3.5" /> remove
                 </button>

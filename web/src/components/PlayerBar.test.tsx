@@ -169,4 +169,12 @@ describe('PlayerBar', () => {
     renderBar({ status: { type: 'playing', paragraphId: 'c:0' }, bufferedAhead: 2 })
     expect(screen.queryByText(/buffering/)).toBeNull()
   })
+
+  it('shows Buffering… and disables controls during buffering status', () => {
+    renderBar({ status: { type: 'buffering' } })
+    expect(screen.getByText('Buffering…')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Previous paragraph' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Next paragraph' })).toBeDisabled()
+  })
 })

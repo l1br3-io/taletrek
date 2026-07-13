@@ -15,6 +15,9 @@
   --color-line: var(--tt-line);
   --color-accent: var(--tt-accent);
   --color-accent-soft: var(--tt-accent-soft);
+  --color-warning: var(--tt-warning);
+  --color-success: var(--tt-success);
+  --color-danger: var(--tt-danger);
   --font-reader: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
 }
 
@@ -28,10 +31,13 @@
   --tt-line: #1f2937;
   --tt-accent: #4ade80;
   --tt-accent-soft: rgba(74, 222, 128, 0.18);
+  --tt-warning: #fde047;
+  --tt-success: #4ade80;
+  --tt-danger: #f87171;
   --font-scale: 1;
 }
 
-/* Sepia — warm, paper-like. */
+/* Sepia — warm, paper-like. Darker status tones for legibility on cream. */
 :root[data-theme='sepia'] {
   --tt-bg: #f4ecd8;
   --tt-surface: #ece2c9;
@@ -41,6 +47,9 @@
   --tt-line: #ddcfac;
   --tt-accent: #8a5a2b;
   --tt-accent-soft: rgba(138, 90, 43, 0.16);
+  --tt-warning: #8a5a09;
+  --tt-success: #3f7d4f;
+  --tt-danger: #b03a3a;
 }
 
 html,
@@ -78,26 +87,31 @@ body {
 }
 
 /*
- * Brief highlight pulse shown after non-playing navigation (e.g. tapping an
- * Outline entry). Expands a soft accent ring outward and fades, drawing the
- * eye to the new position without auto-starting playback.
+ * Outline-navigation "arrival" marker. DELIBERATELY distinct from the
+ * current-paragraph highlight (a soft background fill + inset ring): this
+ * draws a solid accent bar down the left edge plus a brief outer glow that
+ * fades out, so "you just jumped here" reads clearly apart from "this is
+ * playing now". Transient — reverts to the current-paragraph styling once it
+ * ends.
  */
-@keyframes tt-nav-pulse {
-  0% {
-    box-shadow: 0 0 0 0 var(--tt-accent);
-  }
-  60% {
-    box-shadow: 0 0 0 6px color-mix(in srgb, var(--tt-accent) 35%, transparent);
+@keyframes tt-nav-target {
+  0%,
+  25% {
+    box-shadow:
+      inset 4px 0 0 0 var(--tt-accent),
+      0 0 14px 1px color-mix(in srgb, var(--tt-accent) 45%, transparent);
   }
   100% {
-    box-shadow: 0 0 0 0 transparent;
+    box-shadow:
+      inset 4px 0 0 0 transparent,
+      0 0 0 0 transparent;
   }
 }
-.tt-nav-pulse {
-  animation: tt-nav-pulse 1200ms ease-out;
+.tt-nav-target {
+  animation: tt-nav-target 1400ms ease-out;
 }
 @media (prefers-reduced-motion: reduce) {
-  .tt-nav-pulse {
+  .tt-nav-target {
     animation: none;
   }
 }

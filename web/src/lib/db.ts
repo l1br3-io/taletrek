@@ -111,8 +111,8 @@ export function _resetDBForTests(): void {
   dbPromise = null
 }
 
-/** Clear every store — test-only isolation helper. Call after `_resetDBForTests`. */
-export async function _clearDBForTests(): Promise<void> {
+/** Clear every store — used by the "Delete all data" flow (Settings). */
+export async function clearAllStores(): Promise<void> {
   const db = await getDB()
   await Promise.all([
     db.clear('settings'),
@@ -121,6 +121,11 @@ export async function _clearDBForTests(): Promise<void> {
     db.clear('files'),
     db.clear('audioCache'),
   ])
+}
+
+/** Clear every store — test-only isolation helper. Call after `_resetDBForTests`. */
+export async function _clearDBForTests(): Promise<void> {
+  await clearAllStores()
 }
 
 /** Read a setting value by key, or `undefined` if absent. */

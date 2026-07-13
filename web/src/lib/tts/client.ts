@@ -69,6 +69,11 @@ export class TtsClient implements TtsEngine {
     if (res.op !== 'remove') throw new Error(`unexpected response op: ${res.op}`)
   }
 
+  async clearAllStored(): Promise<void> {
+    const res = await request({ op: 'clearAllStored' })
+    if (res.op !== 'clearAllStored') throw new Error(`unexpected response op: ${res.op}`)
+  }
+
   async synthesize(req: SynthesisRequest): Promise<SynthesisResult> {
     const res = await request({
       op: 'synthesize',

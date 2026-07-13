@@ -200,7 +200,7 @@ function CloudProvidersSection({
       </div>
 
       {importErr && (
-        <span role="alert" className="block text-xs text-red-400">
+        <span role="alert" className="block text-xs text-danger">
           {importErr}
         </span>
       )}
@@ -322,9 +322,9 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
               className={[
                 'inline-flex items-center gap-1 text-xs',
                 testResult?.type === 'success'
-                  ? 'text-green-400'
+                  ? 'text-success'
                   : testResult
-                    ? 'text-red-400'
+                    ? 'text-danger'
                     : 'text-muted',
               ].join(' ')}
             >
@@ -368,7 +368,7 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
           type="button"
           onClick={onRemove}
           aria-label={`Remove ${label}`}
-          className="inline-flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-red-500 hover:text-red-400"
+          className="inline-flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-danger hover:text-danger"
         >
           <Trash2 className="h-3.5 w-3.5" /> Remove
         </button>
@@ -404,13 +404,13 @@ function PresetPicker({ onPick, onCancel }: PresetPickerProps) {
             <span className="block text-xs text-muted">{p.description}</span>
             <span className="mt-1 block text-xs">
               {p.corsSafe ? (
-                <span className="inline-flex items-center gap-1 text-green-400">
+                <span className="inline-flex items-center gap-1 text-success">
                   CORS <CheckCircle2 className="h-3.5 w-3.5" />
                 </span>
               ) : p.id === 'custom' ? (
                 <span className="text-muted">Enter URL manually</span>
               ) : (
-                <span className="text-yellow-300">CORS unverified</span>
+                <span className="text-warning">CORS unverified</span>
               )}
             </span>
           </button>
@@ -560,8 +560,13 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
 
   const visibleModels = (() => {
     if (modelState.type !== 'ready') return []
-    const hasFree = modelState.models.some((m) => m.free)
-    return hasFree ? modelState.models.filter((m) => m.free) : modelState.models
+    let models = modelState.models as ModelInfo[]
+    if (preset.compatibleModelIds) {
+      const allowed = new Set(preset.compatibleModelIds)
+      models = models.filter((m) => allowed.has(m.id))
+    }
+    const hasFree = models.some((m) => m.free)
+    return hasFree ? models.filter((m) => m.free) : models
   })()
 
   const hiddenCount =
@@ -636,7 +641,7 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
             <button
               type="button"
               onClick={handleForgetKey}
-              className="rounded-md border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:border-red-500 hover:text-red-400"
+              className="rounded-md border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:border-danger hover:text-danger"
             >
               Forget
             </button>
@@ -735,14 +740,14 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
           />
         )}
         {isFreeModel && (
-          <span className="inline-block rounded bg-green-500/15 px-1.5 py-0.5 text-xs font-medium text-green-400">
+          <span className="inline-block rounded bg-success/15 px-1.5 py-0.5 text-xs font-medium text-success">
             Free
           </span>
         )}
       </div>
 
       {isFreeModel && (
-        <p className="flex items-center gap-1.5 rounded-md border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-yellow-300">
+        <p className="flex items-center gap-1.5 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-warning">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>
             Free models may use submitted text for training. Avoid sending content you wouldn't
@@ -810,31 +815,31 @@ function TestResultPill({ result }: { result: ConnectionTestResult }): ReactElem
   switch (result.type) {
     case 'success':
       return (
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-green-400">
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
           <CheckCircle2 className="h-3.5 w-3.5" /> Connected
         </span>
       )
     case 'auth-error':
       return (
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-red-400">
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-danger">
           <XCircle className="h-3.5 w-3.5" /> Invalid key
         </span>
       )
     case 'model-not-found':
       return (
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-red-400">
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-danger">
           <XCircle className="h-3.5 w-3.5" /> Model not found
         </span>
       )
     case 'cors':
       return (
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-yellow-300">
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-warning">
           <AlertTriangle className="h-3.5 w-3.5" /> Blocked by CORS
         </span>
       )
     case 'error':
       return (
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-red-400">
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-danger">
           <XCircle className="h-3.5 w-3.5" /> {result.status}
         </span>
       )

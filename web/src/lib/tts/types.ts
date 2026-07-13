@@ -51,4 +51,6 @@ export interface TtsEngine {
   synthesize(req: SynthesisRequest): Promise<SynthesisResult>
   /** Remove a downloaded voice model from OPFS. */
   remove(voiceId: VoiceId): Promise<void>
+  /** Remove every downloaded voice model from OPFS. */
+  clearAllStored(): Promise<void>
 }

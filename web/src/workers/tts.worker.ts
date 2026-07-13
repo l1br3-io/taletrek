@@ -39,6 +39,12 @@ ctx.onmessage = async (event: MessageEvent<TtsRequest>) => {
         ctx.postMessage(res)
         break
       }
+      case 'clearAllStored': {
+        await engine.clearAllStored()
+        const res: TtsResponse = { id: req.id, type: 'success', op: 'clearAllStored' }
+        ctx.postMessage(res)
+        break
+      }
     }
   } catch (error) {
     const res: TtsResponse = {
