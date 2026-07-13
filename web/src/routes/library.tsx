@@ -1,3 +1,4 @@
+import { X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { LibraryList } from '../components/LibraryList'
@@ -408,7 +409,7 @@ export function Library() {
             aria-label="Dismiss outline message"
             className="ml-4 text-xs text-accent/70 hover:text-accent"
           >
-            ✕
+            <X className="h-4 w-4" />
           </button>
         </div>
       )}
@@ -424,7 +425,7 @@ export function Library() {
             aria-label="Dismiss error message"
             className="ml-4 text-xs text-red-400/70 hover:text-red-400"
           >
-            ✕
+            <X className="h-4 w-4" />
           </button>
         </div>
       )}
@@ -482,7 +483,7 @@ export function Library() {
             aria-label="Dismiss message"
             className="ml-4 text-xs text-accent/70 hover:text-accent"
           >
-            ✕
+            <X className="h-4 w-4" />
           </button>
         </div>
       )}
@@ -498,7 +499,7 @@ export function Library() {
             aria-label="Dismiss error message"
             className="ml-4 text-xs text-red-400/70 hover:text-red-400"
           >
-            ✕
+            <X className="h-4 w-4" />
           </button>
         </div>
       )}

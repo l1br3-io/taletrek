@@ -205,14 +205,14 @@ describe('Library — AI upload flow (M6)', () => {
     await seedAiSettings({})
     await renderReady('/library')
     await pickFile(FILE)
-    expect(await screen.findByRole('dialog', { name: /process book/i })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: /prepare book/i })).toBeInTheDocument()
   })
 
   it('process modal Skip proceeds to the reader unprocessed', async () => {
     await seedAiSettings({})
     const { findByTestId } = await renderReady('/library')
     await pickFile(FILE)
-    await screen.findByRole('dialog', { name: /process book/i })
+    await screen.findByRole('dialog', { name: /prepare book/i })
     fireEvent.click(screen.getByRole('button', { name: /^skip/i }))
     const capture = await findByTestId('capture')
     expect(capture.textContent).toMatch(/\/reader\//)
@@ -263,7 +263,7 @@ describe('Library — Reprocess (M6 T7)', () => {
     const reprocessBtn = await screen.findByRole('button', { name: /Reprocess Already Processed/i })
     fireEvent.click(reprocessBtn)
 
-    const dialog = await screen.findByRole('dialog', { name: /process book/i })
+    const dialog = await screen.findByRole('dialog', { name: /prepare book/i })
     // initialOps pre-fills from Book.processing — the modal's useEffect seeds it
     // one tick after open, so wait for the checkbox to settle.
     await waitFor(() => {

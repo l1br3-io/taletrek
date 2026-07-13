@@ -1,3 +1,4 @@
+import { Upload } from 'lucide-react'
 import { useRef } from 'react'
 
 interface UploadButtonProps {
@@ -35,9 +36,9 @@ export function UploadButton({ onSelect, disabled, label = 'Upload a book' }: Up
         type="button"
         onClick={handleClick}
         disabled={disabled}
-        className="rounded-lg border border-accent bg-accent-soft px-4 py-2 font-medium text-accent transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex items-center gap-2 rounded-lg border border-accent bg-accent-soft px-4 py-2 font-medium text-accent transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {label}
+        <Upload className="h-4 w-4" /> {label}
       </button>
     </>
   )

@@ -1,3 +1,4 @@
+import { Download } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 const DISMISS_KEY = 'tt.install.dismissed'
@@ -100,9 +101,9 @@ export function InstallPrompt() {
           <button
             type="button"
             onClick={() => void prompt()}
-            className="rounded-lg border border-accent bg-accent-soft px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-elevated"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-accent bg-accent-soft px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-elevated"
           >
-            Install
+            <Download className="h-4 w-4" /> Install
           </button>
         )}
         <button

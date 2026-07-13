@@ -1,3 +1,4 @@
+import { X } from 'lucide-react'
 import { useEffect } from 'react'
 import type { Chapter } from '../types'
 
@@ -48,7 +49,7 @@ export function Outline({ open, chapters, currentChapterIndex, onSelect, onClose
             aria-label="Close"
             className="rounded border border-line px-2 py-0.5 text-muted hover:text-fg"
           >
-            ✕
+            <X className="h-4 w-4" />
           </button>
         </header>
         <nav className="flex-1 overflow-y-auto">

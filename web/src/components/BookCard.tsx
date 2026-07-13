@@ -1,3 +1,4 @@
+import { AudioLines, List, RefreshCw, SpellCheck, Trash2 } from 'lucide-react'
 import type { Book, BookId } from '../types'
 import { BookCover } from './BookCover'
 
@@ -66,54 +67,54 @@ export function BookCard({
       >
         <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
       </div>
-      <div className="mt-2 flex gap-3">
+      <div className="mt-2 flex flex-wrap gap-3">
         {onOutline && book.format !== 'epub' && (
           <button
             type="button"
             onClick={() => onOutline(book.id)}
-            className="text-xs text-muted transition-colors hover:text-accent"
+            className="inline-flex items-center gap-1 text-xs text-muted transition-colors hover:text-accent"
             aria-label={`Generate outline for ${book.title}`}
           >
-            Outline
+            <List className="h-3.5 w-3.5" /> Outline
           </button>
         )}
         {onReprocess && (
           <button
             type="button"
             onClick={() => onReprocess(book.id)}
-            className="text-xs text-muted transition-colors hover:text-accent"
+            className="inline-flex items-center gap-1 text-xs text-muted transition-colors hover:text-accent"
             aria-label={`Reprocess ${book.title}`}
           >
-            Reprocess
+            <RefreshCw className="h-3.5 w-3.5" /> Reprocess
           </button>
         )}
         {onResynthesize && (
           <button
             type="button"
             onClick={() => onResynthesize(book.id)}
-            className="text-xs text-muted transition-colors hover:text-accent"
+            className="inline-flex items-center gap-1 text-xs text-muted transition-colors hover:text-accent"
             aria-label={`Re-synthesize ${book.title}`}
           >
-            Synthesize
+            <AudioLines className="h-3.5 w-3.5" /> Synthesize
           </button>
         )}
         {onPronunciation && (
           <button
             type="button"
             onClick={() => onPronunciation(book.id)}
-            className="text-xs text-muted transition-colors hover:text-accent"
+            className="inline-flex items-center gap-1 text-xs text-muted transition-colors hover:text-accent"
             aria-label={`Review pronunciation for ${book.title}`}
           >
-            Hints
+            <SpellCheck className="h-3.5 w-3.5" /> Hints
           </button>
         )}
         <button
           type="button"
           onClick={() => onDelete(book.id)}
-          className="text-xs text-muted transition-colors hover:text-red-400"
+          className="inline-flex items-center gap-1 text-xs text-muted transition-colors hover:text-red-400"
           aria-label={`Delete ${book.title}`}
         >
-          Delete
+          <Trash2 className="h-3.5 w-3.5" /> Delete
         </button>
       </div>
     </li>

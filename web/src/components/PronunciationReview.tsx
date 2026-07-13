@@ -1,3 +1,4 @@
+import { ArrowRight, Sparkles } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { HintsScanState } from '../hooks/usePronunciationHints'
 import type { PronunciationCandidate } from '../lib/ai/types'
@@ -139,8 +140,9 @@ export function PronunciationReview({
                 <button
                   type="button"
                   onClick={acceptHighConfidence}
-                  className="self-start rounded-md border border-accent bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent hover:text-surface"
+                  className="inline-flex items-center gap-1.5 self-start rounded-md border border-accent bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent hover:text-surface"
                 >
+                  <Sparkles className="h-3.5 w-3.5" />
                   Accept high-confidence (≥{Math.round(HIGH_CONFIDENCE_THRESHOLD * 100)}%)
                 </button>
                 <ul className="flex-1 space-y-2 overflow-y-auto">
@@ -164,7 +166,7 @@ export function PronunciationReview({
                             aria-label="word to replace"
                             className="w-1/3 rounded-md border border-line bg-surface px-2 py-1 text-sm"
                           />
-                          <span className="text-muted">→</span>
+                          <ArrowRight className="h-4 w-4 shrink-0 text-muted" />
                           <input
                             type="text"
                             value={row.replace}

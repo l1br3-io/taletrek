@@ -1,3 +1,4 @@
+import { X } from 'lucide-react'
 import type { UploadState } from '../hooks/useBookUpload'
 
 interface UploadProgressProps {
@@ -48,7 +49,7 @@ export function UploadProgress({ state, onStartReading, onDismiss }: UploadProgr
           aria-label="Dismiss error"
           className="ml-4 text-xs text-red-400/70 hover:text-red-400"
         >
-          ✕
+          <X className="h-4 w-4" />
         </button>
       </div>
     )

@@ -13,11 +13,6 @@
         "/home/jpt/.local/bin/google-chrome"
       ],
       "enabled": true
-    },
-    "hf-mcp-server": {
-      "type": "remote",
-      "url": "https://huggingface.co/mcp?login",
-      "enabled": true
     }
   }
 }

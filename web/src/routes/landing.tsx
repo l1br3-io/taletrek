@@ -1,4 +1,14 @@
+import { Eraser, FileText, Library, Moon, Plane, Volume2 } from 'lucide-react'
 import { Link } from 'react-router'
+
+const features = [
+  { Icon: FileText, text: 'Upload PDF, EPUB, MOBI, or TXT' },
+  { Icon: Volume2, text: 'On-device neural text-to-speech (Piper)' },
+  { Icon: Moon, text: 'Background playback that survives screen lock' },
+  { Icon: Eraser, text: 'Clean audio — links, images, and footnotes skipped' },
+  { Icon: Library, text: 'A personal library with reading progress' },
+  { Icon: Plane, text: 'Fully offline once your voice is downloaded' },
+]
 
 export function Landing() {
   return (
@@ -35,12 +45,12 @@ export function Landing() {
           What's included
         </h2>
         <ul className="space-y-2 text-fg">
-          <li>📄 Upload PDF, EPUB, MOBI, or TXT</li>
-          <li>🔊 On-device neural text-to-speech (Piper)</li>
-          <li>🏃 Background playback that survives screen lock</li>
-          <li>🧹 Clean audio — links, images, and footnotes skipped</li>
-          <li>📚 A personal library with reading progress</li>
-          <li>✈️ Fully offline once your voice is downloaded</li>
+          {features.map(({ Icon, text }) => (
+            <li key={text} className="flex items-center gap-2.5">
+              <Icon className="h-4 w-4 shrink-0 text-accent" />
+              {text}
+            </li>
+          ))}
         </ul>
       </section>
 
