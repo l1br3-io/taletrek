@@ -1,5 +1,11 @@
 # PRD: M6 — AI Transforms
 
+> **Note (post-ship revision):** The on-device **WebLLM / in-browser backend was
+> removed** (see [`../adr/0005-remove-in-browser-llm-backend.md`](../adr/0005-remove-in-browser-llm-backend.md)).
+> M6 is now **cloud-only**. The historical text below still describes the
+> original dual-backend design; treat the in-browser/WebGPU/WebLLM portions as
+> superseded. The `webllm.md` spike was deleted with the backend.
+
 > **Status:** Implementation in progress (Checkpoint B). T0 WebLLM spike:
 > go/no-go #1 (Vite+Worker bundle) ✅ confirmed; #2 (OPFS) + #3 (inference)
 > pending real-hardware run — see [`../spikes/webllm.md`](../spikes/webllm.md).

@@ -220,29 +220,13 @@ describe('Settings — AI transforms (M6)', () => {
     expect(
       screen.getByRole('button', { name: /toggle AI transforms/i, pressed: false }),
     ).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /use on-device backend/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/no providers configured yet/i)).not.toBeInTheDocument()
   })
 
-  it('reveals the config + default in-browser backend when enabled', async () => {
+  it('reveals the cloud provider list when enabled', async () => {
     await renderHydrated()
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
-    })
-    expect(
-      screen.getByRole('button', { name: /use on-device backend/i, pressed: true }),
-    ).toBeInTheDocument()
-    expect(screen.getByLabelText(/in-browser model id/i)).toHaveValue(
-      'Qwen2.5-1.5B-Instruct-q4f32_1-MLC',
-    )
-  })
-
-  it('swaps to cloud provider list on backend change and persists it', async () => {
-    await renderHydrated()
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
-    })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /use cloud backend/i }))
     })
     expect(screen.getByText(/no providers configured yet/i)).toBeInTheDocument()
     const stored = await getSetting<{ ai: { backend: string } }>('app')
@@ -253,9 +237,6 @@ describe('Settings — AI transforms (M6)', () => {
     await renderHydrated()
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
-    })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /use cloud backend/i }))
     })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /\+ add provider/i }))

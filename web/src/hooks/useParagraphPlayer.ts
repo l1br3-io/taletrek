@@ -142,6 +142,13 @@ export interface UseParagraphPlayerResult {
   /** Jump to the first paragraph of the previous chapter. */
   prevChapter: () => void
   seekToParagraph: (id: string) => void
+  /**
+   * Reposition the pointer to `id` WITHOUT starting playback. Cancels any
+   * in-flight playback, positions the highlight, and pre-renders ahead so the
+   * next `play()` begins here instantly. Used for non-disruptive navigation
+   * (e.g. tapping an Outline entry).
+   */
+  navigateToParagraph: (id: string) => void
   /** Seek relatively within the current paragraph (Media Session ±15s). */
   seekBy: (deltaSeconds: number) => void
   /** Seek absolutely within the current paragraph (Media Session seekto). */
@@ -475,6 +482,30 @@ export function useParagraphPlayer({
     [paragraphs, jumpTo],
   )
 
+  // Non-playing navigation: cancel in-flight playback, reposition the pointer
+  // + highlight, and prime the buffer so the next `play()` starts here. Unlike
+  // `seekToParagraph`/`jumpTo`, no audio is synthesized-for-playback and the
+  // status returns to 'idle'.
+  const navigateToParagraph = useCallback(
+    (id: string) => {
+      const index = paragraphs.findIndex((p) => p.id === id)
+      const para = paragraphs[index]
+      if (!para) return
+      tokenRef.current++
+      genRef.current++
+      advancingRef.current = false
+      audioRef.current.stop()
+      revokeUrl()
+      pointerRef.current = index
+      setCurrentParagraphId(para.id)
+      prune(index)
+      setStatus({ type: 'idle' })
+      syncBufferedAhead()
+      void primeAhead(index + 1)
+    },
+    [paragraphs, revokeUrl, prune, syncBufferedAhead, primeAhead],
+  )
+
   const seekBy = useCallback((deltaSeconds: number) => {
     audioRef.current.seekBy(deltaSeconds)
   }, [])
@@ -508,6 +539,7 @@ export function useParagraphPlayer({
     nextChapter,
     prevChapter,
     seekToParagraph,
+    navigateToParagraph,
     seekBy,
     seekTo,
     getAudioPosition,

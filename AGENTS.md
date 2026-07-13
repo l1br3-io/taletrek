@@ -13,7 +13,7 @@
 | M3 — Jog Mode | ✅ **Done** (pre-rendered chunks, `<audio>`, Media Session) | [`docs/prds/M3-jog.md`](docs/prds/M3-jog.md) |
 | M4 — Clean Reading | ✅ **Done** (filters + pronunciation dictionary; commit `d57a8bf`) | [`docs/prds/M4-clean-reading.md`](docs/prds/M4-clean-reading.md) |
 | M5 — Library & Offline | ✅ **Done** (library, resume, offline voice mgmt, PWA polish; commit `4115f00`) | [`docs/prds/M5-library-offline.md`](docs/prds/M5-library-offline.md) |
-| M6 — AI Transforms | ✅ **Done** (in-browser WebLLM + opt-in cloud, cleanup/translate/summarize/simplify/pronunciation-hints, per-paragraph transforms + importable key/config) | [`docs/prds/M6-ai-transforms.md`](docs/prds/M6-ai-transforms.md) · [`docs/spikes/webllm.md`](docs/spikes/webllm.md) · [`tasks/todo.md`](tasks/todo.md) |
+| M6 — AI Transforms | ✅ **Done** (cloud-only after ADR-0005; in-browser WebLLM backend removed. cleanup/translate/summarize/simplify/pronunciation-hints, per-paragraph transforms + importable key/config) | [`docs/prds/M6-ai-transforms.md`](docs/prds/M6-ai-transforms.md) · [`docs/adr/0005-remove-in-browser-llm-backend.md`](docs/adr/0005-remove-in-browser-llm-backend.md) · [`tasks/todo.md`](tasks/todo.md) |
 | M7 — Reader UX & Mobile | ✅ **Done** (responsive layout + nav drawer, chapter outline, minimized `⋯` playback menu, go-to-current + FAB, auto-scroll to resumed position on first Play) | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 | M8 — Audio Cache | ✅ **Done** (content-addressed IndexedDB audio cache, LRU-bounded ~500 MB, per-book cascade clear, Settings indicator + Clear button) | [`docs/prds/M8-audio-cache.md`](docs/prds/M8-audio-cache.md) |
 
@@ -71,7 +71,7 @@ spike/piper/   throwaway Piper TTS validation app
 6. **Web Workers have no `DOMParser`.** The EPUB parser runs inside the parse worker, so it uses `fast-xml-parser` (worker-safe), not the DOM. Any future parsing that needs a DOM must stay on the main thread or use a worker-safe parser. Unit tests can't catch this (jsdom has DOMParser) — only a real browser run does.
 7. **`pdfjs-dist` is lazy-imported inside `parse()`** — importing it at module top-level pulls `DOMMatrix` at load, which crashes jsdom. Keep the dynamic `await import('pdfjs-dist')` in `pdf.ts`.
 8. **Send file *bytes*, not the `File`, to a worker.** `parseInWorker` reads `file.arrayBuffer()` on the main thread and transfers the `ArrayBuffer`; the worker reconstructs the `File`. Cloning a `File` across the worker boundary can fail for files backed by a filesystem path.
-9. **WebGPU feature-detect needs `requestAdapter()`, not `!!navigator.gpu`.** The API object is present even with no adapter. M6's `WebLlmEngine.isReady()` must call `navigator.gpu.requestAdapter()` and treat `null` as unsupported. **The desktop MCP Chrome is the Flatpak build under `bwrap` — Vulkan is blocked at the sandbox level** → `requestAdapter()` returns null even with `#enable-vulkan` + `#force-enable-webgpu-interop` flags enabled. **System Firefox 152 works** (WebGPU enabled by default, adapter initializes correctly). For GPU/WebLLM browser testing, use system Firefox or a non-Flatpak Chromium. See [`docs/spikes/webllm.md`](docs/spikes/webllm.md).
+9. **WebGPU is no longer used** — the on-device WebLLM backend was removed (ADR-0005); AI transforms are cloud-only now. The old `requestAdapter()` feature-detect / Flatpak-Vulkan guidance no longer applies.
 
 ## How to resume (in a new session)
 
@@ -79,7 +79,7 @@ Open opencode in this repo and say, e.g.:
 
 > "Continue with M1 — Upload & Read. Read `docs/ROADMAP.md` and `docs/prds/M0-foundation.md` for established patterns, then plan M1 following the spec-driven workflow. The Piper integration is M2, not M1."
 
-The agent auto-loads this file + `.opencode/rules/tech.md`. For TTS work, also point it at [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) (M2 recommendations: pin ORT 1.18.0, mirror wasm locally, single-threaded default, Web Worker, pre-download model to OPFS). For M6 (AI transforms), point it at [`docs/spikes/webllm.md`](docs/spikes/webllm.md) + [`tasks/plan.md`](tasks/plan.md) (WebLLM worker pattern, OPFS cache, model id `Qwen2.5-1.5B-Instruct-q4f32_1-MLC`, no batched API).
+The agent auto-loads this file + `.opencode/rules/tech.md`. For TTS work, also point it at [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) (M2 recommendations: pin ORT 1.18.0, mirror wasm locally, single-threaded default, Web Worker, pre-download model to OPFS). For M6 (AI transforms), point it at [`tasks/plan.md`](tasks/plan.md) (cloud OpenAI-compatible engine; the on-device WebLLM backend was removed — ADR-0005).
 
 ## Non-goals (launch scope)
 

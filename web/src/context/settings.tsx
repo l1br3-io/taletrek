@@ -43,8 +43,7 @@ export const DEFAULT_CLEANING: CleaningConfig = {
 /** M6 default: disabled end-to-end (no UI beyond the toggle, no modals, no downloads). */
 export const DEFAULT_AI_SETTINGS: AiSettings = {
   enabled: false,
-  backend: 'in-browser',
-  inBrowser: { modelId: 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC' },
+  backend: 'cloud',
   cloud: { providers: [], activeProviderId: null },
 }
 
@@ -62,12 +61,16 @@ export const DEFAULT_SETTINGS: Settings = {
 const SETTINGS_KEY = 'app'
 
 /**
- * Migrate AI settings from older shapes to the current multi-provider format.
+ * Migrate AI settings from older shapes to the current cloud-only format.
  *
  * - Pre-M6 / missing: → `DEFAULT_AI_SETTINGS`.
  * - M6 pre-redesign: `cloud: { baseUrl, model }` (single provider) →
  *   `cloud: { providers: [{ id, presetId: 'custom', baseUrl, model }], activeProviderId }`.
- * - Current: already in multi-provider shape → pass through.
+ * - Removed local backend: `backend: 'in-browser'` → coerced to `'cloud'`
+ *   (the on-device WebLLM engine was removed; see ADR-0005). `enabled` is kept
+ *   as-stored — a user who had local-only enabled will see the cloud provider
+ *   list (empty until they add one).
+ * - Current: already in cloud-only shape → pass through.
  */
 function migrateAi(ai: unknown): AiSettings {
   if (!ai || typeof ai !== 'object') return DEFAULT_AI_SETTINGS
@@ -83,17 +86,16 @@ function migrateAi(ai: unknown): AiSettings {
     }
     return {
       enabled: obj.enabled ?? false,
-      backend: obj.backend ?? 'in-browser',
-      inBrowser: obj.inBrowser ?? { modelId: 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC' },
+      backend: 'cloud',
       cloud: { providers: [provider], activeProviderId: provider.id },
     }
   }
 
-  // Ensure required fields exist even if stored shape is partial.
+  // Ensure required fields exist even if stored shape is partial. Coerce the
+  // removed `in-browser` backend to `cloud`.
   return {
     enabled: obj.enabled ?? false,
-    backend: obj.backend ?? 'in-browser',
-    inBrowser: obj.inBrowser ?? { modelId: 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC' },
+    backend: 'cloud',
     cloud: {
       providers: Array.isArray(obj.cloud?.providers) ? obj.cloud.providers : [],
       activeProviderId: obj.cloud?.activeProviderId ?? null,

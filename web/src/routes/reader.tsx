@@ -120,6 +120,9 @@ function ReaderPane({
 
   // --- Outline (F2) ---
   const [outlineOpen, setOutlineOpen] = useState(false)
+  // Paragraph id to briefly pulse after non-playing navigation (Outline). Cleared
+  // via onAnimationEnd in ReaderView once the highlight finishes.
+  const [pulseId, setPulseId] = useState<string | null>(null)
   const chapterFirstParagraphId = useMemo(() => {
     const map = new Map<number, string>()
     for (const p of cleanedParagraphs) {
@@ -138,7 +141,10 @@ function ReaderPane({
         id = chapterFirstParagraphId.get(chapterIndex)
       }
       if (id) {
-        player.seekToParagraph(id)
+        // Navigate without autoplay: position the highlight + scroll, and let
+        // the user press Play when ready. A pulse makes the target obvious.
+        player.navigateToParagraph(id)
+        setPulseId(id)
         setTimeout(scrollToCurrent, 0)
       }
     },
@@ -308,6 +314,8 @@ function ReaderPane({
         currentParagraphId={player.currentParagraphId}
         onSeekParagraph={player.seekToParagraph}
         activeParagraphRef={activeParagraphRef}
+        pulseParagraphId={pulseId}
+        onPulseEnd={() => setPulseId(null)}
       />
       <PlayerBar
         status={player.status}

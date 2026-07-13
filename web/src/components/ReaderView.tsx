@@ -13,6 +13,10 @@ interface ReaderViewProps {
    * container can scroll it into view. Re-attached as the active paragraph moves.
    */
   activeParagraphRef?: RefObject<HTMLParagraphElement | null>
+  /** Paragraph id to briefly pulse-highlight (e.g. after Outline navigation). */
+  pulseParagraphId?: string | null
+  /** Invoked when the pulse animation finishes. */
+  onPulseEnd?: () => void
 }
 
 interface ParagraphItem {
@@ -30,6 +34,8 @@ export function ReaderView({
   currentParagraphId,
   onSeekParagraph,
   activeParagraphRef,
+  pulseParagraphId,
+  onPulseEnd,
 }: ReaderViewProps) {
   const multi = chapters.length > 1
   return (
@@ -47,6 +53,7 @@ export function ReaderView({
             {paragraphItems(chapter.paragraphs, chapter.id).map((item) => {
               const active = item.id === currentParagraphId
               const seekable = !!onSeekParagraph
+              const pulsing = item.id === pulseParagraphId
               const seekProps = seekable
                 ? {
                     role: 'button' as const,
@@ -64,13 +71,17 @@ export function ReaderView({
                 <p
                   key={item.id}
                   ref={active && activeParagraphRef ? activeParagraphRef : undefined}
-                  className={
+                  className={[
                     active
                       ? 'rounded bg-accent-soft p-2 -mx-2 ring-1 ring-accent'
                       : seekable
                         ? 'cursor-pointer'
-                        : ''
-                  }
+                        : '',
+                    pulsing ? 'tt-nav-pulse' : '',
+                  ]
+                    .join(' ')
+                    .trim()}
+                  onAnimationEnd={pulsing ? onPulseEnd : undefined}
                   {...seekProps}
                 >
                   {item.text}

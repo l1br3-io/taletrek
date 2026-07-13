@@ -79,9 +79,10 @@ export interface UseAiTransformOptions {
   /** The engine resolved by the caller (`null` when AI is disabled — `run` errors). */
   engine: AiTransformEngine | null
   /**
-   * Optional prep step run before transforms — e.g. the in-browser model download.
-   * Its progress is reported as a "Loading model…" running stage so the modal
-   * shows one continuous progress bar.
+   * Optional prep step run before transforms. Its progress is reported as a
+   * "Loading model…" running stage so the modal shows one continuous progress
+   * bar. Unused now that only the cloud backend remains; retained for future
+   * backends that need a warm-up step.
    */
   prepare?: (onProgress: (fraction: number) => void) => Promise<void>
 }
@@ -97,7 +98,7 @@ export interface UseAiTransformOptions {
  * Settings (ADR-0004); the engine resolves it via `keyring`.
  *
  * The engine is injected (+ an optional `prepare`) so the caller controls
- * creation + the in-browser model-load flow; the hook only runs the work.
+ * creation; the hook only runs the work.
  */
 export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseAiTransform {
   const [state, setState] = useState<TransformState>({ type: 'idle' })

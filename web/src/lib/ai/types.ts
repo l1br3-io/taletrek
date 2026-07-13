@@ -1,7 +1,7 @@
 /**
  * M6 AI-transform domain types.
  *
- * Two backends (in-browser WebLLM, cloud OpenAI-compatible) implement one
+ * A cloud (OpenAI-compatible) backend implements the
  * {@link AiTransformEngine} contract. See `docs/prds/M6-ai-transforms.md` and
  * `docs/adr/0003-ai-transform-architecture.md`.
  *
@@ -50,17 +50,16 @@ export interface PronunciationCandidate {
   category: PronunciationCategory
 }
 
-/** Contract both backends implement. */
+/** Contract the cloud backend implements. */
 export interface AiTransformEngine {
-  /** True when the backend can serve a request now (model loaded / key set). */
+  /** True when the backend can serve a request now (key set). */
   isReady(): Promise<boolean>
   /**
    * Transform `input` paragraphs per `op`. Returns one output string per input
    * paragraph (cleanup/translate/simplify preserve count; summarize may reduce —
    * callers handle the difference). Reports progress 0..1 per chunk.
    *
-   * Abort: cloud honours `signal` directly (AbortController on `fetch`); the
-   * in-browser engine bridges `signal.aborted` to WebLLM's `interruptGenerate()`.
+   * Abort: honours `signal` directly (AbortController on `fetch`).
    */
   transform(
     input: string[],
@@ -116,8 +115,8 @@ export interface CloudProvider {
 /** Additive `ai?` field on {@link Settings}. Key is NOT here (ADR-0004). */
 export interface AiSettings {
   enabled: boolean
-  backend: 'in-browser' | 'cloud'
-  inBrowser: { modelId: string }
+  /** Discriminator retained for settings migration; always `'cloud'` now. */
+  backend: 'cloud'
   cloud: {
     providers: CloudProvider[]
     /** Which provider in `providers` is active, or `null` if none configured. */

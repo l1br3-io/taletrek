@@ -248,6 +248,45 @@ describe('useParagraphPlayer — playback (lookahead=0)', () => {
     expect(engine.calls.map((c) => c.text)).toEqual(['C.'])
   })
 
+  it('navigateToParagraph positions the pointer without playing', async () => {
+    const engine = stubEngine()
+    const { result, audio } = renderPlayer(oneChapter(['A.', 'B.', 'C.', 'D.']), {
+      engine,
+      lookahead: 2,
+    })
+    await act(async () => {
+      result.current.navigateToParagraph(`${chapterId('c1')}:2`)
+    })
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:2`)
+    // Status returns to idle — no playback started.
+    expect(result.current.status.type).toBe('idle')
+    // Audio controller is stopped, nothing loaded for playback.
+    expect(audio.loadedSrcs).toHaveLength(0)
+    expect(audio.stoppedCount).toBeGreaterThan(0)
+    // Pointer is positioned so a subsequent play() resumes here, not at 0.
+    await act(async () => {
+      result.current.play()
+    })
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:2`)
+    expect(result.current.status.type).toBe('playing')
+  })
+
+  it('navigateToParagraph cancels in-flight playback', async () => {
+    const engine = stubEngine()
+    const { result, audio } = renderPlayer(oneChapter(['A.', 'B.', 'C.']), { engine })
+    await act(async () => {
+      result.current.play()
+    })
+    expect(result.current.status.type).toBe('playing')
+    await act(async () => {
+      result.current.navigateToParagraph(`${chapterId('c1')}:2`)
+    })
+    expect(result.current.status.type).toBe('idle')
+    expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:2`)
+    // Audio was stopped as part of cancelling the current paragraph.
+    expect(audio.stoppedCount).toBeGreaterThan(0)
+  })
+
   it('next and prev move the pointer', async () => {
     const engine = stubEngine()
     const { result } = renderPlayer(oneChapter(['A.', 'B.', 'C.']), { engine })

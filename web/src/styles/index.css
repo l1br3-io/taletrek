@@ -76,3 +76,28 @@ body {
   line-height: 1.7;
   overflow-wrap: break-word;
 }
+
+/*
+ * Brief highlight pulse shown after non-playing navigation (e.g. tapping an
+ * Outline entry). Expands a soft accent ring outward and fades, drawing the
+ * eye to the new position without auto-starting playback.
+ */
+@keyframes tt-nav-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--tt-accent);
+  }
+  60% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--tt-accent) 35%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.tt-nav-pulse {
+  animation: tt-nav-pulse 1200ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tt-nav-pulse {
+    animation: none;
+  }
+}

@@ -17,7 +17,6 @@ function cloudAi(overrides: Partial<AiSettings> = {}): AiSettings {
   return {
     enabled: true,
     backend: 'cloud',
-    inBrowser: { modelId: 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC' },
     cloud: { providers: [], activeProviderId: null },
     ...overrides,
   }
