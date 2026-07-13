@@ -4,20 +4,9 @@ interface UploadButtonProps {
   onSelect: (file: File) => void
   disabled?: boolean
   label?: string
-  /**
-   * Gate run before the file picker opens (M6 `modal.beforeUpload`). Return
-   * `false` (or a Promise that resolves to `false`) to cancel the pick. Omit for
-   * the plain M1 flow — the picker opens immediately on click.
-   */
-  onBeforePick?: () => boolean | Promise<boolean>
 }
 
-export function UploadButton({
-  onSelect,
-  disabled,
-  label = 'Upload a book',
-  onBeforePick,
-}: UploadButtonProps) {
+export function UploadButton({ onSelect, disabled, label = 'Upload a book' }: UploadButtonProps) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -26,12 +15,8 @@ export function UploadButton({
     event.target.value = ''
   }
 
-  const handleClick = async (): Promise<void> => {
+  const handleClick = (): void => {
     if (disabled) return
-    if (onBeforePick) {
-      const proceed = await onBeforePick()
-      if (!proceed) return
-    }
     inputRef.current?.click()
   }
 

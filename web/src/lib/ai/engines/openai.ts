@@ -1,10 +1,16 @@
 import { getApiKey } from '../keyring'
 import type { CompletionMessages } from '../prompts'
-import { runHints, runTransform } from '../runner'
-import type { AiTransformEngine, PronunciationCandidate, TransformOp } from '../types'
+import { runHints, runOutlineDetection, runTransform } from '../runner'
+import type {
+  AiOutlineChapter,
+  AiTransformEngine,
+  PronunciationCandidate,
+  TransformOp,
+} from '../types'
 import { consumeSse } from './sse'
 
 export interface CloudConfig {
+  providerId: string
   baseUrl: string
   model: string
 }
@@ -39,7 +45,7 @@ export class CloudLlmEngine implements AiTransformEngine {
   constructor(private readonly config: CloudConfig) {}
 
   async isReady(): Promise<boolean> {
-    return !!getApiKey() && !!this.config.baseUrl && !!this.config.model
+    return !!getApiKey(this.config.providerId) && !!this.config.baseUrl && !!this.config.model
   }
 
   async transform(
@@ -61,8 +67,17 @@ export class CloudLlmEngine implements AiTransformEngine {
     return runHints(sample, this.complete, onProgress, signal)
   }
 
+  async detectOutline(
+    paragraphs: string[],
+    onProgress?: (fraction: number) => void,
+    signal?: AbortSignal,
+  ): Promise<AiOutlineChapter[]> {
+    this.requireKey()
+    return runOutlineDetection(paragraphs, this.complete, onProgress, signal)
+  }
+
   private requireKey(): void {
-    if (!getApiKey()) {
+    if (!getApiKey(this.config.providerId)) {
       throw new CloudError(401, 'No API key set — open Settings → AI and enter your key.')
     }
   }
@@ -71,7 +86,7 @@ export class CloudLlmEngine implements AiTransformEngine {
     messages: CompletionMessages,
     opts: CompleteOptions = {},
   ): Promise<string> => {
-    const key = getApiKey()
+    const key = getApiKey(this.config.providerId)
     if (!key) {
       throw new CloudError(401, 'No API key set — open Settings → AI and enter your key.')
     }

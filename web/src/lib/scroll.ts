@@ -7,6 +7,12 @@ export function scrollIntoViewCenter(
   el.scrollIntoView({ block: 'center', behavior })
 }
 
+/** Scroll the page to the top. No-op when there is no viewport (SSR/tests). */
+export function scrollToTop(behavior: ScrollBehavior = 'smooth'): void {
+  if (typeof window === 'undefined') return
+  window.scrollTo({ top: 0, behavior })
+}
+
 /** True when any part of `el` intersects the viewport. */
 export function isInViewport(el: Element | null): boolean {
   if (!el) return false

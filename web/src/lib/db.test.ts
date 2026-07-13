@@ -14,6 +14,7 @@ import {
   _resetDBForTests,
   AUDIO_CACHE_BUDGET_BYTES,
   clearAudioCache,
+  deleteAudioCacheKeys,
   deleteBookCascade,
   deleteSetting,
   evictAudioCacheFraction,
@@ -25,12 +26,14 @@ import {
   getBook,
   getBookFile,
   getChaptersByBook,
+  getEffectiveAudioCacheBudget,
   getSetting,
   putAudioCacheEntry,
   putBook,
   putBookFile,
   putChapters,
   setSetting,
+  syncAudioCacheBudget,
   updateBookProcessing,
   updateBookProgress,
 } from './db'
@@ -404,5 +407,64 @@ describe('audio cache store (M8)', () => {
     const removed = await clearAudioCache()
     expect(removed).toBe(2)
     expect(await getAudioCacheSize()).toBe(0)
+  })
+})
+
+describe('audio cache — dynamic budget', () => {
+  it('getEffectiveAudioCacheBudget returns the default when no key is set', async () => {
+    expect(await getEffectiveAudioCacheBudget()).toBe(AUDIO_CACHE_BUDGET_BYTES)
+  })
+
+  it('syncAudioCacheBudget writes the value and getEffectiveAudioCacheBudget reads it', async () => {
+    await syncAudioCacheBudget(123 * 1024 * 1024)
+    expect(await getEffectiveAudioCacheBudget()).toBe(123 * 1024 * 1024)
+  })
+
+  it('putAudioCacheEntry respects a lowered dynamic budget', async () => {
+    // Set a tiny budget so a single entry exceeds it.
+    await syncAudioCacheBudget(50)
+    // Insert two entries; the first should be evicted when the second is
+    // written because the budget is 50 bytes.
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'first', sizeBytes: 30, lastUsed: 1000 }))
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'second', sizeBytes: 30, lastUsed: 2000 }))
+    expect(await getAudioCacheEntry('first')).toBeUndefined()
+    expect(await getAudioCacheEntry('second')).toBeDefined()
+    // Restore default for subsequent tests.
+    await syncAudioCacheBudget(AUDIO_CACHE_BUDGET_BYTES)
+  })
+
+  it('syncAudioCacheBudget(Infinity) disables the reactive sweep', async () => {
+    await syncAudioCacheBudget(Number.POSITIVE_INFINITY)
+    expect(await getEffectiveAudioCacheBudget()).toBe(Infinity)
+    // Seed many large entries — none should be evicted by the put path.
+    for (let i = 0; i < 5; i++) {
+      await putAudioCacheEntry(
+        makeAudioCacheRecord({ key: `big-${i}`, sizeBytes: 10 * 1024 * 1024, lastUsed: 1000 + i }),
+      )
+    }
+    for (let i = 0; i < 5; i++) {
+      expect(await getAudioCacheEntry(`big-${i}`)).toBeDefined()
+    }
+    // Restore default for subsequent tests.
+    await syncAudioCacheBudget(AUDIO_CACHE_BUDGET_BYTES)
+  })
+})
+
+describe('audio cache — per-key delete', () => {
+  it('deleteAudioCacheKeys removes the specified entries and leaves others', async () => {
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'keep-1' }))
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'drop-1' }))
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'drop-2' }))
+    const removed = await deleteAudioCacheKeys(['drop-1', 'drop-2'])
+    expect(removed).toBe(2)
+    expect(await getAudioCacheEntry('keep-1')).toBeDefined()
+    expect(await getAudioCacheEntry('drop-1')).toBeUndefined()
+    expect(await getAudioCacheEntry('drop-2')).toBeUndefined()
+  })
+
+  it('deleteAudioCacheKeys is a no-op for an empty list', async () => {
+    await putAudioCacheEntry(makeAudioCacheRecord({ key: 'solo' }))
+    expect(await deleteAudioCacheKeys([])).toBe(0)
+    expect(await getAudioCacheEntry('solo')).toBeDefined()
   })
 })

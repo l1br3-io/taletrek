@@ -4,6 +4,7 @@ import { CloudLlmEngine } from './openai'
 
 const BASE = 'https://api.openai.com/v1'
 const MODEL = 'gpt-4o-mini'
+const PID = 'provider-1'
 
 function sseData(json: unknown): string {
   return `data: ${JSON.stringify(json)}\n\n`
@@ -57,25 +58,25 @@ function bodyN(mock: unknown, i = 0): Record<string, unknown> {
 }
 
 beforeEach(() => {
-  setApiKey('sk-test')
+  setApiKey(PID, 'sk-test')
 })
 afterEach(() => {
-  clearApiKey()
+  clearApiKey(PID)
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
 describe('CloudLlmEngine.isReady', () => {
   it('reflects key presence + config', async () => {
-    clearApiKey()
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    clearApiKey(PID)
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     expect(await engine.isReady()).toBe(false)
-    setApiKey('sk-x')
+    setApiKey(PID, 'sk-x')
     expect(await engine.isReady()).toBe(true)
   })
 
   it('is false without a baseUrl', async () => {
-    const engine = new CloudLlmEngine({ baseUrl: '', model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: '', model: MODEL })
     expect(await engine.isReady()).toBe(false)
   })
 })
@@ -85,7 +86,7 @@ describe('CloudLlmEngine.transform — cleanup', () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ok([delta('CLEAN'), DONE]))
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     const out = await engine.transform(['p-one', 'p-two'], { kind: 'cleanup' })
 
     expect(out).toEqual(['CLEAN', 'CLEAN'])
@@ -115,7 +116,7 @@ describe('CloudLlmEngine.transform — cleanup', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     const out = await engine.transform(['x'], { kind: 'cleanup' })
     expect(out).toEqual(['Hello, world!'])
   })
@@ -125,7 +126,7 @@ describe('CloudLlmEngine.transform — cleanup', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const fractions: number[] = []
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     await engine.transform(['a', 'b', 'c'], { kind: 'cleanup' }, (f) => fractions.push(f))
     expect(fractions).toEqual([1 / 3, 2 / 3, 1])
   })
@@ -139,7 +140,7 @@ describe('CloudLlmEngine.transform — cleanup', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     const out = await engine.transform(['p-one', 'p-two'], { kind: 'cleanup' })
     expect(out).toEqual(['CLEANED', 'p-two'])
   })
@@ -155,7 +156,7 @@ describe('CloudLlmEngine.transform — summarize', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     const out = await engine.transform(
       Array.from({ length: 25 }, (_, i) => `p${i}`),
       { kind: 'summarize', ratio: 0.5 },
@@ -173,7 +174,7 @@ describe('CloudLlmEngine.transform — errors + abort', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     await expect(engine.transform(['a'], { kind: 'cleanup' })).rejects.toMatchObject({
       name: 'CloudError',
       status: 429,
@@ -181,8 +182,8 @@ describe('CloudLlmEngine.transform — errors + abort', () => {
   })
 
   it('throws CloudError(401) before any request when no key is set', async () => {
-    clearApiKey()
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    clearApiKey(PID)
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     await expect(engine.transform(['a'], { kind: 'cleanup' })).rejects.toMatchObject({
       name: 'CloudError',
       status: 401,
@@ -197,7 +198,7 @@ describe('CloudLlmEngine.transform — errors + abort', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     ac.abort()
     await expect(
       engine.transform(['a'], { kind: 'cleanup' }, undefined, ac.signal),
@@ -209,7 +210,11 @@ describe('CloudLlmEngine.transform — errors + abort', () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ok([delta('c'), DONE]))
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ baseUrl: 'https://api.openai.com/v1///', model: MODEL })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: 'https://api.openai.com/v1///',
+      model: MODEL,
+    })
     await engine.transform(['a'], { kind: 'cleanup' })
     expect(callN(fetchMock)[0]).toBe('https://api.openai.com/v1/chat/completions')
   })
@@ -227,7 +232,7 @@ describe('CloudLlmEngine.proposePronunciationHints', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     const out = await engine.proposePronunciationHints(['She met Siobhan at the gate.'])
 
     expect(out).toHaveLength(1)
@@ -246,7 +251,7 @@ describe('CloudLlmEngine.proposePronunciationHints', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     const out = await engine.proposePronunciationHints(['x y'])
     expect(out).toHaveLength(1)
   })
@@ -257,7 +262,7 @@ describe('CloudLlmEngine.proposePronunciationHints', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
     const out = await engine.proposePronunciationHints(['x'])
     expect(out).toEqual([])
   })

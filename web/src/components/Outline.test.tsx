@@ -107,3 +107,62 @@ describe('Outline', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 })
+
+describe('Outline — sub-headings', () => {
+  function chapterWithHeadings(
+    index: number,
+    title: string,
+    headings: { paragraphIndex: number; title: string }[],
+  ): Chapter {
+    return {
+      id: chapterId(`c${index}`),
+      bookId: bookId('b1'),
+      index,
+      title,
+      paragraphs: ['x'],
+      headings,
+    }
+  }
+
+  it('renders sub-headings as indented items under their chapter', () => {
+    const ch = chapterWithHeadings(0, 'Chapter 1', [
+      { paragraphIndex: 1, title: 'THE STORM' },
+      { paragraphIndex: 3, title: 'THE CALM' },
+    ])
+    render(
+      <Outline open chapters={[ch]} currentChapterIndex={0} onSelect={vi.fn()} onClose={vi.fn()} />,
+    )
+    expect(screen.getByText('THE STORM')).toBeInTheDocument()
+    expect(screen.getByText('THE CALM')).toBeInTheDocument()
+  })
+
+  it('calls onSelect with chapterIndex and paragraphIndex when a sub-heading is tapped', () => {
+    const onSelect = vi.fn()
+    const ch = chapterWithHeadings(0, 'Chapter 1', [{ paragraphIndex: 2, title: 'A Section' }])
+    render(
+      <Outline
+        open
+        chapters={[ch]}
+        currentChapterIndex={0}
+        onSelect={onSelect}
+        onClose={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByText('A Section'))
+    expect(onSelect).toHaveBeenCalledWith(0, 2)
+  })
+
+  it('does not render a sub-heading list when headings is undefined', () => {
+    const ch: Chapter = {
+      id: chapterId('c0'),
+      bookId: bookId('b1'),
+      index: 0,
+      title: 'Chapter 1',
+      paragraphs: ['x'],
+    }
+    render(
+      <Outline open chapters={[ch]} currentChapterIndex={0} onSelect={vi.fn()} onClose={vi.fn()} />,
+    )
+    expect(screen.getByText('Chapter 1')).toBeInTheDocument()
+  })
+})

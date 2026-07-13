@@ -34,4 +34,15 @@ describe('AudioCacheIndicator', () => {
     render(<AudioCacheIndicator sizeBytes={0} onClear={vi.fn()} />)
     expect(screen.getByRole('button', { name: /Clear/ })).toBeDisabled()
   })
+
+  it('uses the budgetBytes prop instead of the default', () => {
+    render(
+      <AudioCacheIndicator
+        sizeBytes={100 * 1024 * 1024}
+        onClear={vi.fn()}
+        budgetBytes={1000 * 1024 * 1024}
+      />,
+    )
+    expect(screen.getByText(/Cached audio: 100 MB \/ 1000 MB/)).toBeInTheDocument()
+  })
 })

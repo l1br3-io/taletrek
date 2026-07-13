@@ -25,9 +25,21 @@ interface BookCardProps {
   onReprocess?: (id: BookId) => void
   /** When provided (AI enabled), shows a "Hints" action on the card. */
   onPronunciation?: (id: BookId) => void
+  /** When provided, shows an "Outline" action (hidden for EPUB — already has TOC). */
+  onOutline?: (id: BookId) => void
+  /** When provided (synth mode enabled), shows a "Synthesize" action on the card. */
+  onResynthesize?: (id: BookId) => void
 }
 
-export function BookCard({ book, onOpen, onDelete, onReprocess, onPronunciation }: BookCardProps) {
+export function BookCard({
+  book,
+  onOpen,
+  onDelete,
+  onReprocess,
+  onPronunciation,
+  onOutline,
+  onResynthesize,
+}: BookCardProps) {
   const pct = Math.round((book.progressFraction ?? 0) * 100)
   return (
     <li className="flex flex-col">
@@ -55,6 +67,16 @@ export function BookCard({ book, onOpen, onDelete, onReprocess, onPronunciation 
         <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
       </div>
       <div className="mt-2 flex gap-3">
+        {onOutline && book.format !== 'epub' && (
+          <button
+            type="button"
+            onClick={() => onOutline(book.id)}
+            className="text-xs text-muted transition-colors hover:text-accent"
+            aria-label={`Generate outline for ${book.title}`}
+          >
+            Outline
+          </button>
+        )}
         {onReprocess && (
           <button
             type="button"
@@ -63,6 +85,16 @@ export function BookCard({ book, onOpen, onDelete, onReprocess, onPronunciation 
             aria-label={`Reprocess ${book.title}`}
           >
             Reprocess
+          </button>
+        )}
+        {onResynthesize && (
+          <button
+            type="button"
+            onClick={() => onResynthesize(book.id)}
+            className="text-xs text-muted transition-colors hover:text-accent"
+            aria-label={`Re-synthesize ${book.title}`}
+          >
+            Synthesize
           </button>
         )}
         {onPronunciation && (

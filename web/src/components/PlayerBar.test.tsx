@@ -130,6 +130,14 @@ describe('PlayerBar', () => {
     expect(onOpenOutline).toHaveBeenCalledOnce()
   })
 
+  it('calls onScrollToTop from the overflow menu', () => {
+    const onScrollToTop = vi.fn()
+    renderBar({ onScrollToTop })
+    openMenu()
+    fireEvent.click(screen.getByRole('button', { name: /Back to top/ }))
+    expect(onScrollToTop).toHaveBeenCalledOnce()
+  })
+
   it('calls onTransformParagraph from the overflow menu when a paragraph is current', () => {
     const onTransformParagraph = vi.fn()
     renderBar({ onTransformParagraph, hasCurrentParagraph: true })

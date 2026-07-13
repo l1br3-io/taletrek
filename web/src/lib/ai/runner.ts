@@ -11,12 +11,19 @@
 import { chunksForOp, sample as sampleParagraphs } from './chunk'
 import {
   buildHintsMessages,
+  buildOutlineMessages,
   buildTransformMessages,
   type CompletionMessages,
   parseHintCandidates,
+  parseOutlineCandidates,
   splitOutput,
 } from './prompts'
-import type { AppliedProcessing, PronunciationCandidate, TransformOp } from './types'
+import type {
+  AiOutlineChapter,
+  AppliedProcessing,
+  PronunciationCandidate,
+  TransformOp,
+} from './types'
 
 /** Engine-specific completion primitive. */
 export type CompleteFn = (
@@ -71,6 +78,18 @@ export async function runTransform(
     onProgress?.(fraction(i + 1, chunks.length))
   }
   return out
+}
+
+/** Run AI-based outline detection over a flat paragraph list. */
+export async function runOutlineDetection(
+  paragraphs: string[],
+  complete: CompleteFn,
+  onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
+): Promise<AiOutlineChapter[]> {
+  const raw = await complete(buildOutlineMessages(paragraphs), { json: true, signal })
+  onProgress?.(1)
+  return parseOutlineCandidates(raw)
 }
 
 /** Run a pronunciation-hints scan over the opening sample of a book. */

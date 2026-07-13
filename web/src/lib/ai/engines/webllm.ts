@@ -1,7 +1,12 @@
 import type { AppConfig, InitProgressReport, MLCEngineInterface } from '@mlc-ai/web-llm'
 
-import { type CompleteFn, runHints, runTransform } from '../runner'
-import type { AiTransformEngine, PronunciationCandidate, TransformOp } from '../types'
+import { type CompleteFn, runHints, runOutlineDetection, runTransform } from '../runner'
+import type {
+  AiOutlineChapter,
+  AiTransformEngine,
+  PronunciationCandidate,
+  TransformOp,
+} from '../types'
 import { hasWebGpu } from '../webgpu'
 
 export interface WebLlmConfig {
@@ -93,6 +98,15 @@ export class WebLlmEngine implements AiTransformEngine {
   ): Promise<PronunciationCandidate[]> {
     this.requireLoaded()
     return runHints(sample, this.complete, onProgress, signal)
+  }
+
+  async detectOutline(
+    paragraphs: string[],
+    onProgress?: (fraction: number) => void,
+    signal?: AbortSignal,
+  ): Promise<AiOutlineChapter[]> {
+    this.requireLoaded()
+    return runOutlineDetection(paragraphs, this.complete, onProgress, signal)
   }
 
   /** Unload the model and terminate the worker, reclaiming GPU memory. */

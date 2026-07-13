@@ -20,6 +20,8 @@ interface PlayerBarProps {
   onRateChange: (rate: number) => void
   /** Scroll the view to the currently active paragraph. */
   onGoToCurrent?: () => void
+  /** Scroll the page back to the top (global nav, book header). */
+  onScrollToTop?: () => void
   /** Open the chapter outline drawer. */
   onOpenOutline?: () => void
   /** Open the per-paragraph transform modal for the current paragraph. */
@@ -59,6 +61,7 @@ export function PlayerBar({
   onPrevChapter,
   onRateChange,
   onGoToCurrent,
+  onScrollToTop,
   onOpenOutline,
   onTransformParagraph,
 }: PlayerBarProps) {
@@ -89,6 +92,7 @@ export function PlayerBar({
     !!onNextChapter ||
     !!onPrevChapter ||
     !!onGoToCurrent ||
+    !!onScrollToTop ||
     !!onOpenOutline ||
     !!onTransformParagraph
 
@@ -219,6 +223,18 @@ export function PlayerBar({
               className="mt-1 block w-full rounded border border-line px-2 py-1 text-left text-sm disabled:opacity-40"
             >
               ⊙ Go to current paragraph
+            </button>
+          )}
+          {onScrollToTop && (
+            <button
+              type="button"
+              onClick={() => {
+                onScrollToTop()
+                setMenuOpen(false)
+              }}
+              className="mt-1 block w-full rounded border border-line px-2 py-1 text-left text-sm"
+            >
+              ↑ Back to top
             </button>
           )}
           {onOpenOutline && (
