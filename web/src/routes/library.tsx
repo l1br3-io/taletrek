@@ -7,6 +7,7 @@ import { UploadBookModal } from '../components/UploadBookModal'
 import { UploadButton } from '../components/UploadButton'
 import { DEFAULT_AI_SETTINGS, useSettings } from '../context/settings'
 import { useAiTransform } from '../hooks/useAiTransform'
+import { useOnline } from '../hooks/useOnline'
 import { useOutline } from '../hooks/useOutline'
 import { usePronunciationHints } from '../hooks/usePronunciationHints'
 import { getAiEngine } from '../lib/ai/client'
@@ -39,6 +40,7 @@ export function Library() {
   const navigate = useNavigate()
   const { settings, update } = useSettings()
   const ai = settings.ai ?? DEFAULT_AI_SETTINGS
+  const online = useOnline()
 
   const engine = useMemo(() => (ai.enabled ? getAiEngine(ai) : null), [ai])
   const transform = useAiTransform({ engine })
@@ -366,7 +368,7 @@ export function Library() {
           onOpen={(id) => navigate(`/reader/${id}`)}
           onDelete={handleDelete}
           onEdit={ai.enabled ? handleEdit : undefined}
-          onPronunciation={ai.enabled ? handlePronunciation : undefined}
+          onPronunciation={ai.enabled && online ? handlePronunciation : undefined}
           onOutline={handleOutline}
           onResynthesize={settings.synthesizeOnUpload !== 'off' ? handleResynthesize : undefined}
         />
@@ -382,6 +384,7 @@ export function Library() {
         initialName={runCtx?.book.title}
         onProcess={onRunProcess}
         onCancel={onRunCancel}
+        online={online}
         outline={
           runCtx
             ? {

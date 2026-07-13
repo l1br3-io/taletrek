@@ -3,6 +3,25 @@ import type { ParsedChapter, Parser } from './types'
 import { ParseError } from './types'
 import { splitParagraphs, titleFromFilename } from './util'
 
+if (
+  typeof ReadableStream !== 'undefined' &&
+  !(Symbol.asyncIterator in (ReadableStream.prototype as unknown as object))
+) {
+  ;(ReadableStream.prototype as unknown as Record<symbol, unknown>)[Symbol.asyncIterator] =
+    async function* (this: ReadableStream) {
+      const reader = this.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) return
+          yield value
+        }
+      } finally {
+        reader.releaseLock()
+      }
+    }
+}
+
 export interface TextItem {
   str: string
   transform: number[]

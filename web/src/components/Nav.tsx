@@ -1,6 +1,8 @@
 import { Menu } from 'lucide-react'
 import { useState } from 'react'
 import { NavLink } from 'react-router'
+import { GITHUB_URL } from '../lib/site'
+import { GithubMark } from './GithubMark'
 
 const links = [
   { to: '/', label: 'Home', end: true },
@@ -49,16 +51,27 @@ export function Nav() {
             </li>
           ))}
         </ul>
-        {/* Mobile hamburger */}
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="text-muted sm:hidden"
-          aria-label="Toggle navigation"
-          aria-expanded={open}
-        >
-          <Menu className="h-5 w-5" />
-        </button>
+        <div className="flex items-center gap-4">
+          <a
+            href={GITHUB_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="TaleTrek on GitHub"
+            className="text-muted transition-colors hover:text-accent"
+          >
+            <GithubMark className="h-5 w-5" />
+          </a>
+          {/* Mobile hamburger */}
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="text-muted sm:hidden"
+            aria-label="Toggle navigation"
+            aria-expanded={open}
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+        </div>
       </nav>
       {/* Mobile drawer — hairline-separated rows */}
       {open && (

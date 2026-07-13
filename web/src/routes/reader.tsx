@@ -9,6 +9,7 @@ import { useSettings } from '../context/settings'
 import { useCachedParagraphs } from '../hooks/useCachedParagraphs'
 import { useElementVisible } from '../hooks/useElementVisible'
 import { useMediaSession } from '../hooks/useMediaSession'
+import { useOnline } from '../hooks/useOnline'
 import {
   flattenParagraphs,
   type ParagraphRef,
@@ -72,6 +73,7 @@ function ReaderPane({
   onParagraphChanged: (chapterId: ChapterId, rawParagraphIndex: number, text: string) => void
 }) {
   const { settings, update } = useSettings()
+  const online = useOnline()
   const cleanedChapters = useMemo(
     () => cleanChapters(chapters, settings.cleaning),
     [chapters, settings.cleaning],
@@ -306,6 +308,10 @@ function ReaderPane({
         setTransformError('Enable AI transforms in Settings first.')
         return
       }
+      if (!online) {
+        setTransformError('AI requires an internet connection.')
+        return
+      }
       setAiBusy(true)
       try {
         const engine = getAiEngine(settings.ai)
@@ -327,7 +333,7 @@ function ReaderPane({
         setAiBusy(false)
       }
     },
-    [resolveTarget, commitTransform, settings.ai],
+    [resolveTarget, commitTransform, settings.ai, online],
   )
 
   const handleUndo = useCallback(() => {
@@ -424,6 +430,7 @@ function ReaderPane({
         open={transformOpen}
         preview={targetPreview}
         aiEnabled={!!settings.ai?.enabled}
+        online={online}
         aiBusy={aiBusy}
         error={transformError}
         canUndo={undoCount > 0}

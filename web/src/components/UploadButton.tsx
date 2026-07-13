@@ -26,7 +26,7 @@ export function UploadButton({ onSelect, disabled, label = 'Upload a book' }: Up
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,.epub,.txt"
+        accept=".pdf,.epub,.txt,.md"
         className="hidden"
         onChange={handleChange}
         disabled={disabled}

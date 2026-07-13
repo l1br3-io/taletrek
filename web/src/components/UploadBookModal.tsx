@@ -1,3 +1,4 @@
+import { WifiOff } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { TransformState } from '../hooks/useAiTransform'
 import type { OutlineState } from '../hooks/useOutline'
@@ -23,6 +24,8 @@ interface UploadBookModalProps {
   initialName?: string
   /** Optional outline-detection section (post-upload + reprocess flows). */
   outline?: OutlineSection
+  /** Whether the device has an internet connection (AI transforms are cloud-only). */
+  online: boolean
 }
 
 const OPS: { kind: TransformKind; label: string; hint: string; desc: string }[] = [
@@ -92,6 +95,7 @@ export function UploadBookModal({
   initialOps,
   initialName,
   outline,
+  online,
 }: UploadBookModalProps) {
   const [selected, setSelected] = useState<Record<TransformKind, boolean>>(() =>
     seedSelection(initialOps),
@@ -207,7 +211,14 @@ export function UploadBookModal({
                 state={outline.state}
                 onGenerate={outline.onGenerate}
                 onGenerateAi={outline.onGenerateAi}
+                online={online}
               />
+            )}
+            {!online && (
+              <p className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-600">
+                <WifiOff className="h-3.5 w-3.5 shrink-0" /> AI transforms require an internet
+                connection.
+              </p>
             )}
             <ul className="space-y-2">
               {OPS.map((op) => {
@@ -227,7 +238,7 @@ export function UploadBookModal({
                         onChange={(e) =>
                           setSelected((s) => ({ ...s, [op.kind]: e.target.checked }))
                         }
-                        disabled={!interactive}
+                        disabled={!interactive || !online}
                         className="mt-0.5 accent-accent"
                       />
                       <span>
@@ -241,7 +252,7 @@ export function UploadBookModal({
                         type="text"
                         value={target}
                         onChange={(e) => setTarget(e.target.value)}
-                        disabled={!interactive}
+                        disabled={!interactive || !online}
                         aria-label="Target language code"
                         placeholder="es"
                         className="mt-2 ml-6 w-24 rounded-md border border-line bg-surface px-2 py-1 text-sm"
@@ -255,7 +266,7 @@ export function UploadBookModal({
                         step={0.1}
                         value={ratio}
                         onChange={(e) => setRatio(Number(e.target.value))}
-                        disabled={!interactive}
+                        disabled={!interactive || !online}
                         aria-label="Summarize to fraction of length"
                         className="mt-2 ml-6 w-48 accent-accent"
                       />
@@ -268,7 +279,7 @@ export function UploadBookModal({
                         step={1}
                         value={level}
                         onChange={(e) => setLevel(Number(e.target.value))}
-                        disabled={!interactive}
+                        disabled={!interactive || !online}
                         aria-label="Simplify reading level (1 simplest)"
                         className="mt-2 ml-6 w-48 accent-accent"
                       />
@@ -297,7 +308,7 @@ export function UploadBookModal({
               <button
                 type="button"
                 onClick={() => onProcess(builtOps, name.trim() || undefined)}
-                disabled={!anySelected}
+                disabled={!anySelected || !online}
                 aria-label="Process book"
                 className="rounded-md border border-accent bg-accent-soft px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
               >
@@ -314,10 +325,12 @@ function OutlineSectionView({
   state,
   onGenerate,
   onGenerateAi,
+  online,
 }: {
   state: OutlineState
   onGenerate: () => void
   onGenerateAi?: () => void
+  online: boolean
 }) {
   const running = state.type === 'running'
   return (
@@ -345,9 +358,13 @@ function OutlineSectionView({
             <button
               type="button"
               onClick={onGenerateAi}
-              disabled={running}
+              disabled={running || !online}
               aria-label="Detect chapters with AI"
-              title="Smarter AI-based detection (uses configured model)"
+              title={
+                online
+                  ? 'Smarter AI-based detection (uses configured model)'
+                  : 'AI requires an internet connection'
+              }
               className="rounded-md border border-accent bg-accent-soft px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
             >
               {running ? '…' : state.type === 'done' ? 'Redo AI' : 'Use AI'}
