@@ -16,6 +16,7 @@ function renderModal(
       onGenerateAi?: () => void
       format: BookFormat
     }
+    online?: boolean
   } = {},
 ) {
   const onProcess = overrides.onProcess ?? vi.fn()
@@ -27,6 +28,7 @@ function renderModal(
       onCancel={onCancel}
       onProcess={onProcess}
       outline={overrides.outline}
+      online={overrides.online ?? true}
     />,
   )
   return { onProcess, onCancel }
@@ -200,5 +202,50 @@ describe('UploadBookModal — outline section', () => {
       outline: { state: { type: 'running' }, onGenerate: vi.fn(), format: 'txt' },
     })
     expect(screen.queryByRole('button', { name: /process book/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('UploadBookModal — offline', () => {
+  it('disables transform checkboxes when offline', () => {
+    renderModal({ online: false })
+    expect(screen.getByLabelText(/clean up/i)).toBeDisabled()
+    expect(screen.getByLabelText(/translate/i)).toBeDisabled()
+  })
+
+  it('disables the Process button when offline', () => {
+    renderModal({ online: false })
+    expect(screen.getByRole('button', { name: /process book/i })).toBeDisabled()
+  })
+
+  it('shows an offline info message when offline', () => {
+    renderModal({ online: false })
+    const banner = document.querySelector('.text-amber-600')
+    expect(banner).not.toBeNull()
+    expect(banner?.textContent).toContain('require an internet connection')
+  })
+
+  it('disables the AI outline button when offline', () => {
+    renderModal({
+      online: false,
+      outline: {
+        state: { type: 'idle' },
+        onGenerate: vi.fn(),
+        onGenerateAi: vi.fn(),
+        format: 'pdf',
+      },
+    })
+    expect(screen.getByRole('button', { name: /detect chapters with ai/i })).toBeDisabled()
+  })
+
+  it('leaves the pattern-based Auto-detect enabled when offline', () => {
+    renderModal({
+      online: false,
+      outline: {
+        state: { type: 'idle' },
+        onGenerate: vi.fn(),
+        format: 'pdf',
+      },
+    })
+    expect(screen.getByRole('button', { name: /auto-detect chapters/i })).not.toBeDisabled()
   })
 })

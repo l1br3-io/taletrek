@@ -1,4 +1,13 @@
-import { Eraser, FileText, GraduationCap, Languages, Replace, Sparkles, Undo2 } from 'lucide-react'
+import {
+  Eraser,
+  FileText,
+  GraduationCap,
+  Languages,
+  Replace,
+  Sparkles,
+  Undo2,
+  WifiOff,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { TransformOp } from '../lib/ai/types'
 import type { CaseMode, DeterministicOp } from '../lib/transforms/deterministic'
@@ -9,6 +18,8 @@ interface ParagraphTransformModalProps {
   preview: string
   /** Whether AI transforms are enabled in settings. */
   aiEnabled: boolean
+  /** Whether the device has an internet connection (AI is cloud-only). */
+  online: boolean
   /** True while an AI transform is in flight. */
   aiBusy: boolean
   /** Last error from a transform attempt, or null. */
@@ -38,6 +49,7 @@ export function ParagraphTransformModal({
   open,
   preview,
   aiEnabled,
+  online,
   aiBusy,
   error,
   canUndo,
@@ -175,10 +187,15 @@ export function ParagraphTransformModal({
             <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
               AI transform
             </h3>
+            {!online && (
+              <p className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-600">
+                <WifiOff className="h-3.5 w-3.5 shrink-0" /> AI requires an internet connection.
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                disabled={aiBusy}
+                disabled={aiBusy || !online}
                 onClick={() => onApplyAi({ kind: 'cleanup' })}
                 className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
               >
@@ -186,7 +203,7 @@ export function ParagraphTransformModal({
               </button>
               <button
                 type="button"
-                disabled={aiBusy}
+                disabled={aiBusy || !online}
                 onClick={() => onApplyAi({ kind: 'summarize', ratio })}
                 className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
               >
@@ -194,7 +211,7 @@ export function ParagraphTransformModal({
               </button>
               <button
                 type="button"
-                disabled={aiBusy}
+                disabled={aiBusy || !online}
                 onClick={() => onApplyAi({ kind: 'simplify', level })}
                 className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
               >
@@ -210,6 +227,7 @@ export function ParagraphTransformModal({
                     step={1}
                     value={level}
                     onChange={(e) => setLevel(Number(e.target.value))}
+                    disabled={!online}
                     aria-label="Simplify reading level"
                     className="w-16 accent-accent"
                   />
@@ -219,7 +237,7 @@ export function ParagraphTransformModal({
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                disabled={aiBusy}
+                disabled={aiBusy || !online}
                 onClick={() => onApplyAi({ kind: 'translate', target })}
                 className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
               >
@@ -229,6 +247,7 @@ export function ParagraphTransformModal({
                 type="text"
                 value={target}
                 onChange={(e) => setTarget(e.target.value)}
+                disabled={!online}
                 aria-label="Target language code"
                 placeholder="es"
                 className="w-20 rounded border border-line bg-surface px-2 py-1 text-sm"
@@ -242,6 +261,7 @@ export function ParagraphTransformModal({
                   step={0.1}
                   value={ratio}
                   onChange={(e) => setRatio(Number(e.target.value))}
+                  disabled={!online}
                   aria-label="Summarize to fraction of length"
                   className="w-20 accent-accent"
                 />

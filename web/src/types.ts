@@ -4,7 +4,7 @@ export type BookId = string & { readonly __brand: 'BookId' }
 export type ChapterId = string & { readonly __brand: 'ChapterId' }
 export type VoiceId = string & { readonly __brand: 'VoiceId' }
 
-export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'txt'
+export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'txt' | 'md'
 
 export interface BookPosition {
   chapterIndex: number

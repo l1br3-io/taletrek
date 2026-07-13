@@ -14,6 +14,8 @@ export function extensionOf(name: string): string {
 
 const FORMAT_BY_EXTENSION: Record<string, BookFormat> = {
   txt: 'txt',
+  md: 'md',
+  markdown: 'md',
   epub: 'epub',
   mobi: 'mobi',
   pdf: 'pdf',

@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
+import { GITHUB_URL } from '../lib/site'
 import { Landing } from './landing'
 
 describe('Landing', () => {
@@ -30,21 +31,19 @@ describe('Landing', () => {
         <Landing />
       </MemoryRouter>,
     )
-    expect(screen.getByRole('link', { name: /Browse your library/i })).toHaveAttribute(
-      'href',
-      '/library',
-    )
+    const links = screen.getAllByRole('link', { name: /Open your library/i })
+    expect(links.length).toBeGreaterThanOrEqual(1)
+    for (const link of links) expect(link).toHaveAttribute('href', '/library')
   })
 
-  it('offers a continue-reading shortcut', () => {
+  it('links to the source on GitHub', () => {
     render(
       <MemoryRouter>
         <Landing />
       </MemoryRouter>,
     )
-    expect(screen.getByRole('link', { name: /Continue reading/i })).toHaveAttribute(
-      'href',
-      '/reader',
-    )
+    const github = screen.getByRole('link', { name: /GitHub/i })
+    expect(github).toHaveAttribute('href', GITHUB_URL)
+    expect(github).toHaveAttribute('target', '_blank')
   })
 })
