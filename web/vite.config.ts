@@ -71,11 +71,6 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        // The WebLLM runtime chunks (worker + main-thread factory, ~6 MB each)
-        // are lazy — only fetched when a reader enables the in-browser backend.
-        // Excluded from precache so the default SW stays small; runtime-cached
-        // below so in-browser AI still works offline after first use.
-        globIgnores: ['**/webllm*.js'],
         cleanupOutdatedCaches: true,
         // The Piper WASM runtime (~39 MB) is too large to precache. Cache it on
         // first fetch so it's available offline thereafter — the app shell +
@@ -90,15 +85,6 @@ export default defineConfig({
               cacheableResponse: { statuses: [0, 200] },
             },
           },
-          {
-            urlPattern: ({ url }) => /\/webllm[-.]/.test(url.pathname),
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'webllm-runtime',
-              expiration: { maxEntries: 8, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
         ],
       },
       // Enable the SW in dev so offline/PWA behavior is testable locally.
@@ -108,20 +94,6 @@ export default defineConfig({
       },
     }),
   ],
-  build: {
-    rollupOptions: {
-      output: {
-        // Route the main-thread `@mlc-ai/web-llm` (lazy-imported in
-        // `engines/webllm.ts`) into a named chunk so the SW can target it
-        // (`webllm-runtime-*.js`). The worker chunk is already named from its
-        // `webllm.worker.ts` entry. Both are excluded from precache above.
-        manualChunks(id) {
-          if (id.includes('@mlc-ai/web-llm')) return 'webllm-runtime'
-          return undefined
-        },
-      },
-    },
-  },
   test: {
     environment: 'jsdom',
     globals: true,

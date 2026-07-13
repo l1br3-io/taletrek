@@ -140,19 +140,19 @@ describe('preSynthesizeBook', () => {
     expect(fractions).toEqual([0.5, 1])
   })
 
-  it('stops early when isCancelled returns true', async () => {
+  it('stops early when the abort signal fires', async () => {
     const chapters = makeChapters([['A.', 'B.', 'C.', 'D.']])
     const engine = makeStubEngine({})
-    let cancel = false
+    const controller = new AbortController()
     const result = await preSynthesizeBook({
       bookId: newBookId(),
       chapters,
       voiceId: 'en_US-hfc_female-medium' as VoiceId,
       engine,
       onProgress: (done) => {
-        if (done === 2) cancel = true
+        if (done === 2) controller.abort()
       },
-      isCancelled: () => cancel,
+      signal: controller.signal,
     })
     expect(result.cancelled).toBe(true)
     expect(result.synthesized + result.cached).toBe(2)

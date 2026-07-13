@@ -1,11 +1,10 @@
 /**
  * Shared transform/hints orchestration — engine-agnostic.
  *
- * Both backends supply a {@link CompleteFn} that turns prompt messages into a
- * single completion string (cloud: `fetch`+SSE; in-browser: WebLLM's streaming
- * `chat.completions.create`). This module owns the per-op chunking loop,
- * reassembly policy, and progress reporting — extracted so the two engines
- * never drift. See `docs/prds/M6-ai-transforms.md` §Architecture.
+ * The cloud backend supplies a {@link CompleteFn} that turns prompt messages
+ * into a single completion string (`fetch` + SSE). This module owns the per-op
+ * chunking loop, reassembly policy, and progress reporting. See
+ * `docs/prds/M6-ai-transforms.md` §Architecture.
  */
 
 import { chunksForOp, sample as sampleParagraphs } from './chunk'

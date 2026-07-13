@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { createAiEngine } from './client'
 import { CloudLlmEngine } from './engines/openai'
-import { WebLlmEngine } from './engines/webllm'
 import type { AiSettings } from './types'
 
 function cloudSettings(): AiSettings {
   return {
     enabled: true,
     backend: 'cloud',
-    inBrowser: { modelId: 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC' },
     cloud: {
       providers: [
         {
@@ -24,12 +22,12 @@ function cloudSettings(): AiSettings {
 }
 
 describe('createAiEngine', () => {
-  it('returns a CloudLlmEngine when backend is cloud with an active provider', () => {
+  it('returns a CloudLlmEngine when an active provider is configured', () => {
     const s = cloudSettings()
     expect(createAiEngine(s)).toBeInstanceOf(CloudLlmEngine)
   })
 
-  it('returns null when backend is cloud but no active provider', () => {
+  it('returns null when no provider is configured', () => {
     const s: AiSettings = {
       ...cloudSettings(),
       cloud: { providers: [], activeProviderId: null },
@@ -43,12 +41,6 @@ describe('createAiEngine', () => {
       cloud: { providers: cloudSettings().cloud.providers, activeProviderId: 'nonexistent' },
     }
     expect(createAiEngine(s)).toBeNull()
-  })
-
-  it('returns a WebLlmEngine when backend is in-browser', () => {
-    const s: AiSettings = { ...cloudSettings(), backend: 'in-browser' }
-    const engine = createAiEngine(s)
-    expect(engine).toBeInstanceOf(WebLlmEngine)
   })
 
   it('respects the configured cloud model + baseUrl', async () => {

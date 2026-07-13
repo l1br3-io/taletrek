@@ -1,8 +1,6 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  Cloud,
-  Cpu,
   ExternalLink,
   Pencil,
   Plug,
@@ -22,21 +20,6 @@ interface AiSettingsSectionProps {
   ai: AiSettings
   onChange: (ai: AiSettings) => void
 }
-
-const BACKENDS = [
-  {
-    value: 'in-browser' as const,
-    label: 'On-device',
-    hint: 'WebGPU · offline · no key',
-    Icon: Cpu,
-  },
-  {
-    value: 'cloud' as const,
-    label: 'Cloud',
-    hint: 'Your key · higher quality',
-    Icon: Cloud,
-  },
-]
 
 type CloudView =
   | { type: 'list' }
@@ -67,59 +50,17 @@ export function AiSettingsSection({ ai, onChange }: AiSettingsSectionProps) {
         </button>
       </div>
       <p className="text-xs text-muted">
-        Optional: clean up OCR noise, translate, summarize, or simplify a book after upload.
-        On-device by default (no key, works offline); or bring your own cloud key for higher
-        quality.
+        Optional: clean up OCR noise, translate, summarize, or simplify a book after upload. Bring
+        your own OpenAI-compatible cloud key.
       </p>
 
       {ai.enabled && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            {BACKENDS.map((b) => (
-              <button
-                key={b.value}
-                type="button"
-                onClick={() => patch({ backend: b.value })}
-                aria-pressed={ai.backend === b.value}
-                aria-label={`Use ${b.label} backend`}
-                className={[
-                  'rounded-lg border p-3 text-left transition-colors',
-                  ai.backend === b.value
-                    ? 'border-accent bg-elevated'
-                    : 'border-line hover:border-muted',
-                ].join(' ')}
-              >
-                <span className="flex items-center gap-2 font-medium">
-                  <b.Icon className="h-5 w-5" />
-                  {b.label}
-                </span>
-                <span className="block text-xs text-muted">{b.hint}</span>
-              </button>
-            ))}
-          </div>
-
-          {ai.backend === 'in-browser' ? (
-            <label className="block space-y-1">
-              <span className="text-xs font-medium uppercase tracking-wide text-muted">Model</span>
-              <input
-                type="text"
-                value={ai.inBrowser.modelId}
-                onChange={(e) => patch({ inBrowser: { ...ai.inBrowser, modelId: e.target.value } })}
-                aria-label="In-browser model id"
-                className="w-full rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-mono"
-              />
-              <span className="block text-xs text-muted">
-                Requires a WebGPU-capable browser. First use downloads the model (~1 GB) and caches
-                it for offline reuse.
-              </span>
-            </label>
-          ) : (
-            <CloudProvidersSection
-              providers={ai.cloud.providers}
-              activeProviderId={ai.cloud.activeProviderId}
-              onChange={(cloud) => patch({ cloud })}
-            />
-          )}
+          <CloudProvidersSection
+            providers={ai.cloud.providers}
+            activeProviderId={ai.cloud.activeProviderId}
+            onChange={(cloud) => patch({ cloud })}
+          />
         </div>
       )}
     </section>

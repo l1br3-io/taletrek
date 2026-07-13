@@ -1,6 +1,6 @@
 # ADR-0003: AI Transform Architecture — dual-backend, in-browser default
 
-- **Status:** Accepted
+- **Status:** Partially superseded — the in-browser backend was removed (see [`0005-remove-in-browser-llm-backend.md`](./0005-remove-in-browser-llm-backend.md)). The cloud backend + `AiTransformEngine` interface + ADR-0004 key handling remain in force.
 - **Date:** 2026-07-12
 - **Companion:** [`../prds/M6-ai-transforms.md`](../prds/M6-ai-transforms.md), [`0004-api-key-threat-model.md`](./0004-api-key-threat-model.md)
 

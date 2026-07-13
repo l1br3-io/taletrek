@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { Layout } from '../components/Layout'
 import { DEFAULT_AI_SETTINGS, DEFAULT_SETTINGS, SettingsProvider } from '../context/settings'
 import { _resetAiEngineForTests } from '../lib/ai/client'
 import type { AiSettings, AiTransformEngine } from '../lib/ai/types'
@@ -17,6 +18,7 @@ import {
   setSetting,
 } from '../lib/db'
 import { parseInWorker } from '../lib/parse/client'
+import { uploadManager } from '../lib/upload/manager'
 import type { Book } from '../types'
 import { chapterId, newBookId } from '../types'
 import { Library } from './library'
@@ -72,7 +74,8 @@ function makeBook(overrides: Partial<Book> = {}): Book {
   }
 }
 
-/** Render `/library` plus a catch-all that records the navigated pathname. */
+/** Render `/library` (wrapped in Layout so the global upload banner shows)
+ * plus a catch-all that records the navigated pathname. */
 function renderAt(path: string) {
   function Capture() {
     const loc = useLocation()
@@ -82,8 +85,10 @@ function renderAt(path: string) {
     <SettingsProvider>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/library" element={<Library />} />
-          <Route path="*" element={<Capture />} />
+          <Route element={<Layout />}>
+            <Route path="/library" element={<Library />} />
+            <Route path="*" element={<Capture />} />
+          </Route>
         </Routes>
       </MemoryRouter>
     </SettingsProvider>,
@@ -95,6 +100,7 @@ beforeEach(async () => {
   await _clearDBForTests()
   ingestMock.mockReset()
   _resetAiEngineForTests()
+  uploadManager._resetForTests()
   ttsIsStoredMock.mockReset()
   ttsDownloadMock.mockReset()
   ttsSynthMock.mockReset()
@@ -550,8 +556,8 @@ describe('Library — per-book re-synthesize', () => {
     await renderReady('/library')
 
     fireEvent.click(await screen.findByRole('button', { name: `Re-synthesize ${title}` }))
-    // Wait for the done banner.
-    expect(await screen.findByText(`Synthesized "${title}".`)).toBeInTheDocument()
+    // Wait for the done banner (global, in Layout).
+    expect(await screen.findByText(new RegExp(`${title}.*is ready`))).toBeInTheDocument()
 
     // Old key is gone; two new keys were written by the synth mock (one per paragraph).
     const keysAfter = await getAudioCacheKeysByBook(id)
@@ -589,19 +595,19 @@ describe('Library — per-book re-synthesize', () => {
     await renderReady('/library')
 
     fireEvent.click(await screen.findByRole('button', { name: `Re-synthesize ${title}` }))
-    // Wait for the preparing banner → first synth has been called (gate pushed).
-    expect(await screen.findByText(`Preparing "${title}"…`)).toBeInTheDocument()
+    // The global banner shows the initial synthesizing state immediately
+    // (manager sets done=0 before the first synth resolves).
+    expect(await screen.findByText(/Synthesizing/)).toBeInTheDocument()
     // Resolve the first synth → onProgress(1, 2) fires; the second is still gated.
     await act(async () => {
       gates[0]?.()
     })
-    expect(await screen.findByText(`Synthesizing "${title}"…`)).toBeInTheDocument()
-    expect(await screen.findByText(/1 \/ 2 paragraphs/)).toBeInTheDocument()
-    // Release the second synth so the component can finish + unmount cleanly.
+    expect(await screen.findByText(/1 \/ 2/)).toBeInTheDocument()
+    // Release the second synth so the job can finish.
     await act(async () => {
       gates[1]?.()
     })
-    expect(await screen.findByText(`Synthesized "${title}".`)).toBeInTheDocument()
+    expect(await screen.findByText(new RegExp(`${title}.*is ready`))).toBeInTheDocument()
   })
 
   it('shows an error banner when synthesis fails', async () => {

@@ -1,21 +1,17 @@
 import { X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { LibraryList } from '../components/LibraryList'
 import { PronunciationReview } from '../components/PronunciationReview'
 import { UploadBookModal } from '../components/UploadBookModal'
 import { UploadButton } from '../components/UploadButton'
-import { UploadProgress } from '../components/UploadProgress'
 import { DEFAULT_AI_SETTINGS, useSettings } from '../context/settings'
 import { useAiTransform } from '../hooks/useAiTransform'
-import { useBookUpload } from '../hooks/useBookUpload'
 import { useOutline } from '../hooks/useOutline'
 import { usePronunciationHints } from '../hooks/usePronunciationHints'
 import { getAiEngine } from '../lib/ai/client'
-import { WebLlmEngine } from '../lib/ai/engines/webllm'
 import { opsFromProcessing } from '../lib/ai/runner'
 import type { TransformOp } from '../lib/ai/types'
-import { cleanChapters } from '../lib/clean'
 import type { PronunciationEntry } from '../lib/clean/types'
 import {
   deleteAudioCacheKeys,
@@ -26,29 +22,17 @@ import {
   getChaptersByBook,
   putBook,
 } from '../lib/db'
-import { preSynthesizeBook } from '../lib/pre-synth'
+import { ingestBook } from '../lib/ingest'
 import { reparseChapters } from '../lib/reprocess'
-import { ttsClient } from '../lib/tts/client'
+import { uploadManager } from '../lib/upload/manager'
+import { isJobActive, useUploadState } from '../lib/upload/useUpload'
 import type { Book, BookId, Chapter } from '../types'
 
 type ListState = { type: 'loading' } | { type: 'ready'; books: Book[] }
 
-/**
- * Re-synthesize flow state (per-book). One at a time — PiperEngine is a
- * singleton so concurrent synths would queue at the worker anyway. The banner
- * follows the same shape + UX as the outline banner.
- */
-type ResynthState =
+type ParseState =
   | { type: 'idle' }
-  | {
-      type: 'running'
-      title: string
-      phase: 'preparing' | 'voice' | 'synth'
-      fraction: number
-      done: number
-      total: number
-    }
-  | { type: 'done'; message: string }
+  | { type: 'parsing'; fileName: string }
   | { type: 'error'; message: string }
 
 /**
@@ -65,52 +49,22 @@ export function Library() {
   const ai = settings.ai ?? DEFAULT_AI_SETTINGS
 
   const engine = useMemo(() => (ai.enabled ? getAiEngine(ai) : null), [ai])
-  const prepare = useMemo<
-    ((onProgress: (fraction: number) => void) => Promise<void>) | undefined
-  >(() => {
-    if (!ai.enabled || ai.backend !== 'in-browser') return undefined
-    return async (onProgress) => {
-      if (engine instanceof WebLlmEngine && !(await engine.isReady())) {
-        await engine.load(onProgress)
-      }
-    }
-  }, [ai.enabled, ai.backend, engine])
-  const transform = useAiTransform({ engine, prepare })
+  const transform = useAiTransform({ engine })
   const outline = useOutline()
   const hints = usePronunciationHints(engine)
 
   const [list, setList] = useState<ListState>({ type: 'loading' })
   const [runCtx, setRunCtx] = useState<RunContext | null>(null)
   const [hintsTitle, setHintsTitle] = useState<string | null>(null)
+  const [parseState, setParseState] = useState<ParseState>({ type: 'idle' })
+
+  const jobState = useUploadState()
+  const uploadBusy = isJobActive(jobState)
 
   const refresh = useCallback(async () => {
     const books = await getAllBooks()
     setList({ type: 'ready', books })
   }, [])
-
-  const {
-    upload,
-    parse,
-    synthBook,
-    skipToReader,
-    reset: resetUpload,
-  } = useBookUpload({
-    voiceId: settings.voiceId,
-    cleaning: settings.cleaning,
-    onNavigate: (id) => navigate(`/reader/${id}`),
-    onParsed: refresh,
-  })
-
-  const proceedWithBook = useCallback(
-    async (book: Book, chapters: Chapter[]): Promise<void> => {
-      if (settings.synthesizeOnUpload === 'off') {
-        skipToReader()
-        return
-      }
-      await synthBook(book, chapters)
-    },
-    [settings.synthesizeOnUpload, skipToReader, synthBook],
-  )
 
   useEffect(() => {
     void refresh()
@@ -126,20 +80,48 @@ export function Library() {
     if (outline.state.type === 'done') void refresh()
   }, [outline.state, refresh])
 
+  const proceedWithBook = useCallback(
+    (book: Book, chapters: Chapter[]): void => {
+      if (settings.synthesizeOnUpload === 'off') {
+        navigate(`/reader/${book.id}`)
+        return
+      }
+      uploadManager.startJob({
+        book,
+        chapters,
+        voiceId: settings.voiceId,
+        cleaning: settings.cleaning,
+      })
+      navigate(`/reader/${book.id}`)
+    },
+    [settings.synthesizeOnUpload, settings.voiceId, settings.cleaning, navigate],
+  )
+
   // --- upload + parse ---
   // When AI is enabled, always show the process modal after parse (opt-in skip).
-  // When AI is disabled, go straight to synth/reader.
+  // When AI is disabled, go straight to synth/reader. The synth job runs in the
+  // global upload manager (survives navigation); we navigate to the reader
+  // immediately so the user can start reading buffered paragraphs.
   const handleSelect = useCallback(
     async (file: File): Promise<void> => {
-      const result = await parse(file)
-      if (!result) return // error state is shown by the hook
-      if (ai.enabled) {
-        setRunCtx({ kind: 'post', book: result.book, chapters: result.chapters })
-      } else {
-        await proceedWithBook(result.book, result.chapters)
+      setParseState({ type: 'parsing', fileName: file.name })
+      try {
+        const result = await ingestBook(file)
+        setParseState({ type: 'idle' })
+        await refresh()
+        if (ai.enabled) {
+          setRunCtx({ kind: 'post', book: result.book, chapters: result.chapters })
+        } else {
+          proceedWithBook(result.book, result.chapters)
+        }
+      } catch (error) {
+        setParseState({
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to parse file',
+        })
       }
     },
-    [parse, proceedWithBook, ai.enabled],
+    [ai.enabled, proceedWithBook, refresh],
   )
 
   // --- run-modal handlers (shared by post-upload + reprocess) ---
@@ -186,8 +168,7 @@ export function Library() {
         void putBook(renamedBook)
       }
       if (ctx.kind === 'post') {
-        // Post-upload: proceed to synth or reader.
-        void proceedWithBook(renamedBook, ctx.chapters)
+        proceedWithBook(renamedBook, ctx.chapters)
       }
       // Reprocess: stay in the library (book optionally renamed above).
     },
@@ -229,7 +210,6 @@ export function Library() {
       if (outline.state.type === 'running') return
       if (!engine) return
       outline.reset()
-      if (prepare) await prepare(() => {})
       const changed = await outline.runWithAi(id, (paragraphs) => engine.detectOutline(paragraphs))
       if (!changed) return
       if (runCtx?.book.id === id) {
@@ -243,7 +223,7 @@ export function Library() {
         }
       }
     },
-    [outline, runCtx, engine, prepare],
+    [outline, runCtx, engine],
   )
 
   const handlePronunciation = useCallback(
@@ -291,19 +271,10 @@ export function Library() {
     [refresh],
   )
 
-  // --- per-book re-synthesize (deletes cached audio, then re-runs pre-synth) ---
-  const [resynthState, setResynthState] = useState<ResynthState>({ type: 'idle' })
-  const resynthCancelRef = useRef(false)
-  const synthModeRef = useRef(settings.synthesizeOnUpload)
-  synthModeRef.current = settings.synthesizeOnUpload
-  const resynthVoiceRef = useRef(settings.voiceId)
-  resynthVoiceRef.current = settings.voiceId
-  const resynthCleaningRef = useRef(settings.cleaning)
-  resynthCleaningRef.current = settings.cleaning
-
+  // --- per-book re-synthesize (deletes cached audio, then re-runs via manager) ---
   const handleResynthesize = useCallback(
     async (id: BookId): Promise<void> => {
-      if (resynthState.type === 'running') return
+      if (uploadManager.isActive()) return // one job at a time
       const book = await getBook(id)
       if (!book) return
       if (
@@ -314,71 +285,17 @@ export function Library() {
         return
       }
       const chapters = await getChaptersByBook(id)
-      const cleaned = cleanChapters(chapters, resynthCleaningRef.current)
       const keys = await getAudioCacheKeysByBook(id)
       await deleteAudioCacheKeys(keys)
-      resynthCancelRef.current = false
-      setResynthState({
-        type: 'running',
-        title: book.title,
-        phase: 'preparing',
-        fraction: 0,
-        done: 0,
-        total: cleaned.reduce((acc, c) => acc + c.paragraphs.filter((p) => p.trim()).length, 0),
+      uploadManager.startJob({
+        book,
+        chapters,
+        voiceId: settings.voiceId,
+        cleaning: settings.cleaning,
       })
-      try {
-        await preSynthesizeBook({
-          bookId: id,
-          chapters: cleaned,
-          voiceId: resynthVoiceRef.current,
-          engine: ttsClient,
-          onVoiceDownload: (fraction) =>
-            setResynthState({
-              type: 'running',
-              title: book.title,
-              phase: 'voice',
-              fraction,
-              done: 0,
-              total: cleaned.reduce(
-                (acc, c) => acc + c.paragraphs.filter((p) => p.trim()).length,
-                0,
-              ),
-            }),
-          onProgress: (done, total) =>
-            setResynthState({
-              type: 'running',
-              title: book.title,
-              phase: 'synth',
-              fraction: total > 0 ? done / total : 0,
-              done,
-              total,
-            }),
-          isCancelled: () => resynthCancelRef.current,
-        })
-        if (resynthCancelRef.current) {
-          setResynthState({ type: 'idle' })
-        } else {
-          setResynthState({ type: 'done', message: `Synthesized "${book.title}".` })
-        }
-      } catch {
-        setResynthState({
-          type: 'error',
-          message: `Synthesis failed for "${book.title}". Try again or read on-demand.`,
-        })
-      }
     },
-    [resynthState.type],
+    [settings.voiceId, settings.cleaning],
   )
-
-  const handleResynthCancel = useCallback(() => {
-    resynthCancelRef.current = true
-  }, [])
-
-  const handleResynthDismiss = useCallback(() => {
-    setResynthState({ type: 'idle' })
-  }, [])
-
-  const uploadBusy = upload.type !== 'idle' && upload.type !== 'error'
 
   return (
     <div className="space-y-6">
@@ -387,7 +304,34 @@ export function Library() {
         <UploadButton onSelect={handleSelect} disabled={uploadBusy} />
       </div>
 
-      <UploadProgress state={upload} onStartReading={skipToReader} onDismiss={resetUpload} />
+      {parseState.type === 'parsing' && (
+        <div
+          role="status"
+          className="flex items-center gap-3 rounded-lg border border-accent bg-accent-soft p-4 text-accent"
+        >
+          <span
+            className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+            aria-hidden
+          />
+          <span className="text-sm">Parsing “{parseState.fileName}”…</span>
+        </div>
+      )}
+      {parseState.type === 'error' && (
+        <div
+          role="alert"
+          className="flex items-center justify-between rounded-lg border border-red-500 bg-red-500/10 p-4 text-red-400"
+        >
+          <span className="text-sm">{parseState.message}</span>
+          <button
+            type="button"
+            onClick={() => setParseState({ type: 'idle' })}
+            aria-label="Dismiss error"
+            className="ml-4 text-xs text-red-400/70 hover:text-red-400"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {outline.state.type === 'running' && (
         <div
@@ -422,80 +366,6 @@ export function Library() {
           <button
             type="button"
             onClick={outline.reset}
-            aria-label="Dismiss error message"
-            className="ml-4 text-xs text-red-400/70 hover:text-red-400"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      {resynthState.type === 'running' && (
-        <div
-          role="status"
-          className="space-y-2 rounded-lg border border-accent bg-accent-soft p-4 text-accent"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">
-              {resynthState.phase === 'preparing'
-                ? `Preparing "${resynthState.title}"…`
-                : resynthState.phase === 'voice'
-                  ? `Downloading voice for "${resynthState.title}"…`
-                  : `Synthesizing "${resynthState.title}"…`}
-            </span>
-            <button
-              type="button"
-              onClick={handleResynthCancel}
-              aria-label="Cancel re-synthesize"
-              className="text-xs text-accent/70 hover:text-accent"
-            >
-              Cancel
-            </button>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-accent/20">
-            <div
-              className="h-full rounded-full bg-accent transition-[width] duration-150"
-              style={{
-                width: `${
-                  resynthState.phase === 'voice'
-                    ? Math.round(resynthState.fraction * 100)
-                    : Math.round(resynthState.fraction * 100)
-                }%`,
-              }}
-            />
-          </div>
-          {resynthState.phase === 'synth' && (
-            <span className="text-xs text-accent/80">
-              {resynthState.done} / {resynthState.total} paragraphs
-            </span>
-          )}
-        </div>
-      )}
-      {resynthState.type === 'done' && (
-        <div
-          role="status"
-          className="flex items-center justify-between rounded-lg border border-accent bg-accent-soft p-4 text-accent"
-        >
-          <span>{resynthState.message}</span>
-          <button
-            type="button"
-            onClick={handleResynthDismiss}
-            aria-label="Dismiss message"
-            className="ml-4 text-xs text-accent/70 hover:text-accent"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-      {resynthState.type === 'error' && (
-        <div
-          role="alert"
-          className="flex items-center justify-between rounded-lg border border-red-500 bg-red-500/10 p-4 text-red-400"
-        >
-          <span>{resynthState.message}</span>
-          <button
-            type="button"
-            onClick={handleResynthDismiss}
             aria-label="Dismiss error message"
             className="ml-4 text-xs text-red-400/70 hover:text-red-400"
           >

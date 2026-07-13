@@ -8,7 +8,8 @@ export interface PreSynthOptions {
   engine: TtsEngine
   onProgress?: (done: number, total: number) => void
   onVoiceDownload?: (fraction: number) => void
-  isCancelled?: () => boolean
+  /** Abort the run cooperatively — checked between paragraphs. */
+  signal?: AbortSignal
 }
 
 export interface PreSynthResult {
@@ -27,11 +28,11 @@ export interface PreSynthResult {
  * is derived from the paragraph text, so it must match what the reader will
  * request via `useParagraphPlayer`.
  *
- * Cancellation is cooperative: check `isCancelled()` between paragraphs. The
- * function returns partial results on cancel.
+ * Cancellation is cooperative: pass an `AbortSignal` and it is checked between
+ * paragraphs. The function returns partial results on cancel.
  */
 export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynthResult> {
-  const { bookId, chapters, voiceId, engine, onProgress, onVoiceDownload, isCancelled } = opts
+  const { bookId, chapters, voiceId, engine, onProgress, onVoiceDownload, signal } = opts
 
   const paragraphs: string[] = []
   for (const ch of chapters) {
@@ -50,7 +51,7 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
   let cached = 0
 
   for (const text of paragraphs) {
-    if (isCancelled?.()) {
+    if (signal?.aborted) {
       return { total, synthesized, cached, cancelled: true }
     }
 

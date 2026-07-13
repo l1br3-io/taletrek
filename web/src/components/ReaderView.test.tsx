@@ -69,4 +69,17 @@ describe('ReaderView', () => {
     )
     expect(ref.current?.textContent).toBe('Second.')
   })
+
+  it('applies the pulse class to the pulsed paragraph', () => {
+    const { container } = render(
+      <ReaderView
+        book={book}
+        chapters={[chapter(['First.', 'Second.'])]}
+        pulseParagraphId={`${chapterId('c1')}:1`}
+      />,
+    )
+    const paragraphs = container.querySelectorAll('.tt-reader-text p')
+    expect(paragraphs[1]?.className).toMatch(/tt-nav-pulse/)
+    expect(paragraphs[0]?.className).not.toMatch(/tt-nav-pulse/)
+  })
 })

@@ -1,10 +1,8 @@
 /**
- * Per-op prompt templates + output parsing for the AI transform engines.
+ * Per-op prompt templates + output parsing for the AI transform engine.
  *
- * Pure (no network) so both backends (cloud `fetch`, in-browser WebLLM) share
- * identical prompting and output handling. The cloud engine pairs this with
- * `engines/sse.ts` + `fetch`; the in-browser engine (T3) pairs it with WebLLM's
- * `chat.completions.create`.
+ * Pure (no network) so prompting and output handling stay testable in
+ * isolation. The cloud engine pairs this with `engines/sse.ts` + `fetch`.
  */
 
 import type {
