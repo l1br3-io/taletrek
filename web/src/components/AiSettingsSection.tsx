@@ -1,7 +1,9 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  Download,
   ExternalLink,
+  Info,
   Pencil,
   Plug,
   Star,
@@ -10,11 +12,14 @@ import {
 } from 'lucide-react'
 import { type ReactElement, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { type ConnectionTestResult, testConnection } from '../lib/ai/connection-test'
+import { downloadKeyFile } from '../lib/ai/exportKey'
 import { parseKeyFile } from '../lib/ai/importKey'
 import { clearApiKey, getApiKey, setApiKey } from '../lib/ai/keyring'
 import { fetchModels, invalidateModels, type ModelInfo } from '../lib/ai/models'
 import { getPreset, PROVIDER_PRESETS, type ProviderPreset } from '../lib/ai/providers'
 import type { AiSettings, CloudProvider } from '../lib/ai/types'
+import { KeyExportConfirmDialog } from './KeyExportConfirmDialog'
+import { KeySaveWarningDialog, shouldSkipKeySaveWarning } from './KeySaveWarningDialog'
 
 interface AiSettingsSectionProps {
   ai: AiSettings
@@ -84,6 +89,7 @@ function CloudProvidersSection({
 }: CloudProvidersSectionProps) {
   const [view, setView] = useState<CloudView>({ type: 'list' })
   const [importErr, setImportErr] = useState<string | null>(null)
+  const [showSchema, setShowSchema] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const patchCloud = (patch: Partial<AiSettings['cloud']>): void => {
@@ -126,7 +132,7 @@ function CloudProvidersSection({
         setImportErr(result.error)
         return
       }
-      const presetId = result.presetId ?? 'custom'
+      const presetId = result.provider ?? 'custom'
       const preset = getPreset(presetId)
       const provider: CloudProvider = {
         id: crypto.randomUUID(),
@@ -179,25 +185,39 @@ function CloudProvidersSection({
         <span className="text-xs font-medium uppercase tracking-wide text-muted">
           Cloud providers
         </span>
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className="text-xs text-muted transition-colors hover:text-accent"
-        >
-          Import key file
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".txt,.json,application/json,text/plain"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0]
-            if (f) importKey(f)
-            e.target.value = ''
-          }}
-        />
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowSchema((s) => !s)}
+            aria-expanded={showSchema}
+            aria-label="Key file format"
+            aria-pressed={showSchema}
+            className="inline-flex items-center gap-1 text-xs text-muted transition-colors hover:text-accent"
+          >
+            <Info className="h-3.5 w-3.5" /> Format
+          </button>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="text-xs text-muted transition-colors hover:text-accent"
+          >
+            Import key file
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) importKey(f)
+              e.target.value = ''
+            }}
+          />
+        </div>
       </div>
+
+      {showSchema && <KeyFileSchemaInfo />}
 
       {importErr && (
         <span role="alert" className="block text-xs text-danger">
@@ -236,6 +256,52 @@ function CloudProvidersSection({
 }
 
 // ---------------------------------------------------------------------------
+// Key file format help (import schema reference)
+// ---------------------------------------------------------------------------
+
+const KEY_FILE_EXAMPLE = `{
+  "apiKey": "sk-…",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "baseUrl": "https://api.openai.com/v1"
+}`
+
+/** Inline reference for the import-file schema, shown when the user taps "Format". */
+function KeyFileSchemaInfo() {
+  const validIds = PROVIDER_PRESETS.map((p) => p.id).join(', ')
+  return (
+    <div className="space-y-2 rounded-lg border border-line bg-bg p-3 text-xs text-muted">
+      <p className="text-fg">
+        Import a <code className="font-mono">.json</code> file shaped like:
+      </p>
+      <pre className="overflow-x-auto rounded-md border border-line bg-surface p-2 font-mono text-[11px] leading-relaxed text-fg">
+        {KEY_FILE_EXAMPLE}
+      </pre>
+      <ul className="space-y-0.5">
+        <li>
+          <code className="font-mono text-fg">apiKey</code> (string) — required; the rest are
+          optional.
+        </li>
+        <li>
+          <code className="font-mono text-fg">provider</code> — maps to one of: {validIds}. Unknown
+          values fall back to <code className="font-mono">custom</code>.
+        </li>
+        <li>
+          <code className="font-mono text-fg">model</code> /{' '}
+          <code className="font-mono text-fg">baseUrl</code> — override the provider's defaults.
+        </li>
+      </ul>
+      <p>
+        The API key is held in memory for this tab only and is never written to disk by TaleTrek
+        (ADR-0004). Export writes a <code className="font-mono">.json</code> file that round-trips
+        on import — when a key is loaded it's included in the file (plaintext), so treat an exported
+        file as a secret.
+      </p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Provider card (compact view)
 // ---------------------------------------------------------------------------
 
@@ -252,7 +318,17 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
   const label = provider.label ?? preset.label
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null)
   const [testing, setTesting] = useState(false)
+  const [showExport, setShowExport] = useState(false)
   const hasKey = !!getApiKey(provider.id)
+
+  const handleExport = (): void => {
+    // A key in memory will be written to the downloaded file — confirm first.
+    if (hasKey) {
+      setShowExport(true)
+      return
+    }
+    downloadKeyFile(provider)
+  }
 
   const statusEl: ReactNode = !hasKey ? (
     'Key: not set'
@@ -270,9 +346,10 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
     <>
       <XCircle className="h-3.5 w-3.5" /> Model not found
     </>
-  ) : testResult?.type === 'cors' ? (
+  ) : testResult?.type === 'network' ? (
     <>
-      <AlertTriangle className="h-3.5 w-3.5" /> Blocked by CORS
+      <AlertTriangle className="h-3.5 w-3.5" />{' '}
+      {preset.corsSafe ? 'Network error (retry)' : 'CORS / unreachable'}
     </>
   ) : testResult?.type === 'error' ? (
     <>
@@ -291,7 +368,7 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
       const result = await testConnection(provider.baseUrl, key, provider.model)
       setTestResult(result)
     } catch {
-      setTestResult({ type: 'cors' })
+      setTestResult({ type: 'network' })
     } finally {
       setTesting(false)
     }
@@ -366,6 +443,14 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
         </button>
         <button
           type="button"
+          onClick={handleExport}
+          aria-label={`Export ${label}`}
+          className="inline-flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-accent hover:text-accent"
+        >
+          <Download className="h-3.5 w-3.5" /> Export
+        </button>
+        <button
+          type="button"
           onClick={onRemove}
           aria-label={`Remove ${label}`}
           className="inline-flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-danger hover:text-danger"
@@ -373,6 +458,16 @@ function ProviderCard({ provider, isActive, onSetActive, onEdit, onRemove }: Pro
           <Trash2 className="h-3.5 w-3.5" /> Remove
         </button>
       </div>
+
+      <KeyExportConfirmDialog
+        open={showExport}
+        label={label}
+        onConfirm={() => {
+          setShowExport(false)
+          downloadKeyFile(provider)
+        }}
+        onCancel={() => setShowExport(false)}
+      />
     </div>
   )
 }
@@ -453,13 +548,22 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
   const [label, setLabel] = useState(provider?.label ?? '')
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null)
   const [testing, setTesting] = useState(false)
+  const [showKeyWarning, setShowKeyWarning] = useState(false)
   const [modelState, setModelState] = useState<ModelState>(
-    preset.supportsModelsEndpoint ? { type: 'loading' } : { type: 'manual' },
+    preset.models
+      ? { type: 'ready', models: presetModelsToInfo(preset) }
+      : preset.supportsModelsEndpoint
+        ? { type: 'loading' }
+        : { type: 'manual' },
   )
   const abortRef = useRef<AbortController | null>(null)
 
   const loadModels = useCallback(
     async (url: string, key?: string): Promise<void> => {
+      if (preset.models) {
+        setModelState({ type: 'ready', models: presetModelsToInfo(preset) })
+        return
+      }
       if (!preset.supportsModelsEndpoint || !url) {
         setModelState({ type: 'manual' })
         return
@@ -479,7 +583,7 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
         setModelState({ type: 'error', message: msg })
       }
     },
-    [preset.supportsModelsEndpoint],
+    [preset],
   )
 
   useEffect(() => {
@@ -519,13 +623,13 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
       const result = await testConnection(baseUrl, key, model)
       setTestResult(result)
     } catch {
-      setTestResult({ type: 'cors' })
+      setTestResult({ type: 'network' })
     } finally {
       setTesting(false)
     }
   }
 
-  const handleSave = (): void => {
+  const performSave = (): void => {
     const id = provider?.id ?? crypto.randomUUID()
     if (provider && id !== provider.id) {
       // key was stored under draft id — re-key it
@@ -551,6 +655,22 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
     onSave(saved)
   }
 
+  const handleSave = (): void => {
+    // ADR-0004 reminder: a key in memory is not written to disk. Only show the
+    // warning when a key is actually loaded and the user hasn't silenced it.
+    const id = provider?.id ?? 'draft'
+    if (getApiKey(id) && !shouldSkipKeySaveWarning()) {
+      setShowKeyWarning(true)
+      return
+    }
+    performSave()
+  }
+
+  const handleWarningConfirm = (): void => {
+    setShowKeyWarning(false)
+    performSave()
+  }
+
   const selectedModelInfo = (() => {
     if (modelState.type !== 'ready') return undefined
     return modelState.models.find((m) => m.id === model)
@@ -560,11 +680,7 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
 
   const visibleModels = (() => {
     if (modelState.type !== 'ready') return []
-    let models = modelState.models as ModelInfo[]
-    if (preset.compatibleModelIds) {
-      const allowed = new Set(preset.compatibleModelIds)
-      models = models.filter((m) => allowed.has(m.id))
-    }
+    const models = modelState.models as ModelInfo[]
     const hasFree = models.some((m) => m.free)
     return hasFree ? models.filter((m) => m.free) : models
   })()
@@ -677,7 +793,7 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
               Type manually
             </button>
           )}
-          {modelState.type === 'manual' && preset.supportsModelsEndpoint && (
+          {modelState.type === 'manual' && (preset.supportsModelsEndpoint || preset.models) && (
             <button
               type="button"
               onClick={() => void loadModels(baseUrl, getApiKey(provider?.id ?? 'draft'))}
@@ -765,7 +881,7 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
         >
           {testing ? 'Testing…' : 'Test connection'}
         </button>
-        {testResult && <TestResultPill result={testResult} />}
+        {testResult && <TestResultPill result={testResult} corsSafe={preset.corsSafe} />}
       </div>
 
       <div className="flex justify-end gap-2">
@@ -785,6 +901,12 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
           Save provider
         </button>
       </div>
+
+      <KeySaveWarningDialog
+        open={showKeyWarning}
+        onConfirm={() => handleWarningConfirm()}
+        onCancel={() => setShowKeyWarning(false)}
+      />
     </div>
   )
 }
@@ -792,6 +914,15 @@ function ProviderConfigForm({ preset, provider, onSave, onCancel }: ProviderConf
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Map a preset's static `models` list into the shape the picker expects. */
+function presetModelsToInfo(preset: ProviderPreset): ModelInfo[] {
+  return (preset.models ?? []).map((m) => ({
+    id: m.id,
+    name: m.name,
+    free: m.free,
+  }))
+}
 
 function formatModelLabel(m: ModelInfo): string {
   const parts: string[] = [m.name ?? m.id]
@@ -811,7 +942,34 @@ function formatContextLength(tokens: number): string {
   return String(tokens)
 }
 
-function TestResultPill({ result }: { result: ConnectionTestResult }): ReactElement {
+/**
+ * Honest guidance for a `network` test result. A `fetch` TypeError is
+ * indistinguishable between CORS, network failure, and a server error whose
+ * body the browser hid — so the advice differs by whether the provider is
+ * known CORS-safe. For CORS-safe providers the failure is almost always a
+ * hidden rate-limit (429) or 5xx, not a real CORS issue.
+ */
+function networkGuidance(corsSafe: boolean): { label: string; detail: string } {
+  return corsSafe
+    ? {
+        label: 'Network error — often rate-limited',
+        detail:
+          'The browser could not read the response. This usually means a rate limit (429) or server error whose body was blocked — check the browser Network tab or retry shortly.',
+      }
+    : {
+        label: 'CORS / network error',
+        detail:
+          'The endpoint may not allow browser requests (missing CORS headers) or is unreachable. Use a CORS-safe provider or add a proxy.',
+      }
+}
+
+function TestResultPill({
+  result,
+  corsSafe,
+}: {
+  result: ConnectionTestResult
+  corsSafe: boolean
+}): ReactElement {
   switch (result.type) {
     case 'success':
       return (
@@ -831,12 +989,17 @@ function TestResultPill({ result }: { result: ConnectionTestResult }): ReactElem
           <XCircle className="h-3.5 w-3.5" /> Model not found
         </span>
       )
-    case 'cors':
+    case 'network': {
+      const g = networkGuidance(corsSafe)
       return (
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-warning">
-          <AlertTriangle className="h-3.5 w-3.5" /> Blocked by CORS
+        <span
+          className="inline-flex items-center gap-1 text-xs font-medium text-warning"
+          title={g.detail}
+        >
+          <AlertTriangle className="h-3.5 w-3.5" /> {g.label}
         </span>
       )
+    }
     case 'error':
       return (
         <span className="inline-flex items-center gap-1 text-xs font-medium text-danger">

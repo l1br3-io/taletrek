@@ -45,15 +45,29 @@ describe('providers', () => {
     }
   })
 
-  it('Zen preset declares compatible chat/completions model ids and a default among them', () => {
+  it('Zen preset declares a static free-model dropdown with a default among them', () => {
     const zen = getPreset('zen')
     expect(zen.corsSafe).toBe(true)
-    expect(zen.supportsModelsEndpoint).toBe(true)
-    expect(zen.compatibleModelIds).toBeDefined()
-    expect(zen.compatibleModelIds).toContain(zen.defaultModel)
-    expect(zen.compatibleModelIds).toContain('glm-5.2')
-    // Claude/GPT/Gemini ids (other endpoints) must NOT be listed as compatible.
-    expect(zen.compatibleModelIds).not.toContain('claude-opus-4-8')
-    expect(zen.compatibleModelIds).not.toContain('gpt-5.5')
+    // Static list, so no /models discovery.
+    expect(zen.supportsModelsEndpoint).toBe(false)
+    expect(zen.models).toBeDefined()
+    const ids = zen.models?.map((m) => m.id)
+    expect(ids).toContain(zen.defaultModel)
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'big-pickle',
+        'deepseek-v4-flash-free',
+        'hy3-free',
+        'mimo-v2.5-free',
+        'nemotron-3-ultra-free',
+        'north-mini-code-free',
+      ]),
+    )
+    // Every surfaced Zen model is free.
+    expect(zen.models?.every((m) => m.free === true)).toBe(true)
+    // Claude/GPT/Gemini ids (other endpoints) must NOT be listed.
+    expect(ids).not.toContain('claude-opus-4-8')
+    expect(ids).not.toContain('gpt-5.5')
+    expect(ids).not.toContain('glm-5.2')
   })
 })

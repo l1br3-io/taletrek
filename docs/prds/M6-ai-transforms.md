@@ -229,6 +229,7 @@ Follows `.opencode/tech/typescript/patterns.md` + `react/patterns.md` and the M0
 - **Worker messaging** mirrors `tts/protocol.ts` and `tts/client.ts` exactly — typed request/response, monotonic `id`, progress events.
 - **Additive storage** — `ai?` on Settings, `processing?` on Book; both optional, no migration, no `DB_VERSION` bump.
 - **Key isolation** — `keyring.ts` is the only module permitted to hold the key; engines receive it as a function arg, never as a module import.
+- **Key file import/export** — import accepts **JSON only**, shaped `{ apiKey, provider?, model?, baseUrl? }` (`lib/ai/importKey.ts`). `provider` maps to a `PROVIDER_PRESETS` id (`openrouter`, `groq`, `openai`, `together`, `zen`, `custom`); internally stored as `CloudProvider.presetId` (boundary translation, no settings migration). Export (`lib/ai/exportKey.ts`) round-trips the same shape and **includes the API key** (read from the in-memory keyring) when one is loaded — the downloaded file is a secret. TaleTrek itself still never persists the key (ADR-0004); a save-time reminder (`KeySaveWarningDialog`) and an export-time confirm (`KeyExportConfirmDialog`) make the in-memory / file-secret distinction explicit.
 - No comments unless asked; Biome handles format/import-order (2-space, single quotes, no semicolons, trailing commas).
 
 ## Testing strategy

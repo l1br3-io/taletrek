@@ -127,7 +127,11 @@ export type MediaPlaybackState = 'playing' | 'paused' | 'none'
 /** Update the OS-reported playback state (drives play/pause button state). */
 export function setMediaPlaybackState(state: MediaPlaybackState): void {
   if (!isMediaSessionSupported()) return
-  navigator.mediaSession.playbackState = state
+  try {
+    navigator.mediaSession.playbackState = state
+  } catch {
+    // Invalid state for this browser — ignore.
+  }
 }
 
 /**

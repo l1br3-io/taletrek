@@ -30,13 +30,24 @@ export interface ProviderPreset {
   /** Sensible default model if discovery fails or is skipped. */
   defaultModel?: string
   /**
-   * When set, the model picker filters the `/models` list to these ids only.
-   * Used by providers (e.g. OpenCode Zen) whose `/models` endpoint returns
-   * models that live on incompatible endpoints (Anthropic `/messages`, OpenAI
-   * `/responses`) — only the OpenAI-compatible `/chat/completions` ids are
-   * listed here. Users can still type any id manually.
+   * Static, curated model list. When set, the model picker renders a dropdown
+   * from this list WITHOUT calling `/models` — used by providers whose
+   * discovery endpoint is unreliable from the browser (CORS/auth) or whose
+   * usable models are a small known set. Takes precedence over
+   * {@link ProviderPreset.supportsModelsEndpoint}. Users can still type any
+   * id manually via the "Type manually" toggle.
    */
-  compatibleModelIds?: readonly string[]
+  models?: readonly PresetModel[]
+}
+
+/** A fixed model entry for a {@link ProviderPreset.models} static list. */
+export interface PresetModel {
+  /** The model id to send in `chat/completions` body. */
+  id: string
+  /** Optional display name; falls back to {@link PresetModel.id}. */
+  name?: string
+  /** Whether the model is free to use. */
+  free?: boolean
 }
 
 const CUSTOM_PRESET: ProviderPreset = {
@@ -99,37 +110,26 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     id: 'zen',
     label: 'OpenCode Zen',
     baseUrl: 'https://opencode.ai/zen/v1',
-    description: 'Curated gateway — 40+ verified models',
+    description: 'Curated gateway — free models, no card needed',
     signupUrl: 'https://opencode.ai/auth',
     keyScopeHint:
-      'Pay-as-you-go; add credits at opencode.ai/auth. Only OpenAI-compatible ' +
-      '/chat/completions models work in the browser (shown below). Some free ' +
-      'models may use submitted text for training — avoid sensitive books.',
-    supportsModelsEndpoint: true,
+      'Pay-as-you-go; add credits at opencode.ai/auth. The free models below ' +
+      'are the only ones that route to the OpenAI-compatible /chat/completions ' +
+      'endpoint TaleTrek calls. Free models may use submitted text for training ' +
+      '— avoid sensitive books.',
+    // Zen's /models endpoint returns the full catalogue (Claude/GPT/Gemini on
+    // /messages, /responses, etc.) and is unreliable from the browser. Instead,
+    // surface a curated static dropdown of the free /chat/completions models.
+    supportsModelsEndpoint: false,
     corsSafe: true,
-    defaultModel: 'glm-5.2',
-    // Zen's /models returns ALL models, but only these route to /chat/completions
-    // (the endpoint TaleTrek's engine calls). Claude/GPT/Gemini models live on
-    // /messages, /responses, /models respectively and would 404 here.
-    compatibleModelIds: [
-      'glm-5.2',
-      'glm-5.1',
-      'glm-5',
-      'deepseek-v4-pro',
-      'deepseek-v4-flash',
-      'kimi-k2.7-code',
-      'kimi-k2.6',
-      'kimi-k2.5',
-      'minimax-m3',
-      'minimax-m2.7',
-      'minimax-m2.5',
-      'grok-4.5',
-      'grok-build-0.1',
-      'big-pickle',
-      'mimo-v2.5-free',
-      'north-mini-code-free',
-      'nemotron-3-ultra-free',
-      'deepseek-v4-flash-free',
+    defaultModel: 'deepseek-v4-flash-free',
+    models: [
+      { id: 'big-pickle', free: true },
+      { id: 'deepseek-v4-flash-free', free: true },
+      { id: 'hy3-free', free: true },
+      { id: 'mimo-v2.5-free', free: true },
+      { id: 'nemotron-3-ultra-free', free: true },
+      { id: 'north-mini-code-free', free: true },
     ],
   },
   CUSTOM_PRESET,

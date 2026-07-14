@@ -1,52 +1,53 @@
 /** Result of parsing a key file: either a usable config or an error message. */
 export type KeyFileResult =
-  | { ok: true; apiKey: string; baseUrl?: string; model?: string; presetId?: string }
+  | { ok: true; apiKey: string; baseUrl?: string; model?: string; provider?: string }
   | { ok: false; error: string }
 
 /**
- * Parse an imported key file. Accepts two shapes:
+ * Parse an imported key file. Accepts **JSON only**, shaped as:
  *
- * 1. A JSON object with an `apiKey` string (and optional `baseUrl` / `model` /
- *    `presetId`):
- *    `{ "apiKey": "sk-…", "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini", "presetId": "openai" }`
- * 2. A plain-text file whose entire (trimmed) contents are the key itself.
+ * ```
+ * { "apiKey": "sk-…", "provider": "openai", "model": "gpt-4o-mini", "baseUrl": "https://api.openai.com/v1" }
+ * ```
  *
- * JSON without a usable `apiKey` is rejected; a non-JSON document is treated as
- * a plain-text key. Read client-side only — never uploaded (ADR-0004).
+ * - `apiKey` (string) is required.
+ * - `provider` (string) maps to one of the ids in `PROVIDER_PRESETS` (`openrouter`,
+ *   `groq`, `openai`, `together`, `zen`, `custom`); falls back to `custom` if
+ *   absent or unrecognized.
+ * - `model` and `baseUrl` are optional and override the preset defaults.
+ *
+ * The API key is read client-side only — never uploaded (ADR-0004). Non-JSON
+ * input is rejected; the legacy plain-text "whole file is the key" form and the
+ * legacy `presetId` field are no longer accepted.
  */
 export function parseKeyFile(text: string): KeyFileResult {
   const trimmed = text.trim()
   if (!trimmed) return { ok: false, error: 'File is empty.' }
 
   let parsed: unknown
-  let parsedOk = true
   try {
     parsed = JSON.parse(trimmed)
   } catch {
-    parsedOk = false
+    return { ok: false, error: 'File must be valid JSON.' }
   }
 
-  if (parsedOk) {
-    if (parsed && typeof parsed === 'object' && 'apiKey' in parsed) {
-      const obj = parsed as {
-        apiKey?: unknown
-        baseUrl?: unknown
-        model?: unknown
-        presetId?: unknown
-      }
-      const apiKey = obj.apiKey
-      if (typeof apiKey !== 'string' || !apiKey.trim()) {
-        return { ok: false, error: 'JSON "apiKey" must be a non-empty string.' }
-      }
-      const baseUrl =
-        typeof obj.baseUrl === 'string' && obj.baseUrl.trim() ? obj.baseUrl : undefined
-      const model = typeof obj.model === 'string' && obj.model.trim() ? obj.model : undefined
-      const presetId =
-        typeof obj.presetId === 'string' && obj.presetId.trim() ? obj.presetId : undefined
-      return { ok: true, apiKey: apiKey.trim(), baseUrl, model, presetId }
-    }
-    return { ok: false, error: 'JSON config must include an "apiKey" string field.' }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, error: 'JSON config must be an object with an "apiKey" string field.' }
   }
 
-  return { ok: true, apiKey: trimmed }
+  const obj = parsed as {
+    apiKey?: unknown
+    baseUrl?: unknown
+    model?: unknown
+    provider?: unknown
+  }
+  const apiKey = obj.apiKey
+  if (typeof apiKey !== 'string' || !apiKey.trim()) {
+    return { ok: false, error: 'JSON "apiKey" must be a non-empty string.' }
+  }
+  const baseUrl = typeof obj.baseUrl === 'string' && obj.baseUrl.trim() ? obj.baseUrl : undefined
+  const model = typeof obj.model === 'string' && obj.model.trim() ? obj.model : undefined
+  const provider =
+    typeof obj.provider === 'string' && obj.provider.trim() ? obj.provider.trim() : undefined
+  return { ok: true, apiKey: apiKey.trim(), baseUrl, model, provider }
 }

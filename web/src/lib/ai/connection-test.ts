@@ -13,7 +13,7 @@ export type ConnectionTestResult =
   | { type: 'success' }
   | { type: 'auth-error' }
   | { type: 'model-not-found' }
-  | { type: 'cors' }
+  | { type: 'network' }
   | { type: 'error'; status: number; message: string }
 
 /**
@@ -65,6 +65,12 @@ export async function testConnection(
     if (err instanceof DOMException && err.name === 'AbortError') {
       throw err
     }
-    return { type: 'cors' }
+    // A `fetch` TypeError is indistinguishable between a genuine CORS block,
+    // a network failure, and a server error response (e.g. 429/5xx) whose body
+    // the browser hid because it lacked `Access-Control-Allow-Origin`. The last
+    // case is common with rate-limited responses served by CDNs — the real
+    // status is visible only in DevTools → Network, never to JS. We therefore
+    // return `network` (not `cors`) so callers can give honest guidance.
+    return { type: 'network' }
   }
 }
