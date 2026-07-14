@@ -11,7 +11,7 @@ import {
 } from '../lib/db'
 import type { Book } from '../types'
 import { newBookId, newChapterId } from '../types'
-import { Reader } from './reader'
+import { Reader } from './reader/ReaderPane'
 
 const parseInWorker = vi.fn()
 

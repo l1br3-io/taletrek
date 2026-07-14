@@ -14,9 +14,10 @@ if (!root) throw new Error('#root not found')
 
 // Best-effort: ask the browser to exempt our storage from eviction.
 // Resolves silently (granted/denied by the browser based on engagement).
-void requestPersistence().then((granted) => {
+void (async () => {
+  const granted = await requestPersistence()
   if (!granted) console.info('[taletrek] storage persistence not granted; cache may be evicted')
-})
+})()
 
 // Feature-detect the Media Session API (no playback until M2/M3).
 console.info('[taletrek] media session:', {

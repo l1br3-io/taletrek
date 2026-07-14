@@ -10,7 +10,7 @@ import {
   setSetting,
 } from '../lib/db'
 import { type AudioCacheRecord, newBookId, type VoiceId, voiceId } from '../types'
-import { Settings } from './settings'
+import { Settings } from './settings/SettingsPage'
 
 const isStoredMock = vi.fn<(id: VoiceId) => Promise<boolean>>()
 const downloadMock = vi.fn<(id: VoiceId, cb?: (f: number) => void) => Promise<void>>()
