@@ -21,7 +21,7 @@ import { parseInWorker } from '../lib/parse/client'
 import { uploadManager } from '../lib/upload/manager'
 import type { Book } from '../types'
 import { chapterId, newBookId } from '../types'
-import { Library } from './library'
+import { Library } from './library/LibraryPage'
 
 vi.mock('../lib/parse/client', () => ({
   parseInWorker: vi.fn(),

@@ -30,13 +30,12 @@ export function parseInWorker(file: File): Promise<ParseResult> {
       else reject(new Error(msg.message))
     }
     w.addEventListener('message', onMessage)
-    void file
-      .arrayBuffer()
-      .then((buffer) => {
+    void (async () => {
+      try {
+        const buffer = await file.arrayBuffer()
         const request: ParseRequest = { id, buffer, name: file.name, type: file.type }
         w.postMessage(request, [buffer])
-      })
-      .catch((error) => {
+      } catch (error) {
         w.removeEventListener('message', onMessage)
         reject(
           new Error(
@@ -45,6 +44,7 @@ export function parseInWorker(file: File): Promise<ParseResult> {
               : 'Could not read file',
           ),
         )
-      })
+      }
+    })()
   })
 }

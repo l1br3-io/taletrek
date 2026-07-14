@@ -150,7 +150,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   // Hydrate from IndexedDB on mount.
   useEffect(() => {
     let cancelled = false
-    void getSetting<Settings>(SETTINGS_KEY).then((stored) => {
+    void (async () => {
+      const stored = await getSetting<Settings>(SETTINGS_KEY)
       if (cancelled) return
       const merged = migrateSettings(stored)
       setSettings(merged)
@@ -158,7 +159,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       void syncAudioCacheBudget(
         synthModeBudgetBytes(merged.synthesizeOnUpload, merged.audioCacheBudgetMb),
       )
-    })
+    })()
     return () => {
       cancelled = true
     }

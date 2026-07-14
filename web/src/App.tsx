@@ -1,10 +1,10 @@
 import type { RouteObject } from 'react-router'
 import { Layout } from './components/Layout'
-import { Landing } from './routes/landing'
-import { Library } from './routes/library'
+import { Landing } from './routes/landing/LandingPage'
+import { Library } from './routes/library/LibraryPage'
 import { NotFound } from './routes/not-found'
-import { Reader } from './routes/reader'
-import { Settings } from './routes/settings'
+import { Reader } from './routes/reader/ReaderPane'
+import { Settings } from './routes/settings/SettingsPage'
 
 export const routes: RouteObject[] = [
   {
