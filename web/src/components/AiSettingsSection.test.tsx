@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearAllKeys } from '../lib/ai/keyring'
+import { clearAllKeys, setApiKey } from '../lib/ai/keyring'
 import type { AiSettings } from '../lib/ai/types'
 import { AiSettingsSection } from './AiSettingsSection'
 
@@ -9,9 +9,16 @@ vi.mock('../lib/ai/models', async (importOriginal) => {
   return { ...actual, fetchModels: vi.fn() }
 })
 
+vi.mock('../lib/ai/exportKey', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/ai/exportKey')>()
+  return { ...actual, downloadKeyFile: vi.fn() }
+})
+
+import { downloadKeyFile } from '../lib/ai/exportKey'
 import { fetchModels } from '../lib/ai/models'
 
 const mockFetchModels = vi.mocked(fetchModels)
+const mockDownloadKeyFile = vi.mocked(downloadKeyFile)
 
 function cloudAi(overrides: Partial<AiSettings> = {}): AiSettings {
   return {
@@ -25,6 +32,7 @@ function cloudAi(overrides: Partial<AiSettings> = {}): AiSettings {
 beforeEach(() => {
   clearAllKeys()
   mockFetchModels.mockReset()
+  mockDownloadKeyFile.mockReset()
 })
 
 describe('AiSettingsSection — provider list', () => {
@@ -113,14 +121,14 @@ describe('AiSettingsSection — import key file', () => {
     })
   })
 
-  it('imports a JSON config with presetId', async () => {
+  it('imports a JSON config with provider mapped to a preset', async () => {
     const onChange = vi.fn()
     render(<AiSettingsSection ai={cloudAi()} onChange={onChange} />)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, {
       target: {
         files: [
-          new File(['{"apiKey":"sk-or","presetId":"openrouter"}'], 'key.json', {
+          new File(['{"apiKey":"sk-or","provider":"openrouter"}'], 'key.json', {
             type: 'application/json',
           }),
         ],
@@ -142,7 +150,7 @@ describe('AiSettingsSection — import key file', () => {
     })
   })
 
-  it('imports a plain-text file as a custom provider with key only', async () => {
+  it('rejects a plain-text file (JSON-only) and shows an error', async () => {
     const onChange = vi.fn()
     render(<AiSettingsSection ai={cloudAi()} onChange={onChange} />)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
@@ -150,18 +158,9 @@ describe('AiSettingsSection — import key file', () => {
       target: { files: [new File(['sk-plain-token'], 'key.txt', { type: 'text/plain' })] },
     })
     await waitFor(() => {
-      expect(onChange).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cloud: expect.objectContaining({
-            providers: expect.arrayContaining([
-              expect.objectContaining({
-                presetId: 'custom',
-              }),
-            ]),
-          }),
-        }),
-      )
+      expect(screen.getByRole('alert')).toHaveTextContent('File must be valid JSON.')
     })
+    expect(onChange).not.toHaveBeenCalled()
   })
 
   it('shows an error for a JSON file without an apiKey', async () => {
@@ -300,6 +299,52 @@ describe('AiSettingsSection — provider cards', () => {
   })
 })
 
+describe('AiSettingsSection — static model list (OpenCode Zen)', () => {
+  it('renders a dropdown of the free Zen models without fetching /models', async () => {
+    render(<AiSettingsSection ai={cloudAi()} onChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /\+ add provider/i }))
+    fireEvent.click(screen.getByRole('button', { name: /opencode zen/i }))
+
+    const select = (await screen.findByLabelText(/cloud model/i)) as HTMLSelectElement
+    const ids = Array.from(select.options).map((o) => o.value)
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'big-pickle',
+        'deepseek-v4-flash-free',
+        'hy3-free',
+        'mimo-v2.5-free',
+        'nemotron-3-ultra-free',
+        'north-mini-code-free',
+      ]),
+    )
+    // The free default is selected initially.
+    expect(select.value).toBe('deepseek-v4-flash-free')
+    // No discovery fetch should have been attempted (static list).
+    expect(mockFetchModels).not.toHaveBeenCalled()
+  })
+
+  it('defaults the model field to the preset free default on add', () => {
+    const onChange = vi.fn()
+    render(<AiSettingsSection ai={cloudAi()} onChange={onChange} />)
+    fireEvent.click(screen.getByRole('button', { name: /\+ add provider/i }))
+    fireEvent.click(screen.getByRole('button', { name: /opencode zen/i }))
+    fireEvent.click(screen.getByRole('button', { name: /save provider/i }))
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cloud: expect.objectContaining({
+          providers: expect.arrayContaining([
+            expect.objectContaining({
+              presetId: 'zen',
+              model: 'deepseek-v4-flash-free',
+            }),
+          ]),
+        }),
+      }),
+    )
+  })
+})
+
 describe('AiSettingsSection — model dropdown free-only filtering', () => {
   it('shows only free models when provider has a mix of free and paid', async () => {
     mockFetchModels.mockResolvedValue([
@@ -367,5 +412,42 @@ describe('AiSettingsSection — model dropdown free-only filtering', () => {
       const options = Array.from(select.options).map((o) => o.textContent ?? '')
       expect(options.some((t) => t.includes('paid-a') && t.includes('(current)'))).toBe(true)
     })
+  })
+})
+
+describe('AiSettingsSection — export provider', () => {
+  function singleProviderAi(): AiSettings {
+    return cloudAi({
+      cloud: {
+        providers: [
+          {
+            id: 'p1',
+            presetId: 'openai',
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'gpt-4o-mini',
+          },
+        ],
+        activeProviderId: 'p1',
+      },
+    })
+  }
+
+  it('exports immediately when no key is loaded (no confirm dialog)', () => {
+    render(<AiSettingsSection ai={singleProviderAi()} onChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /export openai/i }))
+    expect(mockDownloadKeyFile).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('asks for confirmation before exporting when a key is in memory', () => {
+    setApiKey('p1', 'sk-secret')
+    render(<AiSettingsSection ai={singleProviderAi()} onChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /export openai/i }))
+    // Not yet downloaded — the confirm dialog is shown instead.
+    expect(mockDownloadKeyFile).not.toHaveBeenCalled()
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent(/api key/i)
+    fireEvent.click(screen.getByRole('button', { name: /export with key/i }))
+    expect(mockDownloadKeyFile).toHaveBeenCalledTimes(1)
   })
 })

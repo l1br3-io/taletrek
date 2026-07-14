@@ -36,7 +36,7 @@ interface PrerenderedChunk {
  * `<audio>` element directly. The production impl wraps `new Audio()`.
  */
 export interface AudioController {
-  loadAndPlay(src: string): Promise<void>
+  loadAndPlay(blob: Blob): Promise<void>
   resume(): Promise<void>
   pause(): void
   stop(): void
@@ -56,12 +56,31 @@ export interface AudioController {
 /** Create a real `AudioController` backed by an off-DOM `HTMLAudioElement`. */
 export function createAudioController(): AudioController {
   const el = new Audio()
-  el.preservesPitch = true
   el.preload = 'auto'
   el.setAttribute('playsinline', '')
+  el.setAttribute('webkit-playsinline', '')
+  let currentUrl: string | null = null
+
   return {
-    async loadAndPlay(src: string) {
-      el.src = src
+    async loadAndPlay(blob: Blob) {
+      if (currentUrl) URL.revokeObjectURL(currentUrl)
+      const wav = blob.type === 'audio/wav' ? blob : new Blob([blob], { type: 'audio/wav' })
+      currentUrl = URL.createObjectURL(wav)
+      el.src = currentUrl
+      if (el.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        await new Promise<void>((resolve) => {
+          const onReady = () => {
+            el.removeEventListener('canplay', onReady)
+            clearTimeout(timer)
+            resolve()
+          }
+          const timer = setTimeout(() => {
+            el.removeEventListener('canplay', onReady)
+            resolve()
+          }, 2000)
+          el.addEventListener('canplay', onReady, { once: true })
+        })
+      }
       await el.play()
     },
     async resume() {
@@ -72,6 +91,8 @@ export function createAudioController(): AudioController {
     },
     stop() {
       el.pause()
+      if (currentUrl) URL.revokeObjectURL(currentUrl)
+      currentUrl = null
       el.removeAttribute('src')
       el.load()
     },
@@ -250,7 +271,6 @@ export function useParagraphPlayer({
   onSynthRef.current = onParagraphSynthesized
 
   const pointerRef = useRef(initialIndex ?? 0)
-  const urlRef = useRef<string | null>(null)
   const tokenRef = useRef(0) // bumped on every play request; stale play results ignored
   const genRef = useRef(0) // bumped on discontinuous moves; stale pre-render results ignored
   const statusRef = useRef<PlaybackStatus>({ type: 'idle' })
@@ -264,13 +284,7 @@ export function useParagraphPlayer({
   // stays in the 'playing' state and a spurious `ended` slips past the status
   // guard, skipping a paragraph (heard as the reader "reading too fast").
   const advancingRef = useRef(false)
-
-  const revokeUrl = useCallback(() => {
-    if (urlRef.current !== null) {
-      URL.revokeObjectURL(urlRef.current)
-      urlRef.current = null
-    }
-  }, [])
+  const resumeInFlightRef = useRef(false)
 
   const syncBufferedAhead = useCallback(() => {
     const ptr = pointerRef.current
@@ -366,13 +380,22 @@ export function useParagraphPlayer({
         if (token !== tokenRef.current) return
         const chunk = queueRef.current.get(para.id)
         if (!chunk) return
-        revokeUrl()
-        const url = URL.createObjectURL(chunk.blob)
-        urlRef.current = url
         try {
-          await audioRef.current.loadAndPlay(url)
+          await audioRef.current.loadAndPlay(chunk.blob)
         } catch (error) {
           if (token !== tokenRef.current) return
+          if (
+            error instanceof DOMException &&
+            (error.name === 'NotAllowedError' || error.name === 'NotSupportedError')
+          ) {
+            // iOS Safari: play() was called outside a user gesture (synthesis
+            // or the canplay wait broke the gesture chain), or the media
+            // engine wasn't ready yet. The audio IS loaded now — set status
+            // to 'paused' so the next Play tap calls resume() → el.play()
+            // synchronously within the gesture, with media already decoded.
+            setStatus({ type: 'paused', paragraphId: para.id })
+            return
+          }
           setStatus({
             type: 'error',
             message: error instanceof Error ? error.message : 'playback failed',
@@ -387,7 +410,7 @@ export function useParagraphPlayer({
         if (token === tokenRef.current) advancingRef.current = false
       }
     },
-    [paragraphs, primeAhead, prune, revokeUrl, syncBufferedAhead],
+    [paragraphs, primeAhead, prune, syncBufferedAhead],
   )
 
   // Discontinuous move: cancel in-flight pre-render, then play the target.
@@ -411,12 +434,11 @@ export function useParagraphPlayer({
       if (nextIndex < paragraphs.length) {
         void playIndex(nextIndex)
       } else {
-        revokeUrl()
         setStatus({ type: 'ended' })
       }
     })
     return unsubscribe
-  }, [paragraphs, playIndex, revokeUrl])
+  }, [paragraphs, playIndex])
 
   // Apply playbackRate live.
   useEffect(() => {
@@ -450,19 +472,28 @@ export function useParagraphPlayer({
   useEffect(() => {
     return () => {
       audioRef.current.stop()
-      if (urlRef.current !== null) URL.revokeObjectURL(urlRef.current)
-      urlRef.current = null
       queueRef.current.clear()
       genRef.current++
       tokenRef.current++
     }
   }, [])
 
-  const play = useCallback(() => {
+  const play = useCallback(async () => {
     const s = statusRef.current
     if (s.type === 'paused') {
-      void audioRef.current.resume()
-      setStatus({ type: 'playing', paragraphId: s.paragraphId })
+      if (resumeInFlightRef.current) return
+      resumeInFlightRef.current = true
+      try {
+        await audioRef.current.resume()
+        setStatus({ type: 'playing', paragraphId: s.paragraphId })
+      } catch {
+        setStatus({
+          type: 'error',
+          message: 'Tap the Play button to start playback',
+        })
+      } finally {
+        resumeInFlightRef.current = false
+      }
       return
     }
     if (s.type === 'idle' || s.type === 'ended' || s.type === 'error') {
@@ -481,7 +512,6 @@ export function useParagraphPlayer({
 
   const stop = useCallback(() => {
     audioRef.current.stop()
-    revokeUrl()
     queueRef.current.clear()
     genRef.current++
     tokenRef.current++
@@ -490,7 +520,7 @@ export function useParagraphPlayer({
     setCurrentParagraphId(null)
     setStatus({ type: 'idle' })
     setBufferedAhead(0)
-  }, [revokeUrl])
+  }, [])
 
   const next = useCallback(() => {
     jumpTo(pointerRef.current + 1)
@@ -537,7 +567,6 @@ export function useParagraphPlayer({
       genRef.current++
       advancingRef.current = false
       audioRef.current.stop()
-      revokeUrl()
       pointerRef.current = index
       setCurrentParagraphId(para.id)
       prune(index)
@@ -545,7 +574,7 @@ export function useParagraphPlayer({
       syncBufferedAhead()
       void primeAhead(index + 1)
     },
-    [paragraphs, revokeUrl, prune, syncBufferedAhead, primeAhead],
+    [paragraphs, prune, syncBufferedAhead, primeAhead],
   )
 
   const seekBy = useCallback((deltaSeconds: number) => {

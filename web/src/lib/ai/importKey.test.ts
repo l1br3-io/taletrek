@@ -2,36 +2,39 @@ import { describe, expect, it } from 'vitest'
 import { parseKeyFile } from './importKey'
 
 describe('parseKeyFile', () => {
-  it('parses a plain-text file as the key itself', () => {
-    expect(parseKeyFile('sk-abc123\n')).toEqual({ ok: true, apiKey: 'sk-abc123' })
-  })
-
-  it('trims whitespace around a plain-text key', () => {
-    expect(parseKeyFile('   sk-token   ')).toEqual({ ok: true, apiKey: 'sk-token' })
-  })
-
   it('parses a JSON object with apiKey only', () => {
     expect(parseKeyFile('{ "apiKey": "sk-json" }')).toEqual({ ok: true, apiKey: 'sk-json' })
   })
 
-  it('parses a JSON object with apiKey, baseUrl, and model', () => {
+  it('parses a JSON object with apiKey, baseUrl, model, and provider', () => {
     const result = parseKeyFile(
-      '{ "apiKey": "sk-json", "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini" }',
+      '{ "apiKey": "sk-json", "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini", "provider": "openai" }',
     )
     expect(result).toEqual({
       ok: true,
       apiKey: 'sk-json',
       baseUrl: 'https://api.openai.com/v1',
       model: 'gpt-4o-mini',
+      provider: 'openai',
     })
+  })
+
+  it('trims whitespace around field values', () => {
+    const result = parseKeyFile('{ "apiKey": "  sk-json  ", "provider": "  groq  " }')
+    expect(result).toEqual({ ok: true, apiKey: 'sk-json', provider: 'groq' })
   })
 
   it('rejects an empty file', () => {
     expect(parseKeyFile('   ')).toEqual({ ok: false, error: 'File is empty.' })
   })
 
+  it('rejects non-JSON input (no plain-text fallback)', () => {
+    const result = parseKeyFile('sk-abc123')
+    expect(result.ok).toBe(false)
+  })
+
   it('rejects JSON without an apiKey field', () => {
-    const result = parseKeyFile('{ "baseUrl": "https://x" }')
+    const result = parseKeyFile('{ "baseUrl": "https://x", "provider": "openai" }')
     expect(result.ok).toBe(false)
   })
 
@@ -40,8 +43,13 @@ describe('parseKeyFile', () => {
     expect(result.ok).toBe(false)
   })
 
-  it('treats a JSON array as invalid (no apiKey)', () => {
+  it('treats a JSON array as invalid', () => {
     const result = parseKeyFile('[1, 2, 3]')
     expect(result.ok).toBe(false)
+  })
+
+  it('ignores the legacy "presetId" field (schema renamed to provider)', () => {
+    const result = parseKeyFile('{ "apiKey": "sk-json", "presetId": "openai" }')
+    expect(result).toEqual({ ok: true, apiKey: 'sk-json' })
   })
 })

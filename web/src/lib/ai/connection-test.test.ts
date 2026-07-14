@@ -55,7 +55,7 @@ describe('testConnection', () => {
     expect(result).toEqual({ type: 'model-not-found' })
   })
 
-  it('returns cors on network error (TypeError)', async () => {
+  it('returns network on fetch TypeError (CORS/network/hidden-error)', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -63,7 +63,7 @@ describe('testConnection', () => {
       }),
     )
     const result = await testConnection('https://api.openai.com/v1', 'sk-test', 'gpt-4o-mini')
-    expect(result).toEqual({ type: 'cors' })
+    expect(result).toEqual({ type: 'network' })
   })
 
   it('returns error with status for other HTTP errors', async () => {

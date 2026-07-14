@@ -2,7 +2,11 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SynthesisResult, TtsEngine } from '../lib/tts/types'
 import { bookId, type Chapter, type ChapterId, chapterId, type VoiceId, voiceId } from '../types'
-import { type AudioController, useParagraphPlayer } from './useParagraphPlayer'
+import {
+  type AudioController,
+  createAudioController,
+  useParagraphPlayer,
+} from './useParagraphPlayer'
 
 const VOICE = voiceId('en_US-hfc_female-medium')
 const VOICE_2 = voiceId('en_US-amy-medium')
@@ -23,7 +27,7 @@ function oneChapter(paragraphs: string[]): Chapter[] {
 
 /** A fake audio controller that records calls and lets tests trigger `ended`. */
 class FakeAudio implements AudioController {
-  loadedSrcs: string[] = []
+  loadedBlobs: Blob[] = []
   playCount = 0
   pausedCount = 0
   stoppedCount = 0
@@ -37,8 +41,8 @@ class FakeAudio implements AudioController {
   /** When set, the next `loadAndPlay` fires a spurious `ended` mid-swap. */
   fireEndedOnLoad = false
 
-  async loadAndPlay(src: string): Promise<void> {
-    this.loadedSrcs.push(src)
+  async loadAndPlay(blob: Blob): Promise<void> {
+    this.loadedBlobs.push(blob)
     if (this.playShouldThrow) throw new Error('play blocked')
     if (this.fireEndedOnLoad) {
       this.fireEndedOnLoad = false
@@ -109,16 +113,6 @@ function stubEngine(): TtsEngine & { calls: { text: string; voiceId: VoiceId }[]
     },
   }
 }
-
-let revokeSpy: ReturnType<typeof vi.spyOn>
-
-beforeEach(() => {
-  revokeSpy = vi.spyOn(URL, 'revokeObjectURL')
-})
-
-afterEach(() => {
-  revokeSpy.mockRestore()
-})
 
 interface RenderOpts {
   engine?: TtsEngine
@@ -195,7 +189,7 @@ describe('useParagraphPlayer — playback (lookahead=0)', () => {
     expect(engine.calls).toHaveLength(1)
     expect(result.current.status.type).toBe('playing')
     expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:0`)
-    expect(audio.loadedSrcs).toHaveLength(1)
+    expect(audio.loadedBlobs).toHaveLength(1)
   })
 
   it('auto-advances to the next paragraph on ended', async () => {
@@ -243,6 +237,25 @@ describe('useParagraphPlayer — playback (lookahead=0)', () => {
     expect(audio.playCount).toBeGreaterThan(0)
   })
 
+  it('rapid double-tap on paused status calls resume only once', async () => {
+    const engine = stubEngine()
+    const { result, audio } = renderPlayer(oneChapter(['Hello.']), { engine })
+    await act(async () => {
+      result.current.play()
+    })
+    await act(async () => {
+      result.current.pause()
+    })
+    expect(result.current.status.type).toBe('paused')
+    const resumeCallsBefore = audio.playCount
+    await act(async () => {
+      result.current.play()
+      result.current.play()
+    })
+    expect(audio.playCount).toBe(resumeCallsBefore + 1)
+    expect(result.current.status.type).toBe('playing')
+  })
+
   it('stop resets to idle at the start', async () => {
     const { result } = renderPlayer(oneChapter(['One.', 'Two.']))
     await act(async () => {
@@ -278,7 +291,7 @@ describe('useParagraphPlayer — playback (lookahead=0)', () => {
     // Status returns to idle — no playback started.
     expect(result.current.status.type).toBe('idle')
     // Audio controller is stopped, nothing loaded for playback.
-    expect(audio.loadedSrcs).toHaveLength(0)
+    expect(audio.loadedBlobs).toHaveLength(0)
     expect(audio.stoppedCount).toBeGreaterThan(0)
     // Pointer is positioned so a subsequent play() resumes here, not at 0.
     await act(async () => {
@@ -355,38 +368,36 @@ describe('useParagraphPlayer — playback (lookahead=0)', () => {
       result.current.seekToParagraph(`${chapterId('c1')}:1`)
     })
     expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:1`)
-    expect(audio.loadedSrcs).toEqual([expect.any(String)])
+    expect(audio.loadedBlobs).toEqual([expect.any(Blob)])
     await act(async () => {
       resolveFirst({ audio: new Blob([new Uint8Array([9])]), synthMs: 9 })
     })
-    expect(audio.loadedSrcs).toHaveLength(1)
+    expect(audio.loadedBlobs).toHaveLength(1)
     expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:1`)
   })
 
-  it('revokes the previous Blob URL on every advance', async () => {
+  it('passes the next paragraph blob on every advance', async () => {
     const { result, audio } = renderPlayer(oneChapter(['A.', 'B.']))
     await act(async () => {
       result.current.play()
     })
-    expect(audio.loadedSrcs).toHaveLength(1)
-    expect(revokeSpy).not.toHaveBeenCalled()
+    expect(audio.loadedBlobs).toHaveLength(1)
     await act(async () => {
       audio.emitEnded()
     })
-    expect(revokeSpy).toHaveBeenCalledTimes(1)
-    expect(audio.loadedSrcs).toHaveLength(2)
+    expect(audio.loadedBlobs).toHaveLength(2)
   })
 
-  it('revokes the Blob URL on stop', async () => {
+  it('stops playback and clears state', async () => {
     const { result } = renderPlayer(oneChapter(['A.']))
     await act(async () => {
       result.current.play()
     })
-    expect(revokeSpy).not.toHaveBeenCalled()
+    expect(result.current.status.type).toBe('playing')
     await act(async () => {
       result.current.stop()
     })
-    expect(revokeSpy).toHaveBeenCalledTimes(1)
+    expect(result.current.status.type).toBe('idle')
   })
 
   it('surfaces a synthesis error in the status', async () => {
@@ -492,7 +503,7 @@ describe('useParagraphPlayer — pre-render queue (lookahead=3)', () => {
       audio.emitEnded()
     })
     expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:1`)
-    expect(audio.loadedSrcs).toHaveLength(2)
+    expect(audio.loadedBlobs).toHaveLength(2)
   })
 
   it('caps look-ahead at the configured depth (back-pressure)', async () => {
@@ -532,19 +543,18 @@ describe('useParagraphPlayer — pre-render queue (lookahead=3)', () => {
     })
   })
 
-  it('revokes the live Blob URL on every advance (queue active)', async () => {
+  it('advances through buffered paragraphs on ended (queue active)', async () => {
     const { result, audio } = renderPlayer(oneChapter(['A.', 'B.', 'C.']), { lookahead: 3 })
     await act(async () => {
       result.current.play()
     })
     await waitFor(() => {
-      expect(audio.loadedSrcs).toHaveLength(1)
+      expect(audio.loadedBlobs).toHaveLength(1)
     })
-    expect(revokeSpy).not.toHaveBeenCalled()
     await act(async () => {
       audio.emitEnded()
     })
-    expect(revokeSpy).toHaveBeenCalledTimes(1)
+    expect(audio.loadedBlobs).toHaveLength(2)
   })
 
   it('clears the buffer on stop', async () => {
@@ -885,5 +895,64 @@ describe('useParagraphPlayer — background synth + cache', () => {
     expect(synthIds[0]).toBe(`${firstId}:0`)
     expect(synthIds).toContain(`${firstId}:1`)
     expect(synthIds).toContain(`${firstId}:2`)
+  })
+})
+
+describe('createAudioController', () => {
+  const origReadyState = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'readyState')
+
+  // jsdom doesn't implement media loading — readyState stays 0 and canplay
+  // never fires. Stub to HAVE_ENOUGH_DATA so loadAndPlay skips the wait.
+  beforeEach(() => {
+    Object.defineProperty(HTMLMediaElement.prototype, 'readyState', {
+      configurable: true,
+      get: () => HTMLMediaElement.HAVE_ENOUGH_DATA,
+    })
+  })
+  afterEach(() => {
+    if (origReadyState) {
+      Object.defineProperty(HTMLMediaElement.prototype, 'readyState', origReadyState)
+    }
+  })
+
+  it('re-writes audio/x-wav blob to audio/wav for iOS Safari compatibility', async () => {
+    const createdBlobs: Blob[] = []
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((obj: Blob | MediaSource) => {
+      createdBlobs.push(obj as Blob)
+      return 'blob:mock'
+    })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+
+    const controller = createAudioController()
+    const xWavBlob = new Blob([new Uint8Array([1, 2, 3])], { type: 'audio/x-wav' })
+
+    // jsdom's el.play() rejects (no media engine) — we only care about the
+    // blob reaching URL.createObjectURL with the correct MIME type.
+    await controller.loadAndPlay(xWavBlob).catch(() => {})
+
+    expect(createdBlobs).toHaveLength(1)
+    expect(createdBlobs[0]?.type).toBe('audio/wav')
+
+    vi.restoreAllMocks()
+  })
+
+  it('does not re-wrap a blob that already has audio/wav', async () => {
+    const createdBlobs: Blob[] = []
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((obj: Blob | MediaSource) => {
+      createdBlobs.push(obj as Blob)
+      return 'blob:mock'
+    })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+
+    const controller = createAudioController()
+    const wavBlob = new Blob([new Uint8Array([4, 5, 6])], { type: 'audio/wav' })
+
+    await controller.loadAndPlay(wavBlob).catch(() => {})
+
+    expect(createdBlobs).toHaveLength(1)
+    // Same object — not re-wrapped
+    expect(createdBlobs[0]).toBe(wavBlob)
+
+    vi.restoreAllMocks()
   })
 })
