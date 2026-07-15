@@ -6,9 +6,9 @@ Free, open-source reading companion by l1br3. Turn any ebook (PDF, EPUB, MOBI, T
 
 ## Docs
 
-- [Vision](https://github.com/l1br3/taletrek/blob/master/docs/VISION.md)
-- [Roadmap](https://github.com/l1br3/taletrek/blob/master/docs/ROADMAP.md)
-- [M0 Foundation PRD](https://github.com/l1br3/taletrek/blob/master/docs/prds/M0-foundation.md)
+- [Vision](https://github.com/l1br3/taletrek/blob/main/docs/VISION.md)
+- [Roadmap](https://github.com/l1br3/taletrek/blob/main/docs/ROADMAP.md)
+- [M0 Foundation PRD](https://github.com/l1br3/taletrek/blob/main/docs/prds/M0-foundation.md)
 
 ## License
 

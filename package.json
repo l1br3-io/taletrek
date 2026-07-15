@@ -20,6 +20,7 @@
     "verify": "biome check && pnpm -C web typecheck && pnpm -C web test && pnpm -C web build"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.3"
+    "@biomejs/biome": "2.5.3",
+    "wrangler": "^4.111.0"
   }
 }
