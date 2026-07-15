@@ -79,15 +79,16 @@ The app becomes a complete reading companion. A library view manages multiple bo
 
 ---
 
-## Beyond the core — M6, M7 & M8
+## Beyond the core — M6, M7, M8 & M9
 
-With the read-aloud core (M0–M5) shipped, three follow-on milestones deepen the experience: **M6** adds an optional AI transform layer, **M7** makes the reader comfortable on any screen, and **M8** makes resume instant by caching synthesized audio.
+With the read-aloud core (M0–M5) shipped, four follow-on milestones deepen the experience: **M6** adds an optional AI transform layer, **M7** makes the reader comfortable on any screen, **M8** makes resume instant by caching synthesized audio, and **M9** fixes mobile playback with a streaming engine.
 
 | # | Milestone | Ships (user-visible) |
 |---|-----------|----------------------|
 | M6 | **AI Transforms** | Optional post-processing (your own OpenAI-compatible cloud key) that cleans OCR noise, translates, summarizes, or simplifies a book — plus per-paragraph transforms (AI + deterministic) and an importable key/config |
 | M7 | **Reader UX & Mobile** | A responsive, mobile-first reader: a chapter outline, minimized playback controls with an overflow menu, a "go to current paragraph" affordance, and auto-scroll to the resumed position on first Play |
 | M8 | **Audio Cache** | Synthesized audio persists across sessions: reopening a book resumes playback instantly because paragraphs already rendered are reused. A content-addressed IndexedDB cache (keyed by voice + normalized text), LRU-bounded to ~500 MB, cleared per-book on delete. Purely on-device; no sync, no upload. |
+| M9 | **Mobile Streaming Playback** | A separate mobile playback engine using MSE on a hidden `<video>`, fed progressively via FFmpeg WASM-encoded fMP4 segments. Desktop playback is unchanged. Accepted limitation: `<video>` pauses on iOS lock — user taps play to resume. |
 
 ### M6 — AI Transforms
 An optional layer on top of ingest. Disabled by default, so it adds zero overhead until the user opts in. One backend behind the engine contract: **cloud** (any OpenAI-compatible endpoint, your key, held in-memory only and never written to disk). The v1 transforms — cleanup, translate, summarize, simplify — run over the whole book from the library; results replace the source text and the original file stays recoverable via re-parse. Pronunciation hints propose candidates the user reviews into the global dictionary. *(The on-device WebLLM backend was removed — see ADR-0005.)*
@@ -99,6 +100,9 @@ The reader becomes comfortable on a phone. The layout is mobile-first: the nav c
 
 ### M8 — Audio Cache
 Resume becomes instant. Every paragraph Piper synthesizes is stored in a **content-addressed IndexedDB cache** keyed by `voiceId + NORM_VERSION + sha256(normalizedText)`, so reopening a book days later picks up the existing audio instead of re-running ~1 s × N of WASM inference the device has already done. Tier 1 (M3's in-memory look-ahead queue) stays as-is; the new persistent tier sits below it, inside `PiperEngine.synthesize`. The cache is LRU-bounded to ~500 MB, cleared per-book when a book is deleted, and survives reloads within the browser's storage window (indefinitely when installed to the home screen). It's a purely local optimization — no sync, no upload, no new permission; if evicted, the app transparently re-synthesizes, with the uploaded file as source of truth. A Settings indicator shows the cached total with a Clear button. This milestone closes the gap between M5's "resume anywhere" promise and the cost of re-rendering long books on every cold start.
+
+### M9 — Mobile Streaming Playback
+M3's per-paragraph playback — where each paragraph is a separate `<audio>` source swapped on `ended` — works on desktop but **fails on iOS Safari with a locked screen**: iOS blocks JavaScript from starting a new media source without a user gesture, so the current paragraph finishes and then silence. M9 adds a separate mobile engine that uses **MediaSource Extensions (MSE)** on a hidden `<video>` element. Each paragraph's PCM WAV is encoded to a fragmented MP4 segment (AAC audio + 1x1 black H.264 frame) via **FFmpeg WASM**, cached in IndexedDB, then fed progressively to a single `MediaSource`/`SourceBuffer`. One `src` set once — no track transitions during playback. MSE's `appendBuffer` queues data for the media pipeline without requiring a user gesture. The `<video>` element is hidden; users see only the audio player UI. Paragraph highlighting tracks `timeupdate` against precomputed time offsets. Accepted limitation: `<video>` elements pause when the iOS screen locks; the user taps play to resume from where they left off. Desktop playback (`useParagraphPlayer`) is completely unchanged. *(See ADR-0006 for the full alternatives analysis and rationale.)*
 
 ---
 
@@ -116,4 +120,4 @@ Revisited once the read-aloud core + M6/M7 are shipped and adopted:
 
 ## Status
 
-M0–M5 shipped (read-aloud core complete). M6 (AI Transforms, incl. per-paragraph transforms + importable key/config), M7 (Reader UX & Mobile), and M8 (Audio Cache) shipped. See [`AGENTS.md`](../AGENTS.md) for the current milestone status table.
+M0–M5 shipped (read-aloud core complete). M6 (AI Transforms, incl. per-paragraph transforms + importable key/config), M7 (Reader UX & Mobile), and M8 (Audio Cache) shipped. M9 (Mobile Streaming Playback) planned — documentation complete, implementation not started. See [`AGENTS.md`](../AGENTS.md) for the current milestone status table.

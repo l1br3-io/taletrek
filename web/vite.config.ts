@@ -38,7 +38,7 @@ function contentSecurityPolicy(): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   server: {
-    allowedHosts: ['practitioners-cole-cove-tractor.trycloudflare.com'],
+    allowedHosts: ['omaha-tramadol-champagne-cities.trycloudflare.com'],
   },
   plugins: [
     react(),

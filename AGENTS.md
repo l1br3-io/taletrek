@@ -16,6 +16,7 @@
 | M6 — AI Transforms | ✅ **Done** (cloud-only after ADR-0005; in-browser WebLLM backend removed. cleanup/translate/summarize/simplify/pronunciation-hints, per-paragraph transforms + importable key/config) | [`docs/prds/M6-ai-transforms.md`](docs/prds/M6-ai-transforms.md) · [`docs/adr/0005-remove-in-browser-llm-backend.md`](docs/adr/0005-remove-in-browser-llm-backend.md) · [`tasks/todo.md`](tasks/todo.md) |
 | M7 — Reader UX & Mobile | ✅ **Done** (responsive layout + nav drawer, chapter outline, minimized `⋯` playback menu, go-to-current + FAB, auto-scroll to resumed position on first Play) | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 | M8 — Audio Cache | ✅ **Done** (content-addressed IndexedDB audio cache, LRU-bounded ~500 MB, per-book cascade clear, Settings indicator + Clear button) | [`docs/prds/M8-audio-cache.md`](docs/prds/M8-audio-cache.md) |
+| M9 — Mobile Streaming Playback | 📋 **Planned** (docs complete, implementation not started. MSE on hidden `<video>`, FFmpeg WASM-encoded fMP4 segments, per-paragraph streaming. Desktop unchanged. ADR-0006.) | [`docs/prds/M9-mobile-streaming.md`](docs/prds/M9-mobile-streaming.md) · [`docs/adr/0006-mobile-mse-streaming.md`](docs/adr/0006-mobile-mse-streaming.md) |
 
 **Read first:** [`docs/VISION.md`](docs/VISION.md) (the why) → [`docs/ROADMAP.md`](docs/ROADMAP.md) (milestones) → [`docs/prds/M0-foundation.md`](docs/prds/M0-foundation.md) (what shipped, patterns, conventions).
 
@@ -72,6 +73,10 @@ spike/piper/   throwaway Piper TTS validation app
 7. **`pdfjs-dist` is lazy-imported inside `parse()`** — importing it at module top-level pulls `DOMMatrix` at load, which crashes jsdom. Keep the dynamic `await import('pdfjs-dist')` in `pdf.ts`.
 8. **Send file *bytes*, not the `File`, to a worker.** `parseInWorker` reads `file.arrayBuffer()` on the main thread and transfers the `ArrayBuffer`; the worker reconstructs the `File`. Cloning a `File` across the worker boundary can fail for files backed by a filesystem path.
 9. **WebGPU is no longer used** — the on-device WebLLM backend was removed (ADR-0005); AI transforms are cloud-only now. The old `requestAdapter()` feature-detect / Flatpak-Vulkan guidance no longer applies.
+10. **iOS Safari MSE is `<video>`-only** (ADR-0006 / M9). `MediaSource` + `SourceBuffer` work on `<video>` elements but **not** on `<audio>`. The mobile streaming engine uses a hidden `<video>` (`display: none`). fMP4 segments must include a video track (1x1 black H.264 frame) — audio-only fMP4 may be rejected by iOS Safari's MSE parser. Future optimization: drop the video track if audio-only is proven safe.
+11. **FFmpeg WASM core is ~30MB and single-threaded** (ADR-0006 / M9). The `@ffmpeg/core` WASM is downloaded to OPFS on first mobile playback (like Piper voice models), then loaded from OPFS on subsequent uses. **Do not** use the multi-threaded core (`@ffmpeg/core-mt`) — it requires `SharedArrayBuffer` which forces cross-origin isolation (COOP/COEP) headers on the entire app. Single-threaded is fast enough for encoding short speech clips.
+12. **`SourceBuffer.appendBuffer` is async — no overlapping appends.** Wait for the `updateend` event before calling `appendBuffer` again. Use `SourceBuffer.timestampOffset` to position each segment at the correct time in the timeline. Read cumulative duration from `sourceBuffer.buffered.end(ranges.length - 1)` after each append.
+13. **`<video>` elements pause on iOS lock screen** (ADR-0006 / M9). This is an accepted limitation of the mobile streaming engine. The user taps play to resume from their position. Do not attempt workarounds — the per-paragraph `<audio>` approach (desktop) fails entirely on lock, which is worse.
 
 ## How to resume (in a new session)
 
@@ -79,7 +84,7 @@ Open opencode in this repo and say, e.g.:
 
 > "Continue with M1 — Upload & Read. Read `docs/ROADMAP.md` and `docs/prds/M0-foundation.md` for established patterns, then plan M1 following the spec-driven workflow. The Piper integration is M2, not M1."
 
-The agent auto-loads this file + `.opencode/rules/tech.md`. For TTS work, also point it at [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) (M2 recommendations: pin ORT 1.18.0, mirror wasm locally, single-threaded default, Web Worker, pre-download model to OPFS). For M6 (AI transforms), point it at [`tasks/plan.md`](tasks/plan.md) (cloud OpenAI-compatible engine; the on-device WebLLM backend was removed — ADR-0005).
+The agent auto-loads this file + `.opencode/rules/tech.md`. For TTS work, also point it at [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) (M2 recommendations: pin ORT 1.18.0, mirror wasm locally, single-threaded default, Web Worker, pre-download model to OPFS). For M6 (AI transforms), point it at [`tasks/plan.md`](tasks/plan.md) (cloud OpenAI-compatible engine; the on-device WebLLM backend was removed — ADR-0005). For M9 (mobile streaming), point it at [`docs/prds/M9-mobile-streaming.md`](docs/prds/M9-mobile-streaming.md) + [`docs/adr/0006-mobile-mse-streaming.md`](docs/adr/0006-mobile-mse-streaming.md) (MSE on hidden `<video>`, FFmpeg WASM fMP4 encoding, per-paragraph streaming, desktop unchanged).
 
 ## Non-goals (launch scope)
 

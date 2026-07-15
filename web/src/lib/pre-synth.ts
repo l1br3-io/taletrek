@@ -1,4 +1,6 @@
 import type { BookId, Chapter, VoiceId } from '../types'
+import { parseWavDuration } from './audio/ffmpeg'
+import { audioCacheKey } from './audio-cache'
 import type { TtsEngine } from './tts/types'
 
 export interface PreSynthOptions {
@@ -12,24 +14,32 @@ export interface PreSynthOptions {
   signal?: AbortSignal
 }
 
+export interface ParagraphPreSynthInfo {
+  /** Content-addressed audioCache key for this paragraph's WAV. */
+  cacheKey: string
+  /** Audio duration in seconds, parsed from the synthesised WAV. */
+  durationSeconds: number
+}
+
 export interface PreSynthResult {
   total: number
   synthesized: number
   cached: number
   cancelled: boolean
+  /** Per-paragraph cache keys and durations, in flatten order. */
+  paragraphs: ParagraphPreSynthInfo[]
 }
 
 /**
  * Pre-synthesize every paragraph in a book sequentially, storing results in
- * the audio cache. Cache hits are free (no Piper inference). Designed to run
- * on the upload screen so the first reading session has zero synthesis latency.
+ * the audio cache. Cache hits are free (no Piper inference).
+ *
+ * Returns per-paragraph cache keys and durations for downstream concat+encode
+ * (mobile Path A) or streaming (future M9.1).
  *
  * The caller is responsible for passing **cleaned** chapters — the cache key
  * is derived from the paragraph text, so it must match what the reader will
- * request via `useParagraphPlayer`.
- *
- * Cancellation is cooperative: pass an `AbortSignal` and it is checked between
- * paragraphs. The function returns partial results on cancel.
+ * request.
  */
 export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynthResult> {
   const { bookId, chapters, voiceId, engine, onProgress, onVoiceDownload, signal } = opts
@@ -49,10 +59,11 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
   let done = 0
   let synthesized = 0
   let cached = 0
+  const info: ParagraphPreSynthInfo[] = []
 
   for (const text of paragraphs) {
     if (signal?.aborted) {
-      return { total, synthesized, cached, cancelled: true }
+      return { total, synthesized, cached, cancelled: true, paragraphs: info }
     }
 
     const result = await engine.synthesize({ text, voiceId, bookId })
@@ -60,7 +71,13 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
     else synthesized++
     done++
     onProgress?.(done, total)
+
+    const wav = await result.audio.arrayBuffer()
+    const durationSeconds = parseWavDuration(wav)
+    const cacheKey = await audioCacheKey(voiceId, text)
+
+    info.push({ cacheKey, durationSeconds })
   }
 
-  return { total, synthesized, cached, cancelled: false }
+  return { total, synthesized, cached, cancelled: false, paragraphs: info }
 }

@@ -2,6 +2,7 @@ import { Locate } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useSettings } from '../../context/settings'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import { useOnline } from '../../hooks/useOnline'
 import { cleanChapters } from '../../lib/clean'
 import { getBook, getChaptersByBook, getMostRecentBook, updateParagraph } from '../../lib/db'
@@ -19,11 +20,12 @@ import {
 import { Outline } from './Outline'
 import { ParagraphTransformModal } from './ParagraphTransformModal'
 import { PlayerBar } from './PlayerBar'
+import { flattenParagraphs } from './players/types'
+import { usePlayer } from './players/usePlayer'
 import { ReaderView } from './ReaderView'
 import { useCachedParagraphs } from './useCachedParagraphs'
 import { useElementVisible } from './useElementVisible'
 import { useMediaSession } from './useMediaSession'
-import { flattenParagraphs, useParagraphPlayer } from './useParagraphPlayer'
 import { useParagraphTransform } from './useParagraphTransform'
 import { useProgressPersistence } from './useProgressPersistence'
 
@@ -132,18 +134,23 @@ function ReaderPane({
     [cleanedChapters, book.position],
   )
 
-  const player = useParagraphPlayer({
-    chapters: cleanedChapters,
-    voiceId: settings.voiceId,
-    playbackRate: settings.playbackRate,
-    engine: ttsClient,
-    initialIndex,
-    bookId: book.id,
-    backgroundActive,
-    backgroundBufferedIds,
-    cachedParagraphIds: persistentCachedIds,
-    onParagraphSynthesized: handleParagraphSynthesized,
-  })
+  const isMobile = useIsMobile()
+
+  const player = usePlayer(
+    {
+      chapters: cleanedChapters,
+      voiceId: settings.voiceId,
+      playbackRate: settings.playbackRate,
+      engine: ttsClient,
+      initialIndex,
+      bookId: book.id,
+      backgroundActive,
+      backgroundBufferedIds,
+      cachedParagraphIds: persistentCachedIds,
+      onParagraphSynthesized: handleParagraphSynthesized,
+    },
+    { isMobile },
+  )
   useMediaSession({
     player,
     bookTitle: book.title,
@@ -229,7 +236,7 @@ function ReaderPane({
   const showFab = !!player.currentParagraphId && !activeInView
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-4 pb-32 sm:space-y-6">
       <ReaderView
         book={book}
         chapters={cleanedChapters}

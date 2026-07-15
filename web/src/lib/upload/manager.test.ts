@@ -135,6 +135,8 @@ describe('uploadManager', () => {
     await act(async () => {
       gates[1]?.()
     })
+    // Wait for the next synthesize call to push gate[2] before resolving it.
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(3))
     await act(async () => {
       gates[2]?.()
     })

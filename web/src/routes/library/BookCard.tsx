@@ -146,7 +146,14 @@ export function BookCard({
             ❯
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium text-fg">{book.title}</span>
+            <span className="block truncate font-medium text-fg">
+              {book.title}
+              {book.uploading && (
+                <span className="ml-2 inline-flex items-center rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-medium text-accent">
+                  Uploading…
+                </span>
+              )}
+            </span>
             <span className="mt-0.5 flex items-center gap-2 text-xs text-muted">
               <span>{book.format}</span>
               <span aria-hidden>·</span>

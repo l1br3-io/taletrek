@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useOnline } from '../../hooks/useOnline'
-import { clearAudioCache, evictAudioCacheToBudget, getAllBooks } from '../../lib/db'
+import {
+  clearAudioCache,
+  clearSegmentCache,
+  evictAudioCacheToBudget,
+  getAllBooks,
+} from '../../lib/db'
 import { ttsClient } from '../../lib/tts/client'
 import { CURATED_VOICES } from '../../lib/tts/voices'
 import type { VoiceId } from '../../types'
@@ -70,6 +75,7 @@ export function useSettingsPageState({
     setClearingCache(true)
     try {
       await clearAudioCache()
+      await clearSegmentCache()
       await cacheStats.refresh()
       await storageEstimate.refresh()
     } finally {

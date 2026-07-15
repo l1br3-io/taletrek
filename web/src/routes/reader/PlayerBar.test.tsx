@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { PlayerBar } from './PlayerBar'
-import type { PlaybackStatus } from './useParagraphPlayer'
+import type { PlaybackStatus } from './players/types'
 
 function renderBar(overrides?: Partial<React.ComponentProps<typeof PlayerBar>>) {
   const handlers = {

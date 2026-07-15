@@ -65,9 +65,12 @@ body,
 
 /* Prevent horizontal overflow (e.g. long unbreakable words) from creating a
    horizontal scrollbar that shifts the centered column off-axis on narrow
-   viewports. Vertical scrolling is unaffected. */
-html {
+   viewports. Applied to body (not html) because `overflow-x: hidden` on
+   <html> breaks vertical momentum scrolling on iOS Safari. */
+body {
   overflow-x: hidden;
+  overscroll-behavior-y: none;
+  -webkit-overflow-scrolling: touch;
 }
 
 body {
@@ -103,6 +106,12 @@ body {
   .tt-cursor {
     animation: none;
   }
+}
+
+/* Reposition vConsole toggle above the sticky PlayerBar (M9 iOS debugging). */
+#__vconsole .vc-switch {
+  bottom: 80px !important;
+  z-index: 9999 !important;
 }
 
 /* Reader text scale — serif body inside the mono chrome. */

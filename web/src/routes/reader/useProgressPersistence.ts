@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { updateBookProgress } from '../../lib/db'
 import type { BookId, BookPosition } from '../../types'
-import type { ParagraphRef } from './useParagraphPlayer'
+import type { ParagraphRef } from './players/types'
 
 function toPosition(p: ParagraphRef): BookPosition {
   return { chapterIndex: p.chapterIndex, paragraphIndex: p.paragraphIndex }
