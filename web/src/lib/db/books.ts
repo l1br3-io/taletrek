@@ -21,19 +21,26 @@ export async function deleteBook(id: BookId): Promise<void> {
 }
 
 /**
- * Remove a book together with all of its chapters, its uploaded file, and its
- * cached audio (M8). Runs in a single transaction so the cascade is atomic.
+ * Remove a book together with all of its chapters, its uploaded file, its
+ * cached audio (M8), and its fMP4 segments (M9). Runs in a single transaction
+ * so the cascade is atomic.
  */
 export async function deleteBookCascade(id: BookId): Promise<void> {
   const db = await getDB()
   const chapterKeys = await db.getAllKeysFromIndex('chapters', 'bookId', id)
   const audioKeys = await db.getAllKeysFromIndex('audioCache', 'bookId', id)
-  const tx = db.transaction(['books', 'chapters', 'files', 'audioCache'], 'readwrite')
+  const segmentKeys = await db.getAllKeysFromIndex('audioSegments', 'bookId', id)
+  const tx = db.transaction(
+    ['books', 'chapters', 'files', 'audioCache', 'audioSegments', 'bookAudio'],
+    'readwrite',
+  )
   await Promise.all([
     tx.objectStore('books').delete(id),
     ...chapterKeys.map((key) => tx.objectStore('chapters').delete(key)),
     tx.objectStore('files').delete(id),
     ...audioKeys.map((key) => tx.objectStore('audioCache').delete(key)),
+    ...segmentKeys.map((key) => tx.objectStore('audioSegments').delete(key)),
+    tx.objectStore('bookAudio').delete(id),
   ])
   await tx.done
 }

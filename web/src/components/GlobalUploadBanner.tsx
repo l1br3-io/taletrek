@@ -82,7 +82,13 @@ export function GlobalUploadBanner() {
   }
 
   const fraction =
-    state.type === 'voiceDownload' ? state.fraction : state.total > 0 ? state.done / state.total : 0
+    state.type === 'voiceDownload'
+      ? state.fraction
+      : state.type === 'encoding'
+        ? (state.progress ?? 1)
+        : state.total > 0
+          ? state.done / state.total
+          : 0
 
   return (
     <div
@@ -95,9 +101,9 @@ export function GlobalUploadBanner() {
           <span className="text-sm">
             {state.type === 'voiceDownload'
               ? 'Downloading voice…'
-              : state.total > 0
-                ? `Synthesizing “${state.book.title}”… ${state.done} / ${state.total}`
-                : `Synthesizing “${state.book.title}”…`}
+              : state.type === 'encoding'
+                ? 'Encoding audiobook…'
+                : `Synthesizing “${state.book.title}”… ${state.done} / ${state.total}`}
           </span>
         </div>
         <div className="flex items-center gap-3">

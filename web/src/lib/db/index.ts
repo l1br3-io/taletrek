@@ -1,4 +1,14 @@
 export {
+  clearSegmentCache,
+  deleteSegmentKeys,
+  evictSegmentFraction,
+  evictSegmentToBudget,
+  getSegment,
+  getSegmentCacheSize,
+  getSegmentKeysByBook,
+  putSegment,
+} from '../audio-segment-cache'
+export {
   clearAudioCache,
   deleteAudioCacheKeys,
   evictAudioCacheFraction,

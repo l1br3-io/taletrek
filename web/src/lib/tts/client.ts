@@ -11,6 +11,12 @@ function getWorker(): Worker {
     worker = new Worker(new URL('../../workers/tts.worker.ts', import.meta.url), {
       type: 'module',
     })
+    worker.addEventListener('error', (e) => {
+      console.error('[taletrek] tts worker error:', e.message, e.filename, e.lineno, e)
+    })
+    worker.addEventListener('messageerror', (e) => {
+      console.error('[taletrek] tts worker message error:', e)
+    })
   }
   return worker
 }

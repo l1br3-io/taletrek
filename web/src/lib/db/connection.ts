@@ -1,5 +1,14 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb'
-import type { AudioCacheRecord, Book, BookFile, BookId, Chapter, ChapterId } from '../../types'
+import type {
+  AudioCacheRecord,
+  AudioSegmentRecord,
+  Book,
+  BookFile,
+  BookId,
+  Chapter,
+  ChapterId,
+  VoiceId,
+} from '../../types'
 
 /**
  * TaleTrek IndexedDB schema.
@@ -7,6 +16,7 @@ import type { AudioCacheRecord, Book, BookFile, BookId, Chapter, ChapterId } fro
  * v1 (M0): `settings` store only.
  * v2 (M1): adds `books`, `chapters`, and `files` stores for the ingest pipeline.
  * v3 (M8): adds `audioCache` store for the persistent TTS audio cache.
+ * v4 (M9): adds `audioSegments` store for mobile fMP4 streaming segments.
  */
 export interface TaleTrekDB extends DBSchema {
   settings: {
@@ -32,10 +42,27 @@ export interface TaleTrekDB extends DBSchema {
     value: AudioCacheRecord
     indexes: { bookId: BookId; lastUsed: number }
   }
+  audioSegments: {
+    key: string
+    value: AudioSegmentRecord
+    indexes: { bookId: BookId; lastUsed: number }
+  }
+  bookAudio: {
+    key: BookId
+    value: {
+      bookId: BookId
+      blob: Blob
+      duration: number
+      paragraphOffsets: number[]
+      durations: number[]
+      voiceId: VoiceId
+      createdAt: number
+    }
+  }
 }
 
 const DB_NAME = 'taletrek'
-const DB_VERSION = 3
+const DB_VERSION = 5
 
 /** Soft cap on the audio cache (M8). ~1,700 paragraphs at ~300 KB/para. */
 export const AUDIO_CACHE_BUDGET_BYTES = 500 * 1024 * 1024
@@ -73,6 +100,20 @@ export function getDB(): Promise<IDBPDatabase<TaleTrekDB>> {
             store.createIndex('lastUsed', 'lastUsed')
           }
         }
+        // v4 (M9)
+        if (oldVersion < 4) {
+          if (!db.objectStoreNames.contains('audioSegments')) {
+            const store = db.createObjectStore('audioSegments', { keyPath: 'key' })
+            store.createIndex('bookId', 'bookId')
+            store.createIndex('lastUsed', 'lastUsed')
+          }
+        }
+        // v5 (M9 Path A): bookAudio store for pre-baked M4A blobs
+        if (oldVersion < 5) {
+          if (!db.objectStoreNames.contains('bookAudio')) {
+            db.createObjectStore('bookAudio', { keyPath: 'bookId' })
+          }
+        }
       },
     })
   }
@@ -93,6 +134,8 @@ export async function clearAllStores(): Promise<void> {
     db.clear('chapters'),
     db.clear('files'),
     db.clear('audioCache'),
+    db.clear('audioSegments'),
+    db.clear('bookAudio'),
   ])
 }
 

@@ -31,6 +31,8 @@ export interface Book {
   progressFraction?: number
   /** Last applied AI processing (M6); `undefined` = unprocessed. Originals stay recoverable via `getBookFile` + re-parse. */
   processing?: AppliedProcessing
+  /** True while upload (synth + concat+encode) is in progress. Library badges it. */
+  uploading?: boolean
 }
 
 export interface Chapter {
@@ -98,4 +100,26 @@ export function newChapterId(): ChapterId {
 
 export function voiceId(value: string): VoiceId {
   return value as VoiceId
+}
+
+/**
+ * A cached fMP4 segment for mobile MSE streaming (M9). Keyed identically to
+ * `AudioCacheRecord` (`${voiceId}:${NORM_VERSION}:${sha256(normalizedText)}`).
+ * Stored in the `audioSegments` IndexedDB store (v4).
+ */
+export interface AudioSegmentRecord {
+  /** Same key scheme as M8: `${voiceId}:${NORM_VERSION}:${sha256(normalizedText)}`. */
+  key: string
+  /** The fMP4 blob (AAC audio + 1x1 black H.264 video). */
+  blob: Blob
+  /** Paragraph audio duration in seconds (for time-offset table). */
+  duration: number
+  /** For per-book cascade clear. */
+  bookId?: BookId
+  /** blob.size at write time — drives budget accounting. */
+  sizeBytes: number
+  /** For LRU eviction. */
+  lastUsed: number
+  /** Date.now() at first insert. */
+  createdAt: number
 }

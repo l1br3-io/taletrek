@@ -1,6 +1,8 @@
 import { PiperEngine } from '../lib/tts/engine'
 import type { TtsRequest, TtsResponse } from '../lib/tts/protocol'
 
+console.log('[taletrek] tts worker: module loaded')
+
 const ctx = self as unknown as Worker
 const engine = new PiperEngine()
 
@@ -47,6 +49,7 @@ ctx.onmessage = async (event: MessageEvent<TtsRequest>) => {
       }
     }
   } catch (error) {
+    console.error('[taletrek] tts worker error:', error)
     const res: TtsResponse = {
       id: req.id,
       type: 'error',

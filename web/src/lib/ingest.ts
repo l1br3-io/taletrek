@@ -36,6 +36,7 @@ export async function ingestBook(file: File): Promise<IngestResult> {
     chapterCount: result.chapters.length,
     createdAt: now,
     updatedAt: now,
+    uploading: true,
   }
   const chapters: Chapter[] = result.chapters.map((parsed, index) => ({
     id: newChapterId(),

@@ -9,10 +9,10 @@ export function Layout() {
     <div className="flex min-h-full flex-col">
       <Nav />
       <GlobalUploadBanner />
-      <main className="w-full flex-1 px-4 py-6 sm:px-6 sm:py-8">
+      <main className="w-full flex-1 px-3 py-4 sm:px-6 sm:py-8">
         <Outlet />
       </main>
-      <footer className="border-t border-line">
+      <footer className="hidden border-t border-line sm:block">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:flex-row sm:items-start sm:justify-between sm:px-6">
           <div className="space-y-1.5">
             <p className="flex items-center gap-1.5 text-sm font-semibold">

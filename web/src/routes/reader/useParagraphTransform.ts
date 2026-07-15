@@ -7,7 +7,7 @@ import type { CleaningConfig } from '../../lib/clean/types'
 import { applyDeterministicOp, type DeterministicOp } from '../../lib/transforms/deterministic'
 import { ttsClient } from '../../lib/tts/client'
 import type { BookId, Chapter, ChapterId, VoiceId } from '../../types'
-import type { ParagraphRef } from './useParagraphPlayer'
+import type { ParagraphRef } from './players/types'
 
 interface UseParagraphTransformArgs {
   currentParagraphId: string | null

@@ -2,9 +2,9 @@ import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MediaSessionActionHandlers } from '../../lib/media-session'
 import { bookId, type Chapter, type ChapterId, chapterId } from '../../types'
+import type { PlaybackStatus } from './players/types'
 import type { MediaSessionPlayer } from './useMediaSession'
 import { useMediaSession } from './useMediaSession'
-import type { PlaybackStatus } from './useParagraphPlayer'
 
 const holder = vi.hoisted(() => ({ handlers: null as MediaSessionActionHandlers | null }))
 const media = vi.hoisted(() => {

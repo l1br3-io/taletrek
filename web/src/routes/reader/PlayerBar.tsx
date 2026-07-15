@@ -13,7 +13,7 @@ import {
   Wand2,
 } from 'lucide-react'
 import { Menu } from '../../components/Menu'
-import type { PlaybackStatus } from './useParagraphPlayer'
+import type { PlaybackStatus } from './players/types'
 
 interface PlayerBarProps {
   status: PlaybackStatus

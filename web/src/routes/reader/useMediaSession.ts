@@ -7,7 +7,7 @@ import {
   setMediaSessionHandlers,
 } from '../../lib/media-session'
 import type { Chapter } from '../../types'
-import type { PlaybackStatus } from './useParagraphPlayer'
+import type { PlaybackStatus } from './players/types'
 
 const ARTWORK_URL = '/icons/pwa-512.png'
 const SEEK_STEP_SECONDS = 15

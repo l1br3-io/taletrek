@@ -1,19 +1,12 @@
-import type { Book, Chapter, VoiceId } from '../../types'
+import type { Book, BookId, Chapter, VoiceId } from '../../types'
+import { concatClient } from '../audio/concat-client'
+import { putBookAudio } from '../book-audio'
 import { cleanChapters } from '../clean'
 import type { CleaningConfig } from '../clean/types'
-import { preSynthesizeBook } from '../pre-synth'
+import { deleteBookCascade, getBook, putBook } from '../db'
+import { type ParagraphPreSynthInfo, preSynthesizeBook } from '../pre-synth'
 import { ttsClient } from '../tts/client'
 
-/**
- * State of the single background synthesis job. The manager owns at most one
- * job at a time — both upload pre-synth and per-book re-synth funnel through
- * the same slot (they share the lone TTS worker anyway).
- *
- * `synthesizedParagraphIds` uses positional ids (`${chapterId}:${index}`) over
- * the **cleaned** chapters, matching what `useParagraphPlayer` /
- * `ReaderView` derive. Phase 2 (streaming) consumes this set to render
- * per-paragraph "buffered" indicators and gate playback at the frontier.
- */
 export type JobState =
   | { type: 'idle' }
   | { type: 'voiceDownload'; book: Book; fraction: number }
@@ -24,18 +17,17 @@ export type JobState =
       total: number
       synthesizedParagraphIds: Set<string>
     }
+  | { type: 'encoding'; book: Book; progress?: number }
   | { type: 'done'; book: Book }
   | { type: 'error'; book: Book; message: string }
 
 export interface JobSpec {
   book: Book
-  /** Raw chapters — the manager cleans them with the snapshotted config. */
   chapters: Chapter[]
   voiceId: VoiceId
   cleaning: CleaningConfig
 }
 
-/** A non-empty paragraph reference, matching `preSynthesizeBook`'s flatten order. */
 interface ParagraphRef {
   id: string
 }
@@ -50,18 +42,19 @@ function paragraphRefs(chapters: Chapter[]): ParagraphRef[] {
   return refs
 }
 
-/**
- * Module-level singleton owning the background synthesis job. Survives route
- * changes (unlike the old per-component `useBookUpload` hook whose state died
- * on unmount while the underlying `preSynthesizeBook` promise leaked). Exposed
- * to React via `useUploadState` (`useSyncExternalStore`) — upload progress is
- * too high-frequency for Context (AGENTS.md: Context is for settings/theme
- * only, never playback/upload).
- *
- * One job at a time: `startJob` throws if a job is active. Voice + cleaning
- * are snapshotted at start so a mid-job settings change can't drift the voice
- * paragraph-by-paragraph.
- */
+function isMobileDevice(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
+}
+
+async function clearUploadingFlag(bookId: BookId): Promise<void> {
+  const book = await getBook(bookId)
+  if (book) {
+    delete book.uploading
+    book.updatedAt = Date.now()
+    await putBook(book)
+  }
+}
+
 class UploadManager {
   private state: JobState = { type: 'idle' }
   private readonly listeners = new Set<() => void>()
@@ -77,7 +70,11 @@ class UploadManager {
   }
 
   isActive(): boolean {
-    return this.state.type === 'voiceDownload' || this.state.type === 'synthesizing'
+    return (
+      this.state.type === 'voiceDownload' ||
+      this.state.type === 'synthesizing' ||
+      this.state.type === 'encoding'
+    )
   }
 
   startJob(spec: JobSpec): void {
@@ -92,14 +89,12 @@ class UploadManager {
     this.abortController?.abort()
   }
 
-  /** Clear a terminal `done`/`error` back to `idle`. */
   dismiss(): void {
     if (this.state.type === 'done' || this.state.type === 'error') {
       this.setState({ type: 'idle' })
     }
   }
 
-  /** Test-only: force back to idle and clear listeners. */
   _resetForTests(): void {
     this.abortController?.abort()
     this.abortController = null
@@ -116,9 +111,8 @@ class UploadManager {
     const signal = this.abortController?.signal
     const cleaned = cleanChapters(chapters, cleaning)
     const refs = paragraphRefs(cleaned)
+    const isMobile = isMobileDevice()
 
-    // Set initial state synchronously so consumers see activity immediately
-    // (and isActive() is true before the first synth resolves).
     this.setState({
       type: 'synthesizing',
       book,
@@ -128,7 +122,7 @@ class UploadManager {
     })
 
     try {
-      await preSynthesizeBook({
+      const preSynthResult = await preSynthesizeBook({
         bookId: book.id,
         chapters: cleaned,
         voiceId,
@@ -150,24 +144,67 @@ class UploadManager {
           })
         },
       })
+
       if (signal?.aborted) {
         this.setState({ type: 'idle' })
-      } else {
-        this.setState({ type: 'done', book })
+        return
       }
+
+      if (isMobile && preSynthResult.paragraphs.length > 0) {
+        await this.encodeBook(book, voiceId, preSynthResult.paragraphs, signal)
+      }
+
+      await clearUploadingFlag(book.id)
+      this.setState({ type: 'done', book })
     } catch (error) {
       if (signal?.aborted) {
         this.setState({ type: 'idle' })
       } else {
+        console.error('[taletrek] upload: failed for', book.title, error)
+        await deleteBookCascade(book.id).catch(() => {})
         this.setState({
           type: 'error',
           book,
-          message: error instanceof Error ? error.message : 'Synthesis failed',
+          message: error instanceof Error ? error.message : 'Upload failed',
         })
       }
     } finally {
       this.abortController = null
     }
+  }
+
+  private async encodeBook(
+    book: Book,
+    voiceId: VoiceId,
+    paragraphs: ParagraphPreSynthInfo[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    this.setState({ type: 'encoding', book })
+
+    await concatClient.loadCore((fraction) => {
+      if (signal?.aborted) return
+      this.setState({ type: 'encoding', book, progress: fraction })
+    })
+
+    if (signal?.aborted) return
+
+    this.setState({ type: 'encoding', book, progress: 1 })
+
+    const keys = paragraphs.map((p) => p.cacheKey)
+    const result = await concatClient.concat(keys)
+
+    if (signal?.aborted) return
+
+    const m4aBlob = new Blob([result.m4a], { type: 'audio/mp4' })
+    await putBookAudio({
+      bookId: book.id,
+      blob: m4aBlob,
+      duration: result.duration,
+      paragraphOffsets: result.paragraphOffsets,
+      durations: result.durations,
+      voiceId,
+      createdAt: Date.now(),
+    })
   }
 }
 
