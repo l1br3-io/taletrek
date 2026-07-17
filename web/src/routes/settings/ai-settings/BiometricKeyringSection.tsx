@@ -21,6 +21,9 @@ interface BiometricKeyringSectionProps {
   enabled: boolean
   /** Called when the user successfully enrolls (true) or forgets (false). */
   onEnabledChange: (next: boolean) => void
+  /** Fired after unlock() or forget() mutates the in-memory keyring, so the
+   * parent can re-render ProviderCards whose `hasKey` status just changed. */
+  onKeyringChanged?: () => void
 }
 
 /**
@@ -36,6 +39,7 @@ interface BiometricKeyringSectionProps {
 export function BiometricKeyringSection({
   enabled,
   onEnabledChange,
+  onKeyringChanged,
 }: BiometricKeyringSectionProps) {
   const [state, setState] = useState<BiometricState>({ type: 'probing' })
   const [busy, setBusy] = useState(false)
@@ -108,6 +112,7 @@ export function BiometricKeyringSection({
         setError('No cached keys found. Re-enter a key, then re-enable biometric caching.')
       } else {
         transition({ type: 'enrolled-unlocked' })
+        onKeyringChanged?.()
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Biometric unlock failed.')
@@ -124,6 +129,7 @@ export function BiometricKeyringSection({
       await forget()
       onEnabledChange(false)
       transition({ type: 'not-enrolled' })
+      onKeyringChanged?.()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not disable biometric caching.')
     } finally {

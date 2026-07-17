@@ -1,5 +1,5 @@
 import { Info } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useReducer, useRef, useState } from 'react'
 import { parseKeyFile } from '../../../lib/ai/importKey'
 import { clearApiKey, setApiKey } from '../../../lib/ai/keyring'
 import { getPreset, type ProviderPreset } from '../../../lib/ai/providers'
@@ -34,6 +34,7 @@ export function CloudProvidersSection({
   const [importErr, setImportErr] = useState<string | null>(null)
   const [showSchema, setShowSchema] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [, bumpKeyringVersion] = useReducer((n: number) => n + 1, 0)
 
   const patchCloud = (patch: Partial<AiSettings['cloud']>): void => {
     onChange({ providers, activeProviderId, biometricUnlock, ...patch })
@@ -218,6 +219,7 @@ export function CloudProvidersSection({
       <BiometricKeyringSection
         enabled={biometricUnlock}
         onEnabledChange={(next) => patchCloud({ biometricUnlock: next })}
+        onKeyringChanged={bumpKeyringVersion}
       />
     </div>
   )

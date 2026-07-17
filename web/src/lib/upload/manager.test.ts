@@ -170,6 +170,34 @@ describe('uploadManager', () => {
     await vi.waitFor(() => expect(uploadManager.getState().type).toBe('idle'))
   })
 
+  it('cancel transitions to cancelling immediately for UX feedback', async () => {
+    const book = makeBook('Gated')
+    // Never-resolving synth keeps the job in-flight.
+    synthMock.mockReturnValue(new Promise(() => {}))
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(synthMock).toHaveBeenCalled())
+    // Synchronously after cancel(), state must be `cancelling` — no awaiting.
+    uploadManager.cancel()
+    const state = uploadManager.getState()
+    expect(state.type).toBe('cancelling')
+    if (state.type === 'cancelling') {
+      expect(state.book.id).toBe(book.id)
+      expect(state.mode).toBe('initial')
+    }
+    expect(uploadManager.isActive()).toBe(true)
+  })
+
+  it('cancel is a no-op when no job is active', () => {
+    expect(uploadManager.isActive()).toBe(false)
+    expect(() => uploadManager.cancel()).not.toThrow()
+    expect(uploadManager.getState().type).toBe('idle')
+  })
+
   it('transitions to error on synth failure', async () => {
     const book = makeBook()
     synthMock.mockRejectedValue(new Error('worker exploded'))

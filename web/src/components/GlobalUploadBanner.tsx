@@ -104,31 +104,37 @@ export function GlobalUploadBanner() {
     )
   }
 
+  const cancelling = state.type === 'cancelling'
   const fraction =
     state.type === 'voiceDownload'
       ? state.fraction
       : state.type === 'encoding'
         ? (state.progress ?? 1)
-        : state.total > 0
-          ? state.done / state.total
-          : 0
+        : state.type === 'cancelling'
+          ? 1
+          : state.total > 0
+            ? state.done / state.total
+            : 0
 
   return (
     <div
       role="status"
+      aria-live="polite"
       className="flex flex-col gap-2 border-b border-accent/40 bg-accent-soft px-4 py-3 text-accent sm:px-5"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Spinner />
           <span className="text-sm">
-            {state.type === 'voiceDownload'
-              ? 'Downloading voice…'
-              : state.type === 'encoding'
-                ? 'Encoding audiobook…'
-                : state.mode === 'resynth'
-                  ? `Updating audio for “${state.book.title}”… ${state.done} / ${state.total}`
-                  : `Synthesizing “${state.book.title}”… ${state.done} / ${state.total}`}
+            {cancelling
+              ? `Cancelling “${state.book.title}”…`
+              : state.type === 'voiceDownload'
+                ? 'Downloading voice…'
+                : state.type === 'encoding'
+                  ? 'Encoding audiobook…'
+                  : state.mode === 'resynth'
+                    ? `Updating audio for “${state.book.title}”… ${state.done} / ${state.total}`
+                    : `Synthesizing “${state.book.title}”… ${state.done} / ${state.total}`}
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -143,9 +149,10 @@ export function GlobalUploadBanner() {
           <button
             type="button"
             onClick={() => uploadManager.cancel()}
-            className="text-xs text-accent/70 hover:text-accent"
+            disabled={cancelling}
+            className="text-xs text-accent/70 transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-accent/70"
           >
-            Cancel
+            {cancelling ? 'Cancelling…' : 'Cancel'}
           </button>
         </div>
       </div>
