@@ -4,6 +4,7 @@ import { parseKeyFile } from '../../../lib/ai/importKey'
 import { clearApiKey, setApiKey } from '../../../lib/ai/keyring'
 import { getPreset, type ProviderPreset } from '../../../lib/ai/providers'
 import type { AiSettings, CloudProvider } from '../../../lib/ai/types'
+import { BiometricKeyringSection } from './BiometricKeyringSection'
 import { KeyFileSchemaInfo } from './KeyFileSchemaInfo'
 import { PresetPicker } from './PresetPicker'
 import { ProviderCard } from './ProviderCard'
@@ -18,12 +19,15 @@ type CloudView =
 interface CloudProvidersSectionProps {
   providers: CloudProvider[]
   activeProviderId: string | null
+  /** Opt-in flag (ADR-0007). Drives `persistToBiometricCache` on provider changes. */
+  biometricUnlock: boolean
   onChange: (cloud: AiSettings['cloud']) => void
 }
 
 export function CloudProvidersSection({
   providers,
   activeProviderId,
+  biometricUnlock,
   onChange,
 }: CloudProvidersSectionProps) {
   const [view, setView] = useState<CloudView>({ type: 'list' })
@@ -32,7 +36,25 @@ export function CloudProvidersSection({
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const patchCloud = (patch: Partial<AiSettings['cloud']>): void => {
-    onChange({ providers, activeProviderId, ...patch })
+    onChange({ providers, activeProviderId, biometricUnlock, ...patch })
+  }
+
+  /**
+   * When the biometric tier is enabled, persist the latest keyring snapshot to
+   * the encrypted IDB blob. Fire-and-forget — the in-memory keyring is the
+   * source of truth for this session; the cache is a convenience for the next.
+   * No-op when not enrolled or locked (the caller hasn't unlocked this session).
+   */
+  const persistToBiometricCache = (): void => {
+    if (!biometricUnlock) return
+    void (async () => {
+      try {
+        const { saveCurrentKeys } = await import('../../../lib/ai/secure-keyring')
+        await saveCurrentKeys()
+      } catch {
+        /* Not enrolled / locked / cancelled — fine, in-memory keyring still works. */
+      }
+    })()
   }
 
   const addProvider = (provider: CloudProvider): void => {
@@ -41,11 +63,13 @@ export function CloudProvidersSection({
       activeProviderId: provider.id,
     })
     setView({ type: 'list' })
+    persistToBiometricCache()
   }
 
   const updateProvider = (updated: CloudProvider): void => {
     patchCloud({ providers: providers.map((p) => (p.id === updated.id ? updated : p)) })
     setView({ type: 'list' })
+    persistToBiometricCache()
   }
 
   const removeProvider = (id: string): void => {
@@ -55,6 +79,7 @@ export function CloudProvidersSection({
       providers: remaining,
       activeProviderId: activeProviderId === id ? (remaining[0]?.id ?? null) : activeProviderId,
     })
+    persistToBiometricCache()
   }
 
   const setActive = (id: string): void => {
@@ -189,6 +214,11 @@ export function CloudProvidersSection({
       >
         + Add provider
       </button>
+
+      <BiometricKeyringSection
+        enabled={biometricUnlock}
+        onEnabledChange={(next) => patchCloud({ biometricUnlock: next })}
+      />
     </div>
   )
 }

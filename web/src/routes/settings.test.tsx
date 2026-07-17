@@ -139,6 +139,7 @@ describe('Settings — voices & offline (M5)', () => {
 })
 
 async function renderHydrated() {
+  window.location.hash = ''
   await setSetting('app', { fontScale: 1.25 })
   render(withProviders(<Settings />))
   await screen.findByText('×1.25')
@@ -215,8 +216,13 @@ describe('Settings — pronunciation dictionary', () => {
 })
 
 describe('Settings — AI transforms (M6)', () => {
+  beforeEach(() => {
+    window.location.hash = ''
+  })
+
   it('renders only the enable toggle when disabled (default)', async () => {
     await renderHydrated()
+    fireEvent.click(screen.getByRole('button', { name: /^AI$/i, pressed: false }))
     expect(
       screen.getByRole('button', { name: /toggle AI transforms/i, pressed: false }),
     ).toBeInTheDocument()
@@ -225,6 +231,7 @@ describe('Settings — AI transforms (M6)', () => {
 
   it('reveals the cloud provider list when enabled', async () => {
     await renderHydrated()
+    fireEvent.click(screen.getByRole('button', { name: /^AI$/i, pressed: false }))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
     })
@@ -235,6 +242,7 @@ describe('Settings — AI transforms (M6)', () => {
 
   it('adds a provider via the preset picker and saves key to keyring', async () => {
     await renderHydrated()
+    fireEvent.click(screen.getByRole('button', { name: /^AI$/i, pressed: false }))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /toggle AI transforms/i }))
     })

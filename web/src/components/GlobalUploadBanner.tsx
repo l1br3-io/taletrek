@@ -1,4 +1,4 @@
-import { BookOpen, X } from 'lucide-react'
+import { BookOpen, RotateCcw, X } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { uploadManager } from '../lib/upload/manager'
 import { useUploadState } from '../lib/upload/useUpload'
@@ -37,28 +37,51 @@ export function GlobalUploadBanner() {
   if (state.type === 'idle') return null
 
   if (state.type === 'error') {
+    const isResynth = state.mode === 'resynth'
     return (
       <div
         role="alert"
         className="flex items-center justify-between gap-3 border-b border-danger/40 bg-danger/10 px-4 py-3 text-danger sm:px-5"
       >
-        <span className="text-sm">Synthesis failed for “{state.book.title}”.</span>
-        <button
-          type="button"
-          onClick={() => uploadManager.dismiss()}
-          aria-label="Dismiss error"
-          className="text-xs text-danger/70 hover:text-danger"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <span className="text-sm">
+          {isResynth
+            ? `Couldn't update audio for “${state.book.title}”. Your text is safe — retry when ready.`
+            : `Synthesis failed for “${state.book.title}”.`}
+        </span>
+        <div className="flex items-center gap-3">
+          {isResynth && (
+            <button
+              type="button"
+              onClick={() => uploadManager.retry()}
+              aria-label="Retry synthesis"
+              className="inline-flex items-center gap-1.5 border border-danger px-3 py-1.5 text-xs font-medium transition-colors hover:bg-danger/10"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Retry
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => uploadManager.dismiss()}
+            aria-label="Dismiss error"
+            className="text-xs text-danger/70 hover:text-danger"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
     )
   }
 
   if (state.type === 'done') {
+    const isResynth = state.mode === 'resynth'
     return (
       <div className="flex items-center justify-between gap-3 border-b border-accent/40 bg-accent-soft px-4 py-3 text-accent sm:px-5">
-        <span className="text-sm">“{state.book.title}” is ready.</span>
+        <span className="text-sm">
+          {isResynth
+            ? `Audio updated for “${state.book.title}”.`
+            : `“${state.book.title}” is ready.`}
+        </span>
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -103,7 +126,9 @@ export function GlobalUploadBanner() {
               ? 'Downloading voice…'
               : state.type === 'encoding'
                 ? 'Encoding audiobook…'
-                : `Synthesizing “${state.book.title}”… ${state.done} / ${state.total}`}
+                : state.mode === 'resynth'
+                  ? `Updating audio for “${state.book.title}”… ${state.done} / ${state.total}`
+                  : `Synthesizing “${state.book.title}”… ${state.done} / ${state.total}`}
           </span>
         </div>
         <div className="flex items-center gap-3">

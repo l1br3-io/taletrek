@@ -37,3 +37,14 @@ export function clearAllKeys(): void {
 export function hasAnyKey(): boolean {
   return keys.size > 0
 }
+
+/**
+ * Snapshot every `(providerId → key)` pair as a plain object. Used by
+ * `secure-keyring.ts` (ADR-0007) to serialize the in-memory keyring for
+ * encryption. Does **not** persist anything — it is a copy of the current
+ * module state, identical in exposure to calling {@link getApiKey} for every
+ * known id.
+ */
+export function snapshotKeys(): Record<string, string> {
+  return Object.fromEntries(keys)
+}

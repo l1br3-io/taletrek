@@ -24,26 +24,51 @@ export async function deleteBook(id: BookId): Promise<void> {
  * Remove a book together with all of its chapters, its uploaded file, its
  * cached audio (M8), and its fMP4 segments (M9). Runs in a single transaction
  * so the cascade is atomic.
+ *
+ * Resilient to schema drift: only stores that actually exist on the open DB
+ * are touched. A dev DB can land at the current schema version with newer
+ * stores missing if `DB_VERSION` was bumped in a prior code state before the
+ * matching upgrade branch existed — IndexedDB won't re-run `onupgradeneeded`
+ * at the same version, so the gap persists. Skipping absent stores keeps the
+ * cascade working on such a DB instead of throwing `NotFoundError`.
  */
 export async function deleteBookCascade(id: BookId): Promise<void> {
   const db = await getDB()
-  const chapterKeys = await db.getAllKeysFromIndex('chapters', 'bookId', id)
-  const audioKeys = await db.getAllKeysFromIndex('audioCache', 'bookId', id)
-  const segmentKeys = await db.getAllKeysFromIndex('audioSegments', 'bookId', id)
-  const tx = db.transaction(
-    ['books', 'chapters', 'files', 'audioCache', 'audioSegments', 'bookAudio'],
-    'readwrite',
+  const cascadeStores = CASCADE_STORES.filter((s) => db.objectStoreNames.contains(s))
+  const has = (name: CascadeStore): boolean => cascadeStores.includes(name)
+
+  const chapterKeys = has('chapters') ? await db.getAllKeysFromIndex('chapters', 'bookId', id) : []
+  const audioKeys = has('audioCache')
+    ? await db.getAllKeysFromIndex('audioCache', 'bookId', id)
+    : []
+  const segmentKeys = has('audioSegments')
+    ? await db.getAllKeysFromIndex('audioSegments', 'bookId', id)
+    : []
+
+  const tx = db.transaction(cascadeStores as CascadeStore[], 'readwrite')
+  await Promise.all(
+    [
+      has('books') && tx.objectStore('books').delete(id),
+      ...chapterKeys.map((key) => tx.objectStore('chapters').delete(key)),
+      has('files') && tx.objectStore('files').delete(id),
+      ...audioKeys.map((key) => tx.objectStore('audioCache').delete(key)),
+      ...segmentKeys.map((key) => tx.objectStore('audioSegments').delete(key)),
+      has('bookAudio') && tx.objectStore('bookAudio').delete(id),
+    ].filter((p) => p !== false) as Promise<unknown>[],
   )
-  await Promise.all([
-    tx.objectStore('books').delete(id),
-    ...chapterKeys.map((key) => tx.objectStore('chapters').delete(key)),
-    tx.objectStore('files').delete(id),
-    ...audioKeys.map((key) => tx.objectStore('audioCache').delete(key)),
-    ...segmentKeys.map((key) => tx.objectStore('audioSegments').delete(key)),
-    tx.objectStore('bookAudio').delete(id),
-  ])
   await tx.done
 }
+
+/** Stores that may hold book-owned data and should be cleared on delete. */
+const CASCADE_STORES = [
+  'books',
+  'chapters',
+  'files',
+  'audioCache',
+  'audioSegments',
+  'bookAudio',
+] as const
+type CascadeStore = (typeof CASCADE_STORES)[number]
 
 /**
  * Lightweight progress write — preserves the other book fields, sets

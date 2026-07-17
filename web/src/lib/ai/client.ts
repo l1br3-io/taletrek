@@ -1,53 +1,85 @@
 import { CloudLlmEngine } from './engines/openai'
-import type { AiSettings, AiTransformEngine } from './types'
+import type { AiSettings, AiTransformEngine, TransformDefinition } from './types'
+
+/** Safe fallback when no provider `contextLimit` is configured (32K tokens). */
+const DEFAULT_CONTEXT_LIMIT = 32768
 
 /**
- * Construct a fresh cloud AI transform engine selected by `Settings.ai`.
- *
- * Returns `null` when no provider is configured (no active provider, or active
- * provider not found). For most callers prefer {@link getAiEngine}, which caches
- * by config so the connection stays warm across navigations.
+ * Construct a cloud AI transform engine from a provider id, base URL, model,
+ * and context window size.
  */
-export function createAiEngine(settings: AiSettings): AiTransformEngine | null {
-  const providers = settings.cloud?.providers ?? []
-  const provider = providers.find((p) => p.id === settings.cloud?.activeProviderId)
-  if (!provider) return null
-  return new CloudLlmEngine({
-    providerId: provider.id,
-    baseUrl: provider.baseUrl,
-    model: provider.model,
-  })
+function createEngine(
+  providerId: string,
+  baseUrl: string,
+  model: string,
+  contextLimit: number,
+): AiTransformEngine | null {
+  if (!baseUrl || !model) return null
+  return new CloudLlmEngine({ providerId, baseUrl, model, contextLimit })
 }
 
 interface Cached {
   key: string
   engine: AiTransformEngine
 }
-let cached: Cached | null = null
+const engines = new Map<string, Cached>()
 
 /** Cache key covering every field that changes the engine's identity. */
-function engineKey(s: AiSettings): string {
-  const providers = s.cloud?.providers ?? []
-  const provider = providers.find((p) => p.id === s.cloud?.activeProviderId)
-  return [provider?.baseUrl ?? '', provider?.model ?? ''].join('|')
+function engineKey(baseUrl: string, model: string): string {
+  return `${baseUrl}|${model}`
+}
+
+function resolveProvider(settings: AiSettings, providerId: string) {
+  return (settings.cloud?.providers ?? []).find((p) => p.id === providerId)
 }
 
 /**
- * Cached engine by config. Returns the same instance across calls with the same
- * `Settings.ai`, so the cloud connection stays warm between library → reader →
- * library navigations. A config change (e.g. switching active provider) creates
- * a fresh engine.
+ * Cached engine for the global active provider. Used for outline detection and
+ * pronunciation hints (which are not def-driven).
  */
 export function getAiEngine(settings: AiSettings): AiTransformEngine | null {
-  const key = engineKey(settings)
-  if (cached?.key === key) return cached.engine
-  const engine = createAiEngine(settings)
+  const provider = settings.cloud?.activeProviderId
+    ? resolveProvider(settings, settings.cloud.activeProviderId)
+    : null
+  if (!provider) return null
+  const key = engineKey(provider.baseUrl, provider.model)
+  const hit = engines.get(key)
+  if (hit) return hit.engine
+  const ctxLimit = provider.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+  const engine = createEngine(provider.id, provider.baseUrl, provider.model, ctxLimit)
   if (!engine) return null
-  cached = { key, engine }
+  engines.set(key, { key, engine })
   return engine
 }
 
-/** Test-only: drop the cached engine. */
+/**
+ * Cached engine for a specific transform definition. If the def overrides
+ * `providerId` / `model`, uses those; otherwise falls back to the global
+ * active provider. Multiple defs sharing the same `(baseUrl, model)` pair
+ * reuse the same connection.
+ *
+ * Context limit is resolved from the provider config (not the def).
+ */
+export function getAiEngineForDef(
+  settings: AiSettings,
+  def: TransformDefinition,
+): AiTransformEngine | null {
+  const providerId = def.providerId ?? settings.cloud?.activeProviderId
+  const provider = providerId ? resolveProvider(settings, providerId) : null
+  const baseUrl = provider?.baseUrl ?? ''
+  const model = def.model ?? provider?.model ?? ''
+  if (!providerId || !baseUrl || !model) return null
+  const key = engineKey(baseUrl, model)
+  const hit = engines.get(key)
+  if (hit) return hit.engine
+  const ctxLimit = provider?.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+  const engine = createEngine(providerId, baseUrl, model, ctxLimit)
+  if (!engine) return null
+  engines.set(key, { key, engine })
+  return engine
+}
+
+/** Test-only: drop the engine cache. */
 export function _resetAiEngineForTests(): void {
-  cached = null
+  engines.clear()
 }

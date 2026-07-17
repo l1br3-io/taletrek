@@ -1,105 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { type Chunk, chunksForOp, sample, solo, windowed } from './chunk'
+import { chunksForParagraphs, estimateTokens, sample } from './chunk'
 
 function paragraphs(n: number): string[] {
   return Array.from({ length: n }, (_, i) => `para-${i}`)
 }
-
-function flatten(chunks: Chunk[]): string[] {
-  return chunks.flatMap((c) => c.paragraphs)
-}
-
-describe('solo', () => {
-  it('produces one chunk per paragraph with contiguous ranges', () => {
-    const input = paragraphs(3)
-    const chunks = solo(input)
-    expect(chunks).toEqual([
-      { start: 0, end: 1, paragraphs: ['para-0'] },
-      { start: 1, end: 2, paragraphs: ['para-1'] },
-      { start: 2, end: 3, paragraphs: ['para-2'] },
-    ])
-  })
-
-  it('returns no chunks for empty input', () => {
-    expect(solo([])).toEqual([])
-  })
-
-  it('preserves a paragraph containing surrogate pairs intact', () => {
-    const emoji = 'Thranduil wielded 🗡️ across the Eärendil 🌟 — Aiya!'
-    const chunks = solo([emoji])
-    expect(chunks).toHaveLength(1)
-    expect(chunks[0]?.paragraphs[0]).toBe(emoji)
-  })
-})
-
-describe('windowed', () => {
-  it('steps by size - overlap, capping the final window at input length', () => {
-    const input = paragraphs(25)
-    const chunks = windowed(input, 10, 1)
-    expect(chunks.map((c) => [c.start, c.end])).toEqual([
-      [0, 10],
-      [9, 19],
-      [18, 25],
-    ])
-  })
-
-  it('with overlap 0 produces disjoint windows covering the input in order', () => {
-    const input = paragraphs(25)
-    const chunks = windowed(input, 10, 0)
-    expect(chunks.map((c) => [c.start, c.end])).toEqual([
-      [0, 10],
-      [10, 20],
-      [20, 25],
-    ])
-    // No paragraph duplicated; flattening reproduces the input.
-    expect(flatten(chunks)).toEqual(input)
-  })
-
-  it('emits a single window when the input is smaller than size', () => {
-    const input = paragraphs(4)
-    const chunks = windowed(input, 10, 1)
-    expect(chunks).toEqual([{ start: 0, end: 4, paragraphs: input }])
-  })
-
-  it('returns no chunks for empty input', () => {
-    expect(windowed([], 10, 1)).toEqual([])
-  })
-
-  it('shares the overlap paragraph between consecutive windows', () => {
-    const input = paragraphs(5)
-    const chunks = windowed(input, 3, 1) // step 2: [0,3) [2,5)
-    expect(chunks.map((c) => c.paragraphs)).toEqual([
-      ['para-0', 'para-1', 'para-2'],
-      ['para-2', 'para-3', 'para-4'],
-    ])
-  })
-
-  it('preserves surrogate-pair paragraphs across the window boundary', () => {
-    const input = ['before 🌟', 'overlap 🗡️', 'after ✨']
-    const chunks = windowed(input, 2, 1)
-    expect(chunks[1]?.paragraphs).toEqual(['overlap 🗡️', 'after ✨'])
-  })
-
-  it('uses defaults size=10 overlap=1', () => {
-    const input = paragraphs(21)
-    const chunks = windowed(input)
-    expect(chunks.map((c) => [c.start, c.end])).toEqual([
-      [0, 10],
-      [9, 19],
-      [18, 21],
-    ])
-  })
-
-  it('throws RangeError for size <= 0', () => {
-    expect(() => windowed(paragraphs(3), 0, 0)).toThrow(RangeError)
-    expect(() => windowed(paragraphs(3), -1, 0)).toThrow(RangeError)
-  })
-
-  it('throws RangeError when overlap is out of range', () => {
-    expect(() => windowed(paragraphs(10), 5, 5)).toThrow(RangeError)
-    expect(() => windowed(paragraphs(10), 5, -1)).toThrow(RangeError)
-  })
-})
 
 describe('sample', () => {
   it('returns the first maxParagraphs as a single chunk', () => {
@@ -133,9 +37,70 @@ describe('sample', () => {
   })
 })
 
-describe('chunksForOp', () => {
-  it('cleanup uses solo (one paragraph per chunk)', () => {
-    const chunks = chunksForOp({ kind: 'cleanup' }, paragraphs(3))
+describe('estimateTokens', () => {
+  it('returns max(1, ceil(len * 0.25))', () => {
+    expect(estimateTokens('')).toBe(1)
+    expect(estimateTokens('abcd')).toBe(1)
+    expect(estimateTokens('abcde')).toBe(2) // 5 * 0.25 = 1.25 → ceil 2
+    expect(estimateTokens('12345678')).toBe(2) // 8 * 0.25 = 2
+  })
+})
+
+describe('chunksForParagraphs', () => {
+  // budget = max(512, contextLimit - systemPromptTokens - 1024)
+
+  it('returns no chunks for empty input', () => {
+    expect(chunksForParagraphs([], 32768, 100)).toEqual([])
+  })
+
+  it('splits paragraphs into chunks respecting the token budget', () => {
+    // contextLimit=32768, systemPromptTokens=100 → budget=31644
+    // Each "a" is 1 char → estimateTokens="max(1,ceil(0.25))"=1 token
+    // budget=31644 tokens, so we can fit up to 31644 paragraphs per chunk
+    // Use 10-paragraph chunks for readability: make each paragraph ~3164 chars
+    // Simpler: use a tight budget to force chunk splitting
+    //
+    // contextLimit=2096, systemPromptTokens=100 → budget = 2096-100-1024 = 972
+    // Each para is 4000 chars → 4000*0.25=1000 tokens. budget=972 < 1000,
+    // so each paragraph gets its own chunk.
+    const bigPara = 'x'.repeat(4000) // ~1000 tokens each
+    const input = [bigPara, bigPara, bigPara]
+    const chunks = chunksForParagraphs(input, 2096, 100)
+    expect(chunks).toHaveLength(3)
+    chunks.forEach((c, i) => {
+      expect(c.start).toBe(i)
+      expect(c.end).toBe(i + 1)
+      expect(c.paragraphs).toEqual([bigPara])
+    })
+  })
+
+  it('never cuts mid-paragraph — a paragraph always stays in one chunk', () => {
+    // Same tight budget as above. Each 4000-char para is ~1000 tokens, which
+    // exceeds the 972-token budget alone, but the implementation still puts
+    // it in its own chunk rather than splitting the text.
+    const para = 'ABCDEFGH'.repeat(500) // 4000 chars → ~1000 tokens
+    const chunks = chunksForParagraphs([para], 2096, 100)
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0]?.paragraphs).toEqual([para])
+  })
+
+  it('groups paragraphs that fit under budget into a single chunk', () => {
+    // contextLimit=32768, systemPromptTokens=0 → budget=32768-0-1024=31744
+    // Each "para-N" is 6 chars → 2 tokens. 100 paragraphs → 200 tokens.
+    // Well under budget: should be 1 chunk.
+    const input = paragraphs(100)
+    const chunks = chunksForParagraphs(input, 32768, 0)
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0]?.start).toBe(0)
+    expect(chunks[0]?.end).toBe(100)
+    expect(chunks[0]?.paragraphs).toEqual(input)
+  })
+
+  it('covers the input exactly with contiguous ranges', () => {
+    // Tight budget forces one paragraph per chunk.
+    const bigPara = 'x'.repeat(4000)
+    const input = [bigPara, bigPara, bigPara]
+    const chunks = chunksForParagraphs(input, 2096, 100)
     expect(chunks.map((c) => [c.start, c.end])).toEqual([
       [0, 1],
       [1, 2],
@@ -143,32 +108,20 @@ describe('chunksForOp', () => {
     ])
   })
 
-  it('translate + simplify use windowed(10, overlap=1)', () => {
-    const input = paragraphs(25)
-    const ranges = (op: Parameters<typeof chunksForOp>[0]) =>
-      chunksForOp(op, input).map((c) => [c.start, c.end])
-    const expected = [
-      [0, 10],
-      [9, 19],
-      [18, 25],
-    ]
-    expect(ranges({ kind: 'translate', target: 'es' })).toEqual(expected)
-    expect(ranges({ kind: 'simplify', level: 2 })).toEqual(expected)
+  it('preserves surrogate-pair paragraphs intact', () => {
+    const emoji = 'Thranduil wielded 🗡️ across the Eärendil 🌟 — Aiya!'
+    const chunks = chunksForParagraphs([emoji], 32768, 0)
+    expect(chunks[0]?.paragraphs[0]).toBe(emoji)
   })
 
-  it('summarize uses windowed(10, overlap=0) — disjoint', () => {
-    const chunks = chunksForOp({ kind: 'summarize', ratio: 0.5 }, paragraphs(25))
-    expect(chunks.map((c) => [c.start, c.end])).toEqual([
-      [0, 10],
-      [10, 20],
-      [20, 25],
-    ])
-  })
-
-  it('returns no chunks for empty input across all ops', () => {
-    expect(chunksForOp({ kind: 'cleanup' }, [])).toEqual([])
-    expect(chunksForOp({ kind: 'translate', target: 'es' }, [])).toEqual([])
-    expect(chunksForOp({ kind: 'summarize', ratio: 0.5 }, [])).toEqual([])
-    expect(chunksForOp({ kind: 'simplify', level: 1 }, [])).toEqual([])
+  it('uses a minimum budget of 512 tokens', () => {
+    // contextLimit and systemPromptTokens so large that budget would be ≤0,
+    // but floors at 512.
+    const para = 'hello' // 5 chars → 2 tokens
+    const chunks = chunksForParagraphs([para, para, para], 200, 90)
+    // budget = max(512, 200-90-1024) = 512. Each para is 2 tokens, so all 3
+    // easily fit in one chunk.
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0]?.paragraphs).toEqual([para, para, para])
   })
 })

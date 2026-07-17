@@ -43,7 +43,13 @@ export function useLibraryState() {
   const online = useOnline()
 
   const engine = useMemo(() => (ai.enabled ? getAiEngine(ai) : null), [ai])
-  const transform = useAiTransform({ engine })
+  const transform = useAiTransform({
+    ai,
+    defs: ai.transformDefs,
+    synthMode: settings.synthesizeOnUpload,
+    voiceId: settings.voiceId,
+    cleaning: settings.cleaning,
+  })
   const outline = useOutline()
   const hints = usePronunciationHints(engine)
 
@@ -51,6 +57,7 @@ export function useLibraryState() {
   const [runCtx, setRunCtx] = useState<RunContext | null>(null)
   const [hintsTitle, setHintsTitle] = useState<string | null>(null)
   const [parseState, setParseState] = useState<ParseState>({ type: 'idle' })
+  const [outlineBookId, setOutlineBookId] = useState<BookId | null>(null)
 
   const jobState = useUploadState()
   const uploadBusy = isJobActive(jobState)
@@ -128,19 +135,14 @@ export function useLibraryState() {
   }, [runCtx])
 
   const onRunProcess = useCallback(
-    (ops: TransformOp[], name?: string): void => {
+    (ops: TransformOp[]): void => {
       if (!runCtx) return
-      const renamedBook =
-        name && runCtx.book.title !== name ? { ...runCtx.book, title: name } : runCtx.book
-      if (name && runCtx.book.title !== name) {
-        void putBook(renamedBook)
-      }
       if (runCtx.kind === 'post') {
-        void transform.run({ book: renamedBook, chapters: runCtx.chapters, ops })
+        void transform.run({ book: runCtx.book, chapters: runCtx.chapters, ops })
       } else {
         const bookId = runCtx.book.id
         void transform.run({
-          book: renamedBook,
+          book: runCtx.book,
           resolveChapters: () => reparseChapters(bookId),
           ops,
         })
@@ -149,25 +151,16 @@ export function useLibraryState() {
     [runCtx, transform],
   )
 
-  const onRunCancel = useCallback(
-    (name?: string): void => {
-      if (transform.state.type === 'running') transform.abort()
-      outline.reset()
-      const ctx = runCtx
-      setRunCtx(null)
-      if (!ctx) return
-      // Apply rename if the name changed.
-      const renamedBook = name && ctx.book.title !== name ? { ...ctx.book, title: name } : ctx.book
-      if (name && ctx.book.title !== name) {
-        void putBook(renamedBook)
-      }
-      if (ctx.kind === 'post') {
-        proceedWithBook(renamedBook, ctx.chapters)
-      }
-      // Reprocess: stay in the library (book optionally renamed above).
-    },
-    [runCtx, transform.state.type, transform.abort, outline, proceedWithBook],
-  )
+  const onRunCancel = useCallback((): void => {
+    if (transform.state.type === 'running') transform.abort()
+    outline.reset()
+    const ctx = runCtx
+    setRunCtx(null)
+    if (!ctx) return
+    if (ctx.kind === 'post') {
+      proceedWithBook(ctx.book, ctx.chapters)
+    }
+  }, [runCtx, transform.state.type, transform.abort, outline, proceedWithBook])
 
   const handleEdit = useCallback(
     async (id: BookId): Promise<void> => {
@@ -195,27 +188,35 @@ export function useLibraryState() {
   )
 
   const handleOutline = useCallback(
-    async (id: BookId): Promise<void> => {
-      if (outline.state.type === 'running') return
+    (id: BookId): void => {
       outline.reset()
-      const changed = await outline.run(id)
-      if (!changed) return
-      await refreshRunCtxAfterOutline(id)
+      setOutlineBookId(id)
     },
-    [outline, refreshRunCtxAfterOutline],
+    [outline],
   )
 
-  const handleOutlineAi = useCallback(
-    async (id: BookId): Promise<void> => {
-      if (outline.state.type === 'running') return
-      if (!engine) return
-      outline.reset()
-      const changed = await outline.runWithAi(id, (paragraphs) => engine.detectOutline(paragraphs))
-      if (!changed) return
-      await refreshRunCtxAfterOutline(id)
-    },
-    [outline, engine, refreshRunCtxAfterOutline],
-  )
+  const handleOutlineAutoDetect = useCallback(async (): Promise<void> => {
+    if (!outlineBookId) return
+    const changed = await outline.run(outlineBookId)
+    if (!changed) return
+    await refreshRunCtxAfterOutline(outlineBookId)
+  }, [outline, outlineBookId, refreshRunCtxAfterOutline])
+
+  const handleOutlineAi = useCallback(async (): Promise<void> => {
+    if (!outlineBookId) return
+    if (!engine) return
+    outline.reset()
+    const changed = await outline.runWithAi(outlineBookId, (paragraphs) =>
+      engine.detectOutline(paragraphs),
+    )
+    if (!changed) return
+    await refreshRunCtxAfterOutline(outlineBookId)
+  }, [outline, engine, outlineBookId, refreshRunCtxAfterOutline])
+
+  const handleOutlineClose = useCallback((): void => {
+    outline.reset()
+    setOutlineBookId(null)
+  }, [outline])
 
   const handlePronunciation = useCallback(
     async (id: BookId): Promise<void> => {
@@ -253,6 +254,19 @@ export function useLibraryState() {
     setHintsTitle(null)
   }, [hints])
 
+  const handleRename = useCallback(
+    async (id: BookId): Promise<void> => {
+      const book = await getBook(id)
+      if (!book) return
+      const name = window.prompt('New name:', book.title)
+      if (!name || !name.trim() || name.trim() === book.title) return
+      const renamed = { ...book, title: name.trim(), updatedAt: Date.now() }
+      await putBook(renamed)
+      await refresh()
+    },
+    [refresh],
+  )
+
   const handleDelete = useCallback(
     async (id: Book['id']): Promise<void> => {
       if (!window.confirm('Remove this book from your library?')) return
@@ -274,6 +288,7 @@ export function useLibraryState() {
         chapters,
         voiceId: settings.voiceId,
         cleaning: settings.cleaning,
+        mode: 'resynth',
       })
     },
     [settings.voiceId, settings.cleaning],
@@ -296,9 +311,13 @@ export function useLibraryState() {
     handleSelect,
     onRunProcess,
     onRunCancel,
+    handleRename,
     handleEdit,
+    outlineBookId,
     handleOutline,
+    handleOutlineAutoDetect,
     handleOutlineAi,
+    handleOutlineClose,
     handlePronunciation,
     onHintsAccept,
     onHintsClose,

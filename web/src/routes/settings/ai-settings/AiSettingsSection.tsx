@@ -1,5 +1,6 @@
 import type { AiSettings } from '../../../lib/ai/types'
 import { CloudProvidersSection } from './CloudProvidersSection'
+import { TransformDefList } from './TransformDefList'
 
 interface AiSettingsSectionProps {
   ai: AiSettings
@@ -38,8 +39,12 @@ export function AiSettingsSection({ ai, onChange }: AiSettingsSectionProps) {
           <CloudProvidersSection
             providers={ai.cloud.providers}
             activeProviderId={ai.cloud.activeProviderId}
+            biometricUnlock={ai.cloud.biometricUnlock === true}
             onChange={(cloud) => patch({ cloud })}
           />
+          <div className="border-t border-line pt-4">
+            <TransformDefList ai={ai} onChange={onChange} />
+          </div>
         </div>
       )}
     </section>

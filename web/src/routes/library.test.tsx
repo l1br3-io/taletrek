@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Layout } from '../components/Layout'
 import { DEFAULT_AI_SETTINGS, DEFAULT_SETTINGS, SettingsProvider } from '../context/settings'
 import { _resetAiEngineForTests } from '../lib/ai/client'
-import type { AiSettings, AiTransformEngine } from '../lib/ai/types'
+import { type AiSettings, type AiTransformEngine, transformDefId } from '../lib/ai/types'
 import {
   _clearDBForTests,
   _resetDBForTests,
@@ -44,7 +44,7 @@ const stubEngine: AiTransformEngine = {
 }
 vi.mock('../lib/ai/client', () => ({
   getAiEngine: () => stubEngine,
-  createAiEngine: () => stubEngine,
+  getAiEngineForDef: () => stubEngine,
   _resetAiEngineForTests: () => {},
 }))
 
@@ -251,7 +251,19 @@ describe('Library — Reprocess (M6 T7)', () => {
   })
 
   it('reprocesses a book: re-parses original, transforms, writes chapters, stays in library', async () => {
-    await seedAiSettings({ backend: 'cloud' })
+    await seedAiSettings({
+      backend: 'cloud',
+      transformDefs: [
+        {
+          id: transformDefId('cleanup'),
+          label: 'Clean up',
+          hint: 'Remove clutter',
+          desc: 'Clean up OCR artifacts.',
+          systemPrompt: 'Clean up: {{text}}',
+          params: [],
+        },
+      ],
+    })
     vi.mocked(parseInWorker).mockResolvedValue({
       title: 'Reprocessed',
       chapters: [{ title: 'Ch0', paragraphs: ['fresh-a', 'fresh-b'] }],
@@ -266,7 +278,7 @@ describe('Library — Reprocess (M6 T7)', () => {
       chapterCount: 1,
       createdAt: now,
       updatedAt: now,
-      processing: { appliedAt: now, transforms: ['cleanup'], params: {} },
+      processing: { appliedAt: now, ops: [{ defId: transformDefId('cleanup'), params: {} }] },
     }
     await putBook(book)
     await putChapters([
@@ -442,7 +454,11 @@ describe('Library — Outline detection', () => {
       await screen.findByRole('button', { name: /Generate outline for Outline Book/i }),
     )
 
-    expect(await screen.findByText(/2 chapters detected/)).toBeInTheDocument()
+    // Outline sheet opened — click Auto-detect.
+    await screen.findByRole('dialog')
+    fireEvent.click(await screen.findByRole('button', { name: /Auto-detect chapters/i }))
+
+    expect(await screen.findAllByText(/2 chapters detected/)).not.toHaveLength(0)
 
     const stored = await getChaptersByBook(id)
     expect(stored).toHaveLength(2)
@@ -481,7 +497,11 @@ describe('Library — Outline detection', () => {
     await openBookMenu('No Heads')
     fireEvent.click(await screen.findByRole('button', { name: /Generate outline for No Heads/i }))
 
-    expect(await screen.findByText(/No chapter headings detected/)).toBeInTheDocument()
+    // Outline sheet opened — click Auto-detect.
+    await screen.findByRole('dialog')
+    fireEvent.click(await screen.findByRole('button', { name: /Auto-detect chapters/i }))
+
+    expect(await screen.findAllByText(/No chapter headings detected/)).not.toHaveLength(0)
   })
 })
 
@@ -573,7 +593,7 @@ describe('Library — per-book synthesize', () => {
     await openBookMenu(title)
     fireEvent.click(await screen.findByRole('button', { name: `Synthesize ${title}` }))
     // Wait for the done banner.
-    expect(await screen.findByText(new RegExp(`${title}.*is ready`))).toBeInTheDocument()
+    expect(await screen.findByText(new RegExp(`Audio updated for.*${title}`))).toBeInTheDocument()
 
     // Existing cache key survives (no delete-before-synth).
     const keysAfter = await getAudioCacheKeysByBook(id)
@@ -599,9 +619,9 @@ describe('Library — per-book synthesize', () => {
 
     await openBookMenu(title)
     fireEvent.click(await screen.findByRole('button', { name: `Synthesize ${title}` }))
-    // The global banner shows the initial synthesizing state immediately
+    // The global banner shows the initial re-synth state immediately
     // (manager sets done=0 before the first synth resolves).
-    expect(await screen.findByText(/Synthesizing/)).toBeInTheDocument()
+    expect(await screen.findByText(/Updating audio for/)).toBeInTheDocument()
     // Resolve the first synth → onProgress(1, 2) fires; the second is still gated.
     await act(async () => {
       gates[0]?.()
@@ -611,7 +631,7 @@ describe('Library — per-book synthesize', () => {
     await act(async () => {
       gates[1]?.()
     })
-    expect(await screen.findByText(new RegExp(`${title}.*is ready`))).toBeInTheDocument()
+    expect(await screen.findByText(new RegExp(`Audio updated for.*${title}`))).toBeInTheDocument()
   })
 
   it('shows an error banner when synthesis fails', async () => {
@@ -623,6 +643,6 @@ describe('Library — per-book synthesize', () => {
 
     await openBookMenu(title)
     fireEvent.click(await screen.findByRole('button', { name: `Synthesize ${title}` }))
-    expect(await screen.findByText(/Synthesis failed for/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Couldn't update audio for/i)).toBeInTheDocument()
   })
 })

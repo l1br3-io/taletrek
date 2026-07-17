@@ -14,6 +14,7 @@
 | M4 — Clean Reading | ✅ **Done** (filters + pronunciation dictionary; commit `d57a8bf`) | [`docs/prds/M4-clean-reading.md`](docs/prds/M4-clean-reading.md) |
 | M5 — Library & Offline | ✅ **Done** (library, resume, offline voice mgmt, PWA polish; commit `4115f00`) | [`docs/prds/M5-library-offline.md`](docs/prds/M5-library-offline.md) |
 | M6 — AI Transforms | ✅ **Done** (cloud-only after ADR-0005; in-browser WebLLM backend removed. cleanup/translate/summarize/simplify/pronunciation-hints, per-paragraph transforms + importable key/config) | [`docs/prds/M6-ai-transforms.md`](docs/prds/M6-ai-transforms.md) · [`docs/adr/0005-remove-in-browser-llm-backend.md`](docs/adr/0005-remove-in-browser-llm-backend.md) · [`tasks/todo.md`](tasks/todo.md) |
+| M6.1 — Biometric Key Caching | ✅ **Done** (opt-in WebAuthn PRF tier on top of M6's in-memory default; encrypted blob in IDB wrapped via passkey-derived KEK. Default behaviour unchanged; auto-falls-back where PRF unsupported. ADR-0007 augments ADR-0004.) | [`docs/adr/0007-biometric-key-caching.md`](docs/adr/0007-biometric-key-caching.md) · [`tasks/plan-m6.1-biometric-keys.md`](tasks/plan-m6.1-biometric-keys.md) |
 | M7 — Reader UX & Mobile | ✅ **Done** (responsive layout + nav drawer, chapter outline, minimized `⋯` playback menu, go-to-current + FAB, auto-scroll to resumed position on first Play) | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 | M8 — Audio Cache | ✅ **Done** (content-addressed IndexedDB audio cache, LRU-bounded ~500 MB, per-book cascade clear, Settings indicator + Clear button) | [`docs/prds/M8-audio-cache.md`](docs/prds/M8-audio-cache.md) |
 | M9 — Mobile Streaming Playback | 📋 **Planned** (docs complete, implementation not started. MSE on hidden `<video>`, FFmpeg WASM-encoded fMP4 segments, per-paragraph streaming. Desktop unchanged. ADR-0006.) | [`docs/prds/M9-mobile-streaming.md`](docs/prds/M9-mobile-streaming.md) · [`docs/adr/0006-mobile-mse-streaming.md`](docs/adr/0006-mobile-mse-streaming.md) |
@@ -47,7 +48,8 @@ web/           the PWA — Vite 8 + React 19 + TS + RR8 + Tailwind v4 + Biome
     components/  Layout, Nav (presentational)
     context/     settings.tsx (SettingsProvider — low-freq Context)
     hooks/       useSetting
-    lib/         db.ts (idb), storage.ts (persist), media-session.ts
+    lib/         db.ts (idb), storage.ts (persist), media-session.ts,
+                 crypto/ (aes.ts, prf.ts — ADR-0007 biometric key caching)
 spike/piper/   throwaway Piper TTS validation app
 .opencode/     harness config (agents, rules, skills, tech) — versioned
 ```
@@ -77,6 +79,9 @@ spike/piper/   throwaway Piper TTS validation app
 11. **FFmpeg WASM core is ~30MB and single-threaded** (ADR-0006 / M9). The `@ffmpeg/core` WASM is downloaded to OPFS on first mobile playback (like Piper voice models), then loaded from OPFS on subsequent uses. **Do not** use the multi-threaded core (`@ffmpeg/core-mt`) — it requires `SharedArrayBuffer` which forces cross-origin isolation (COOP/COEP) headers on the entire app. Single-threaded is fast enough for encoding short speech clips.
 12. **`SourceBuffer.appendBuffer` is async — no overlapping appends.** Wait for the `updateend` event before calling `appendBuffer` again. Use `SourceBuffer.timestampOffset` to position each segment at the correct time in the timeline. Read cumulative duration from `sourceBuffer.buffered.end(ranges.length - 1)` after each append.
 13. **`<video>` elements pause on iOS lock screen** (ADR-0006 / M9). This is an accepted limitation of the mobile streaming engine. The user taps play to resume from their position. Do not attempt workarounds — the per-paragraph `<audio>` approach (desktop) fails entirely on lock, which is worse.
+14. **WebAuthn PRF cannot be unit-tested in jsdom** (ADR-0007 / M6.1). `secure-keyring.test.ts` mocks `crypto/prf` to control the biometric flow; the AES round-trip + IDB persistence run for real. Real-device verification requires a browser + authenticator that supports the PRF extension (Chrome/Edge yes, Safari 18+, Firefox partial; platform authenticators like Touch ID / Windows Hello work, as do FIDO2 security keys like YubiKey). The `BiometricKeyringSection` returns `null` on unsupported browsers — that fallback is the contract, not a bug. Don't add a master-passphrase fallback tier; ADR-0007 explicitly rejected it as weaker than PRF-where-supported + silent-fallback-to-in-memory.
+15. **`crypto.subtle` is a built-in browser API, not a network call** (ADR-0007 / M6.1). The existing CSP `connect-src` allowlist doesn't need to be touched for AES-GCM or WebAuthn — neither makes a fetch. CSP remains the primary exfiltration defence for an *unlocked* key; PRF is defense-in-depth for the *at-rest* blob only.
+16. **The wrapped-DEK pattern is load-bearing** (ADR-0007 / M6.1). `secure-keyring.ts` deliberately wraps a random DEK with a PRF-derived KEK rather than using the PRF output as the encryption key directly. Per Tim Cappalli (W3C WebAuthn L3 co-editor), passkey rotation invalidates PRF output — wrapping a DEK we control means re-enrolling with a new passkey can re-wrap the same DEK without re-encrypting the keys blob. Don't "simplify" this to PRF-output-as-key.
 
 ## How to resume (in a new session)
 
@@ -84,7 +89,7 @@ Open opencode in this repo and say, e.g.:
 
 > "Continue with M1 — Upload & Read. Read `docs/ROADMAP.md` and `docs/prds/M0-foundation.md` for established patterns, then plan M1 following the spec-driven workflow. The Piper integration is M2, not M1."
 
-The agent auto-loads this file + `.opencode/rules/tech.md`. For TTS work, also point it at [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) (M2 recommendations: pin ORT 1.18.0, mirror wasm locally, single-threaded default, Web Worker, pre-download model to OPFS). For M6 (AI transforms), point it at [`tasks/plan.md`](tasks/plan.md) (cloud OpenAI-compatible engine; the on-device WebLLM backend was removed — ADR-0005). For M9 (mobile streaming), point it at [`docs/prds/M9-mobile-streaming.md`](docs/prds/M9-mobile-streaming.md) + [`docs/adr/0006-mobile-mse-streaming.md`](docs/adr/0006-mobile-mse-streaming.md) (MSE on hidden `<video>`, FFmpeg WASM fMP4 encoding, per-paragraph streaming, desktop unchanged).
+The agent auto-loads this file + `.opencode/rules/tech.md`. For TTS work, also point it at [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) (M2 recommendations: pin ORT 1.18.0, mirror wasm locally, single-threaded default, Web Worker, pre-download model to OPFS). For M6 (AI transforms), point it at [`tasks/plan.md`](tasks/plan.md) (cloud OpenAI-compatible engine; the on-device WebLLM backend was removed — ADR-0005). For M6.1 (biometric key caching), point it at [`docs/adr/0007-biometric-key-caching.md`](docs/adr/0007-biometric-key-caching.md) + [`tasks/plan-m6.1-biometric-keys.md`](tasks/plan-m6.1-biometric-keys.md) (opt-in WebAuthn PRF tier on top of M6's in-memory default; ADR-0004's in-memory tier stays the default and fallback). For M9 (mobile streaming), point it at [`docs/prds/M9-mobile-streaming.md`](docs/prds/M9-mobile-streaming.md) + [`docs/adr/0006-mobile-mse-streaming.md`](docs/adr/0006-mobile-mse-streaming.md) (MSE on hidden `<video>`, FFmpeg WASM fMP4 encoding, per-paragraph streaming, desktop unchanged).
 
 ## Non-goals (launch scope)
 

@@ -6,27 +6,55 @@ import {
   parseHintCandidates,
   splitOutput,
 } from './prompts'
+import { type TransformDefinition, transformDefId } from './types'
+
+function makeDef(overrides: Partial<TransformDefinition> = {}): TransformDefinition {
+  return {
+    id: transformDefId('test-1'),
+    label: 'Test',
+    hint: '',
+    desc: '',
+    systemPrompt: 'Repair text. Return one paragraph.',
+    params: [],
+    ...overrides,
+  }
+}
 
 describe('buildTransformMessages', () => {
   it('cleanup: OCR-cleaning system prompt + joined user paragraphs', () => {
-    const { system, user } = buildTransformMessages({ kind: 'cleanup' }, ['one', 'two'])
+    const def = makeDef({
+      systemPrompt: 'Fix OCR errors in this text. Return one paragraph per input paragraph.',
+    })
+    const { system, user } = buildTransformMessages(def, {}, ['one', 'two'])
     expect(system).toMatch(/OCR/)
     expect(user).toBe(`one${PARAGRAPH_DELIMITER}two`)
   })
 
-  it('translate: includes the target language code', () => {
-    const { system } = buildTransformMessages({ kind: 'translate', target: 'es' }, ['x'])
-    expect(system).toMatch(/"es"/)
+  it('translate: interpolates the target language from params', () => {
+    const def = makeDef({
+      systemPrompt: 'Translate to {{lang}}. Return one paragraph per input paragraph.',
+      params: [{ key: 'lang', type: 'text', label: 'Target language', default: 'es' }],
+    })
+    const { system } = buildTransformMessages(def, { lang: 'fr' }, ['x'])
+    expect(system).toMatch(/fr/)
   })
 
-  it('summarize: includes the ratio as a percentage', () => {
-    const { system } = buildTransformMessages({ kind: 'summarize', ratio: 0.5 }, ['x'])
-    expect(system).toMatch(/50%/)
+  it('summarize: interpolates ratio param', () => {
+    const def = makeDef({
+      systemPrompt: 'Summarise to {{ratio}} ratio.',
+      params: [{ key: 'ratio', type: 'range', label: 'Ratio', default: 0.5 }],
+    })
+    const { system } = buildTransformMessages(def, { ratio: 0.3 }, ['x'])
+    expect(system).toMatch(/0.3/)
   })
 
-  it('simplify: includes the grade level', () => {
-    const { system } = buildTransformMessages({ kind: 'simplify', level: 3 }, ['x'])
-    expect(system).toMatch(/Grade 3/)
+  it('simplify: interpolates level param with a default', () => {
+    const def = makeDef({
+      systemPrompt: 'Simplify to grade {{level}}.',
+      params: [{ key: 'level', type: 'range', label: 'Grade', default: 2 }],
+    })
+    const { system } = buildTransformMessages(def, {}, ['x'])
+    expect(system).toMatch(/2/)
   })
 
   it('marks hints as JSON mode', () => {

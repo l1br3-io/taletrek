@@ -1,18 +1,8 @@
-import type { TransformOp } from './types'
-
 /**
- * Per-op paragraph chunking. Each strategy produces {@link Chunk}s that carry
- * their source index range so callers can reassemble results back into the
- * book's `paragraphs`.
- *
- * - {@link solo}: one paragraph per chunk (cleanup — parallelizable, no context).
- * - {@link windowed}: sliding windows of `size` paragraphs with `overlap`
- *   (translate/summarize/simplify — needs surrounding context).
- * - {@link sample}: the first `maxParagraphs` as a single chunk
- *   (pronunciation-hints — scan the opening of the book).
- *
- * Chunking is by *paragraph count*, never by character, so surrogate pairs and
- * grapheme clusters inside a paragraph are always preserved intact.
+ * Runtime token-aware paragraph chunking. Splits paragraphs into chunks that
+ * fit within a provider's context window, using a character/4 token heuristic.
+ * Chunk boundaries are always at paragraph breaks — a paragraph is never split
+ * mid-text.
  */
 
 /** A contiguous slice of the input paragraphs, with its source range. */
@@ -22,37 +12,6 @@ export interface Chunk {
   /** Exclusive end index into the original input. */
   end: number
   paragraphs: string[]
-}
-
-/** One paragraph per chunk (cleanup). */
-export function solo(input: string[]): Chunk[] {
-  return input.map((paragraph, i) => ({
-    start: i,
-    end: i + 1,
-    paragraphs: [paragraph],
-  }))
-}
-
-/**
- * Sliding windows of `size` paragraphs, advancing by `size - overlap` each step.
- * An overlap paragraph therefore appears in two consecutive windows; reassembly
- * policy (which window "wins" the overlap) is the caller's concern.
- *
- * @throws RangeError if `size <= 0` or `overlap` is not in `[0, size)`.
- */
-export function windowed(input: string[], size = 10, overlap = 1): Chunk[] {
-  if (size <= 0) throw new RangeError('windowed: size must be > 0')
-  if (overlap < 0 || overlap >= size) {
-    throw new RangeError('windowed: overlap must be in [0, size)')
-  }
-  const chunks: Chunk[] = []
-  const step = size - overlap
-  for (let start = 0; start < input.length; start += step) {
-    const end = Math.min(start + size, input.length)
-    chunks.push({ start, end, paragraphs: input.slice(start, end) })
-    if (end >= input.length) break
-  }
-  return chunks
 }
 
 /**
@@ -67,24 +26,50 @@ export function sample(input: string[], maxParagraphs = 50): Chunk {
   return { start: 0, end, paragraphs: input.slice(0, end) }
 }
 
+/** Token reserve left for the model's response (avoids exceeding the context limit). */
+const OUTPUT_RESERVE = 1024
+const TOKENS_PER_CHAR = 0.25
+
+/** Rough token count for a string using the char/4 heuristic. */
+export function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length * TOKENS_PER_CHAR))
+}
+
 /**
- * Pick the chunking strategy for a {@link TransformOp} (PRD §Decisions "Chunking"):
- * - `cleanup` → {@link solo} (one paragraph per chunk; parallelizable, no context).
- * - `translate` / `simplify` → {@link windowed} `(10, overlap=1)` (needs context;
- *   reassembly is last-write-wins on the overlap).
- * - `summarize` → {@link windowed} `(10, overlap=0)` (disjoint). Deviation from the
- *   PRD's "1-overlap for all windowed": overlapping windows would summarize the
- *   boundary paragraph twice, duplicating it in the condensed output. Disjoint
- *   windows concatenate cleanly. See `tasks/plan.md` deviations.
+ * Split paragraphs into chunks that each fit within `contextLimit` tokens
+ * (after accounting for the system prompt and a safe output reserve). Every
+ * chunk starts and ends at a paragraph boundary. A single paragraph that
+ * exceeds the budget alone goes into its own chunk (the model may truncate).
  */
-export function chunksForOp(op: TransformOp, input: string[]): Chunk[] {
-  switch (op.kind) {
-    case 'cleanup':
-      return solo(input)
-    case 'translate':
-    case 'simplify':
-      return windowed(input, 10, 1)
-    case 'summarize':
-      return windowed(input, 10, 0)
+export function chunksForParagraphs(
+  paragraphs: string[],
+  contextLimit: number,
+  systemPromptTokens: number,
+): Chunk[] {
+  const budget = Math.max(512, contextLimit - systemPromptTokens - OUTPUT_RESERVE)
+  const chunks: Chunk[] = []
+  let current: string[] = []
+  let currentTokens = 0
+  let startIdx = 0
+
+  for (let i = 0; i < paragraphs.length; i++) {
+    const para = paragraphs[i] as string
+    const paraTokens = estimateTokens(para)
+
+    if (current.length > 0 && currentTokens + paraTokens > budget) {
+      chunks.push({ start: startIdx, end: i, paragraphs: current })
+      current = [para]
+      currentTokens = paraTokens
+      startIdx = i
+    } else {
+      current.push(para)
+      currentTokens += paraTokens
+    }
   }
+
+  if (current.length > 0) {
+    chunks.push({ start: startIdx, end: paragraphs.length, paragraphs: current })
+  }
+
+  return chunks
 }

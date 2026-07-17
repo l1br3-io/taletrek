@@ -2,7 +2,7 @@ import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Book, Chapter } from '../../types'
 import { newBookId, newChapterId, voiceId } from '../../types'
-import { _clearDBForTests, _resetDBForTests } from '../db'
+import { _clearDBForTests, _resetDBForTests, getBook, putBook } from '../db'
 import { type JobState, uploadManager } from './manager'
 import { useUploadState } from './useUpload'
 
@@ -185,6 +185,70 @@ describe('uploadManager', () => {
       return s
     })
     expect((state as Extract<JobState, { type: 'error' }>).message).toBe('worker exploded')
+  })
+
+  it('initial mode cascade-deletes the book on failure (fresh-upload contract)', async () => {
+    const book = makeBook('Doomed Upload')
+    await putBook(book)
+    synthMock.mockRejectedValue(new Error('boom'))
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+      // mode omitted → defaults to 'initial'
+    })
+    const state = await vi.waitFor(() => {
+      const s = uploadManager.getState()
+      expect(s.type).toBe('error')
+      return s as Extract<JobState, { type: 'error' }>
+    })
+    expect(state.mode).toBe('initial')
+    expect(await getBook(book.id)).toBeUndefined()
+    expect(uploadManager.canRetry()).toBe(false)
+  })
+
+  it('resynth mode keeps the book on failure and offers retry', async () => {
+    const book = makeBook('Transformed Book')
+    await putBook(book)
+    synthMock.mockRejectedValue(new Error('transient API error'))
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+      mode: 'resynth',
+    })
+    const state = await vi.waitFor(() => {
+      const s = uploadManager.getState()
+      expect(s.type).toBe('error')
+      return s as Extract<JobState, { type: 'error' }>
+    })
+    expect(state.mode).toBe('resynth')
+    // Book survives — the user's text is intact.
+    expect(await getBook(book.id)).toBeDefined()
+    expect(uploadManager.canRetry()).toBe(true)
+  })
+
+  it('resynth retry re-runs the job and can succeed', async () => {
+    const book = makeBook('Retry Me')
+    await putBook(book)
+    synthMock.mockRejectedValueOnce(new Error('transient'))
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+      mode: 'resynth',
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('error'))
+    expect(uploadManager.canRetry()).toBe(true)
+    uploadManager.retry()
+    await vi.waitFor(() => {
+      const s = uploadManager.getState()
+      expect(s.type).toBe('done')
+      expect((s as Extract<JobState, { type: 'done' }>).mode).toBe('resynth')
+    })
   })
 
   it('dismiss clears done/error back to idle', async () => {

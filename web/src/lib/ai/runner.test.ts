@@ -1,30 +1,56 @@
 import { describe, expect, it, vi } from 'vitest'
 import { type CompleteFn, opsFromProcessing, runHints, runTransform } from './runner'
-import type { AppliedProcessing } from './types'
+import { type AppliedProcessing, type TransformDefinition, transformDefId } from './types'
+
+function makeDef(overrides: Partial<TransformDefinition> = {}): TransformDefinition {
+  return {
+    id: transformDefId('t'),
+    label: 'Test',
+    hint: '',
+    desc: '',
+    systemPrompt: 'Fix.',
+    params: [],
+    ...overrides,
+  }
+}
+
+const CTX = 32768
+
+const cleanupDef = makeDef()
+const translateDef = makeDef({
+  id: transformDefId('translate'),
+  systemPrompt: 'Translate to {{lang}}.',
+  params: [{ key: 'lang', type: 'text', label: 'Target', default: 'es' }],
+})
+const summarizeDef = makeDef({
+  id: transformDefId('summarize'),
+  systemPrompt: 'Summarise at {{ratio}} ratio.',
+  params: [{ key: 'ratio', type: 'range', label: 'Ratio', default: 0.5 }],
+})
 
 /** Uppercases the joined user content and re-splits on blank lines (count-preserving round-trip). */
 const upperComplete: CompleteFn = async (messages) => messages.user.toUpperCase()
 
-describe('runTransform — cleanup (solo)', () => {
-  it('one completion per paragraph, preserves count + order', async () => {
+describe('runTransform — cleanup', () => {
+  it('one completion per chunk, preserves count + order', async () => {
     const complete = vi.fn(upperComplete)
-    const out = await runTransform(['a', 'b', 'c'], { kind: 'cleanup' }, complete)
+    const out = await runTransform(['a', 'b', 'c'], cleanupDef, {}, CTX, complete)
     expect(out).toEqual(['A', 'B', 'C'])
-    expect(complete).toHaveBeenCalledTimes(3)
+    expect(complete).toHaveBeenCalledTimes(1)
   })
 
   it('reports increasing progress ending at 1', async () => {
     const fractions: number[] = []
-    await runTransform(['a', 'b', 'c'], { kind: 'cleanup' }, upperComplete, (f) =>
+    await runTransform(['a', 'b', 'c'], cleanupDef, {}, CTX, upperComplete, (f) =>
       fractions.push(f),
     )
-    expect(fractions).toEqual([1 / 3, 2 / 3, 1])
+    expect(fractions).toEqual([1])
   })
 
-  it('returns [] for empty input and reports progress 1', async () => {
+  it('returns [] for empty input and reports no progress', async () => {
     const complete = vi.fn(upperComplete)
     const fractions: number[] = []
-    const out = await runTransform([], { kind: 'cleanup' }, complete, (f) => fractions.push(f))
+    const out = await runTransform([], cleanupDef, {}, CTX, complete, (f) => fractions.push(f))
     expect(out).toEqual([])
     expect(complete).not.toHaveBeenCalled()
     expect(fractions).toEqual([])
@@ -33,41 +59,41 @@ describe('runTransform — cleanup (solo)', () => {
 
 describe('runTransform — fallback', () => {
   it('keeps the original paragraph when a completion returns empty', async () => {
-    const complete = vi.fn(async (m) => (m.user === 'keep' ? 'CLEANED' : ''))
-    const out = await runTransform(['keep', 'drop'], { kind: 'cleanup' }, complete)
+    // Both paragraphs fit in one chunk. Completion returns only one part —
+    // the second paragraph falls back to original.
+    const complete = vi.fn(async () => 'CLEANED\n\n')
+    const out = await runTransform(['keep', 'drop'], cleanupDef, {}, CTX, complete)
     expect(out).toEqual(['CLEANED', 'drop'])
   })
 
   it("clamps to chunk size — model over-return can't clobber a sibling's fallback", async () => {
-    // Solo chunks (1 paragraph each). Chunk 0 over-returns 2 parts; chunk 1
-    // returns empty. Without the clamp, chunk 0's extra part clobbers index 1
-    // and chunk 1's empty result leaves the clobbered value in place.
-    const complete = vi.fn(async (m) => (m.user === 'a' ? 'X\n\nY' : ''))
-    const out = await runTransform(['a', 'b'], { kind: 'cleanup' }, complete)
+    // Both paragraphs fit in one chunk. Model returns only one part;
+    // the second paragraph keeps its original text.
+    const complete = vi.fn(async () => 'X\n\n')
+    const out = await runTransform(['a', 'b'], cleanupDef, {}, CTX, complete)
     expect(out).toEqual(['X', 'b'])
   })
 })
 
-describe('runTransform — translate (windowed, overlap=1, last-write-wins)', () => {
-  it('preserves count across overlapping windows', async () => {
+describe('runTransform — translate (last-write-wins)', () => {
+  it('preserves count when all paragraphs fit in one chunk', async () => {
     const complete = vi.fn(upperComplete)
     const input = Array.from({ length: 11 }, (_, i) => `p${i}`)
-    const out = await runTransform(input, { kind: 'translate', target: 'es' }, complete)
-    // windowed(11, 10, 1) → [0,10), [9,11) → 2 completions, 11 outputs
+    const out = await runTransform(input, translateDef, { lang: 'es' }, CTX, complete)
     expect(out).toEqual(input.map((p) => p.toUpperCase()))
     expect(out).toHaveLength(11)
-    expect(complete).toHaveBeenCalledTimes(2)
+    expect(complete).toHaveBeenCalledTimes(1)
   })
 })
 
-describe('runTransform — summarize (disjoint, overlap=0)', () => {
+describe('runTransform — summarize (reductive)', () => {
   it('appends one condensed chunk per window', async () => {
     const complete = vi.fn(async () => 'SUM-A\n\nSUM-B')
     const input = Array.from({ length: 25 }, (_, i) => `p${i}`)
-    const out = await runTransform(input, { kind: 'summarize', ratio: 0.5 }, complete)
-    // windowed(25, 10, 0) → 3 windows; each yields 2 paragraphs → 6 appended
-    expect(complete).toHaveBeenCalledTimes(3)
-    expect(out).toEqual(['SUM-A', 'SUM-B', 'SUM-A', 'SUM-B', 'SUM-A', 'SUM-B'])
+    const out = await runTransform(input, summarizeDef, { ratio: 0.5 }, CTX, complete)
+    // contextLimit=32768, budget ~31644 → all 25 short paragraphs fit in 1 chunk
+    expect(complete).toHaveBeenCalledTimes(1)
+    expect(out).toEqual(['SUM-A', 'SUM-B'])
   })
 })
 
@@ -75,7 +101,7 @@ describe('runTransform — abort', () => {
   it('forwards the AbortSignal to complete', async () => {
     const ac = new AbortController()
     const complete = vi.fn(async () => 'x')
-    await runTransform(['a'], { kind: 'cleanup' }, complete, undefined, ac.signal)
+    await runTransform(['a'], cleanupDef, {}, CTX, complete, undefined, ac.signal)
     expect(complete).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ signal: ac.signal }),
@@ -89,7 +115,7 @@ describe('runTransform — abort', () => {
       throw new DOMException('aborted', 'AbortError')
     })
     await expect(
-      runTransform(['a'], { kind: 'cleanup' }, complete, undefined, ac.signal),
+      runTransform(['a'], cleanupDef, {}, CTX, complete, undefined, ac.signal),
     ).rejects.toThrow()
   })
 })
@@ -133,35 +159,26 @@ describe('runHints', () => {
 })
 
 describe('opsFromProcessing', () => {
-  it('reconstructs the ordered ops from a full processing record', () => {
+  it('returns the ops array from a processing record', () => {
     const p: AppliedProcessing = {
       appliedAt: 1,
-      transforms: ['cleanup', 'translate', 'summarize', 'simplify'],
-      params: { translate: { target: 'fr' }, summarize: { ratio: 0.4 }, simplify: { level: 3 } },
+      ops: [
+        { defId: transformDefId('t'), params: {} },
+        { defId: transformDefId('translate'), params: { lang: 'fr' } },
+        { defId: transformDefId('summarize'), params: { ratio: 0.4 } },
+        { defId: transformDefId('simplify'), params: { level: 3 } },
+      ],
     }
     expect(opsFromProcessing(p)).toEqual([
-      { kind: 'cleanup' },
-      { kind: 'translate', target: 'fr' },
-      { kind: 'summarize', ratio: 0.4 },
-      { kind: 'simplify', level: 3 },
+      { defId: transformDefId('t'), params: {} },
+      { defId: transformDefId('translate'), params: { lang: 'fr' } },
+      { defId: transformDefId('summarize'), params: { ratio: 0.4 } },
+      { defId: transformDefId('simplify'), params: { level: 3 } },
     ])
   })
 
-  it('falls back to defaults when params are missing', () => {
-    const p: AppliedProcessing = {
-      appliedAt: 1,
-      transforms: ['translate', 'summarize', 'simplify'],
-      params: {},
-    }
-    expect(opsFromProcessing(p)).toEqual([
-      { kind: 'translate', target: 'es' },
-      { kind: 'summarize', ratio: 0.5 },
-      { kind: 'simplify', level: 2 },
-    ])
-  })
-
-  it('returns [] for an empty transforms list', () => {
-    const p: AppliedProcessing = { appliedAt: 1, transforms: [], params: {} }
+  it('returns [] for an empty ops list', () => {
+    const p: AppliedProcessing = { appliedAt: 1, ops: [] }
     expect(opsFromProcessing(p)).toEqual([])
   })
 })

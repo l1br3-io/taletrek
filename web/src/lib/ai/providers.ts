@@ -30,6 +30,12 @@ export interface ProviderPreset {
   /** Sensible default model if discovery fails or is skipped. */
   defaultModel?: string
   /**
+   * Default context window size in tokens for the provider's typical models.
+   * Auto-fills the provider config form; the user can override per-provider.
+   * Used by the runtime token-aware paragraph chunker.
+   */
+  defaultContextLimit: number
+  /**
    * Static, curated model list. When set, the model picker renders a dropdown
    * from this list WITHOUT calling `/models` — used by providers whose
    * discovery endpoint is unreliable from the browser (CORS/auth) or whose
@@ -59,6 +65,7 @@ const CUSTOM_PRESET: ProviderPreset = {
   keyScopeHint: 'Ensure the endpoint is OpenAI-compatible (POST /chat/completions).',
   supportsModelsEndpoint: false,
   corsSafe: false,
+  defaultContextLimit: 32768,
 }
 
 export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
@@ -72,6 +79,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     supportsModelsEndpoint: true,
     corsSafe: true,
     defaultModel: 'meta-llama/llama-3.3-70b-instruct:free',
+    defaultContextLimit: 131072,
   },
   {
     id: 'groq',
@@ -83,6 +91,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     supportsModelsEndpoint: true,
     corsSafe: true,
     defaultModel: 'llama-3.1-8b-instant',
+    defaultContextLimit: 131072,
   },
   {
     id: 'openai',
@@ -94,6 +103,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     supportsModelsEndpoint: true,
     corsSafe: true,
     defaultModel: 'gpt-4o-mini',
+    defaultContextLimit: 128000,
   },
   {
     id: 'together',
@@ -105,6 +115,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     supportsModelsEndpoint: true,
     corsSafe: true,
     defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+    defaultContextLimit: 131072,
   },
   {
     id: 'zen',
@@ -123,6 +134,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     supportsModelsEndpoint: false,
     corsSafe: true,
     defaultModel: 'deepseek-v4-flash-free',
+    defaultContextLimit: 131072,
     models: [
       { id: 'big-pickle', free: true },
       { id: 'deepseek-v4-flash-free', free: true },

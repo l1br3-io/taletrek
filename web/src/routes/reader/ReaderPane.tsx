@@ -291,6 +291,7 @@ function ReaderPane({
         aiBusy={transform.aiBusy}
         error={transform.transformError}
         canUndo={transform.undoCount > 0}
+        defs={settings.ai?.transformDefs ?? []}
         onApplyAi={transform.applyAi}
         onApplyDeterministic={transform.applyDet}
         onUndo={transform.handleUndo}

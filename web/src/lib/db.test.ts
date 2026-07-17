@@ -8,7 +8,7 @@ import {
   newChapterId,
   voiceId,
 } from '../types'
-import type { AppliedProcessing } from './ai/types'
+import { type AppliedProcessing, transformDefId } from './ai/types'
 import {
   _clearDBForTests,
   _resetDBForTests,
@@ -230,8 +230,10 @@ describe('library + progress (M5)', () => {
     await putBook(book)
     const processing: AppliedProcessing = {
       appliedAt: 1234,
-      transforms: ['cleanup', 'translate'],
-      params: { translate: { target: 'es' } },
+      ops: [
+        { defId: transformDefId('cleanup'), params: {} },
+        { defId: transformDefId('translate'), params: { target: 'es' } },
+      ],
     }
     await updateBookProcessing(book.id, processing)
     const after = await getBook(book.id)
@@ -244,8 +246,7 @@ describe('library + progress (M5)', () => {
     await putBook(book)
     await updateBookProcessing(book.id, {
       appliedAt: 1,
-      transforms: ['cleanup'],
-      params: {},
+      ops: [{ defId: transformDefId('cleanup'), params: {} }],
     })
     expect((await getBook(book.id))?.processing).toBeDefined()
     await updateBookProcessing(book.id, undefined)

@@ -25,6 +25,7 @@ function cloudAi(overrides: Partial<AiSettings> = {}): AiSettings {
     enabled: true,
     backend: 'cloud',
     cloud: { providers: [], activeProviderId: null },
+    transformDefs: [],
     ...overrides,
   }
 }

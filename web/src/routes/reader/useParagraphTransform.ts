@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { SynthMode } from '../../context/settings'
-import { getAiEngine } from '../../lib/ai/client'
+import { getAiEngineForDef } from '../../lib/ai/client'
 import type { AiSettings, TransformOp } from '../../lib/ai/types'
 import { cleanParagraphsWithOrigins } from '../../lib/clean'
 import type { CleaningConfig } from '../../lib/clean/types'
@@ -137,7 +137,12 @@ export function useParagraphTransform({
       }
       setAiBusy(true)
       try {
-        const engine = getAiEngine(ai)
+        const defs = ai.transformDefs
+        const def = defs.find((d) => d.id === op.defId)
+        if (!def) {
+          throw new Error('Transform definition not found — it may have been deleted.')
+        }
+        const engine = getAiEngineForDef(ai, def)
         if (!engine) {
           throw new Error('No cloud provider configured — add one in Settings.')
         }
@@ -147,7 +152,7 @@ export function useParagraphTransform({
             'AI engine is not ready — load the model or set your API key in Settings.',
           )
         }
-        const [out] = await engine.transform([target.rawText], op)
+        const [out] = await engine.transform([target.rawText], op, def)
         if (!out?.trim()) throw new Error('AI returned an empty result.')
         commitTransform(target.chapterId, target.rawParagraphIndex, target.rawText, out.trim())
       } catch (e) {

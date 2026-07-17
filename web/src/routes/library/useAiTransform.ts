@@ -1,12 +1,23 @@
 import { useCallback, useRef, useState } from 'react'
+import type { SynthMode } from '../../context/settings'
+import { getAiEngineForDef } from '../../lib/ai/client'
 import type {
-  AiTransformEngine,
+  AiSettings,
   AppliedProcessing,
+  TransformDefinition,
   TransformOp,
-  TransformParams,
 } from '../../lib/ai/types'
-import { putChapters, updateBookProcessing, updateBookProgress } from '../../lib/db'
-import type { Book, Chapter } from '../../types'
+import { deleteBookAudio } from '../../lib/book-audio'
+import type { CleaningConfig } from '../../lib/clean/types'
+import {
+  deleteAudioCacheKeys,
+  getAudioCacheKeysByBook,
+  putChapters,
+  updateBookProcessing,
+  updateBookProgress,
+} from '../../lib/db'
+import { uploadManager } from '../../lib/upload/manager'
+import type { Book, Chapter, VoiceId } from '../../types'
 
 /**
  * Variant state for a transform run.
@@ -46,45 +57,16 @@ export interface UseAiTransform {
   abort: () => void
 }
 
-const OP_LABELS: Record<TransformOp['kind'], string> = {
-  cleanup: 'Clean up',
-  translate: 'Translate',
-  summarize: 'Summarize',
-  simplify: 'Simplify',
-}
-
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0
   return Math.min(1, Math.max(0, n))
 }
 
-function describeStage(ops: TransformOp[], opIndex: number): string {
+function describeStage(defs: TransformDefinition[], ops: TransformOp[], opIndex: number): string {
   const op = ops[opIndex]
   if (!op) return ''
-  return `${OP_LABELS[op.kind]} (${opIndex + 1}/${ops.length})`
-}
-
-/** Fold the selected ops' params into the {@link AppliedProcessing.params} shape. */
-function extractParams(ops: TransformOp[]): TransformParams {
-  const p: TransformParams = {}
-  for (const op of ops) {
-    if (op.kind === 'translate') p.translate = { target: op.target }
-    else if (op.kind === 'summarize') p.summarize = { ratio: op.ratio }
-    else if (op.kind === 'simplify') p.simplify = { level: op.level }
-  }
-  return p
-}
-
-export interface UseAiTransformOptions {
-  /** The engine resolved by the caller (`null` when AI is disabled — `run` errors). */
-  engine: AiTransformEngine | null
-  /**
-   * Optional prep step run before transforms. Its progress is reported as a
-   * "Loading model…" running stage so the modal shows one continuous progress
-   * bar. Unused now that only the cloud backend remains; retained for future
-   * backends that need a warm-up step.
-   */
-  prepare?: (onProgress: (fraction: number) => void) => Promise<void>
+  const def = defs.find((d) => d.id === op.defId)
+  return `${def?.label ?? 'Unknown'} (${opIndex + 1}/${ops.length})`
 }
 
 /**
@@ -94,13 +76,26 @@ export interface UseAiTransformOptions {
  * completion writes the new `paragraphs` + an `AppliedProcessing` record +
  * resets the read position to `(chapterIndex, 0)` (M6 locked decision: keep the
  * chapter, restart its paragraphs — a transform invalidates the old
- * `paragraphIndex`; `progressFraction` resets too). The key never lives in
- * Settings (ADR-0004); the engine resolves it via `keyring`.
+ * `paragraphIndex`; `progressFraction` resets too).
  *
- * The engine is injected (+ an optional `prepare`) so the caller controls
- * creation; the hook only runs the work.
+ * The engine is resolved per-def via {@link getAiEngineForDef} so each
+ * transform definition can pin a different provider/model.
  */
-export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseAiTransform {
+export function useAiTransform({
+  ai,
+  defs,
+  synthMode,
+  voiceId,
+  cleaning,
+  prepare,
+}: {
+  ai: AiSettings | undefined
+  defs: TransformDefinition[]
+  synthMode?: SynthMode
+  voiceId?: VoiceId
+  cleaning?: CleaningConfig
+  prepare?: (onProgress: (fraction: number) => void) => Promise<void>
+}): UseAiTransform {
   const [state, setState] = useState<TransformState>({ type: 'idle' })
   const abortRef = useRef<AbortController | null>(null)
   const runningRef = useRef(false)
@@ -114,7 +109,7 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
       const { book, ops, resolveChapters } = args
       if (ops.length === 0) return
       if (runningRef.current) return
-      if (!engine) {
+      if (!ai?.enabled) {
         setState({ type: 'error', message: 'AI is not enabled — open Settings → AI.' })
         return
       }
@@ -125,7 +120,7 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
         ? 'Loading model…'
         : resolveChapters
           ? 'Re-parsing original…'
-          : describeStage(ops, 0)
+          : describeStage(defs, ops, 0)
       setState({ type: 'running', fraction: 0, stage: initialStage })
       try {
         if (prepare) {
@@ -139,7 +134,7 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
           setState({ type: 'running', fraction: 0, stage: 'Re-parsing original…' })
           working = await resolveChapters()
           if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
-          setState({ type: 'running', fraction: 0, stage: describeStage(ops, 0) })
+          setState({ type: 'running', fraction: 0, stage: describeStage(defs, ops, 0) })
         } else {
           working = args.chapters ?? []
         }
@@ -148,6 +143,22 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
         for (let i = 0; i < ops.length; i++) {
           const op = ops[i]
           if (!op) continue
+          const def = defs.find((d) => d.id === op.defId)
+          if (!def) {
+            setState({
+              type: 'error',
+              message: `Transform "unknown" not found — it may have been deleted.`,
+            })
+            return
+          }
+          const engine = getAiEngineForDef(ai, def)
+          if (!engine) {
+            setState({
+              type: 'error',
+              message: `No provider configured for "${def.label}". Open Settings → AI and configure a provider.`,
+            })
+            return
+          }
           const next: Chapter[] = []
           for (let c = 0; c < working.length; c++) {
             const chapter = working[c]
@@ -155,12 +166,13 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
             const out = await engine.transform(
               chapter.paragraphs,
               op,
+              def,
               (f) => {
                 const done = i * numChapters + c + clamp01(f)
                 setState({
                   type: 'running',
                   fraction: total > 0 ? done / total : 0,
-                  stage: describeStage(ops, i),
+                  stage: describeStage(defs, ops, i),
                 })
               },
               controller.signal,
@@ -174,8 +186,7 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
         }
         const processing: AppliedProcessing = {
           appliedAt: Date.now(),
-          transforms: ops.map((o) => o.kind),
-          params: extractParams(ops),
+          ops,
         }
         await updateBookProcessing(book.id, processing)
         const chapterIndex = book.position?.chapterIndex ?? 0
@@ -184,6 +195,30 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
           type: 'done',
           message: `Transform applied — resumed at start of chapter ${chapterIndex + 1}.`,
         })
+
+        // Fire-and-forget re-synthesis if synth is enabled. Transformed
+        // paragraphs invalidate the content-addressed audio cache, so we
+        // purge stale entries then re-synth the whole book. Uses the
+        // resynth-safe mode (failure preserves the book + offers retry).
+        if (synthMode && synthMode !== 'off' && voiceId && cleaning) {
+          void (async () => {
+            try {
+              const keys = await getAudioCacheKeysByBook(book.id)
+              if (keys.length > 0) await deleteAudioCacheKeys(keys)
+              await deleteBookAudio(book.id)
+              const latest = { ...book, updatedAt: Date.now() }
+              uploadManager.startJob({
+                book: latest,
+                chapters: working,
+                voiceId,
+                cleaning,
+                mode: 'resynth',
+              })
+            } catch {
+              // Silent — banner is the primary error surface.
+            }
+          })()
+        }
       } catch (e) {
         if (controller.signal.aborted) setState({ type: 'idle' })
         else setState({ type: 'error', message: (e as Error).message || 'Transform failed.' })
@@ -192,7 +227,7 @@ export function useAiTransform({ engine, prepare }: UseAiTransformOptions): UseA
         abortRef.current = null
       }
     },
-    [engine, prepare],
+    [ai, defs, synthMode, voiceId, cleaning, prepare],
   )
 
   return { state, run, abort }

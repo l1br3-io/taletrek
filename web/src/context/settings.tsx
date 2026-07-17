@@ -45,6 +45,7 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   enabled: false,
   backend: 'cloud',
   cloud: { providers: [], activeProviderId: null },
+  transformDefs: [],
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -88,6 +89,7 @@ function migrateAi(ai: unknown): AiSettings {
       enabled: obj.enabled ?? false,
       backend: 'cloud',
       cloud: { providers: [provider], activeProviderId: provider.id },
+      transformDefs: [],
     }
   }
 
@@ -99,7 +101,9 @@ function migrateAi(ai: unknown): AiSettings {
     cloud: {
       providers: Array.isArray(obj.cloud?.providers) ? obj.cloud.providers : [],
       activeProviderId: obj.cloud?.activeProviderId ?? null,
+      biometricUnlock: obj.cloud?.biometricUnlock === true,
     },
+    transformDefs: Array.isArray(obj.transformDefs) ? obj.transformDefs : [],
   }
 }
 
