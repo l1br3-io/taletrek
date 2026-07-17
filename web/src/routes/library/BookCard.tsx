@@ -22,7 +22,9 @@ interface BookCardProps {
   book: Book
   onOpen: (id: BookId) => void
   onDelete: (id: BookId) => void
-  /** When provided (AI enabled), shows an "Edit" action on the card. */
+  /** When provided, shows a "Rename" action on the card. */
+  onRename?: (id: BookId) => void
+  /** When provided, shows an "Edit" action on the card. */
   onEdit?: (id: BookId) => void
   /** When provided (AI enabled), shows a "Hints" action on the card. */
   onPronunciation?: (id: BookId) => void
@@ -36,6 +38,7 @@ export function BookCard({
   book,
   onOpen,
   onDelete,
+  onRename,
   onEdit,
   onPronunciation,
   onOutline,
@@ -85,6 +88,19 @@ export function BookCard({
               aria-label={`Generate outline for ${book.title}`}
             >
               <List className="h-4 w-4" /> Outline
+            </button>
+          )}
+          {onRename && (
+            <button
+              type="button"
+              onClick={() => {
+                onRename(book.id)
+                close()
+              }}
+              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
+              aria-label={`Rename ${book.title}`}
+            >
+              <Pencil className="h-4 w-4" /> Rename
             </button>
           )}
           {onEdit && (

@@ -1,4 +1,5 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb'
+import type { AesEnvelope } from '../../lib/crypto/aes'
 import type {
   AudioCacheRecord,
   AudioSegmentRecord,
@@ -17,7 +18,27 @@ import type {
  * v2 (M1): adds `books`, `chapters`, and `files` stores for the ingest pipeline.
  * v3 (M8): adds `audioCache` store for the persistent TTS audio cache.
  * v4 (M9): adds `audioSegments` store for mobile fMP4 streaming segments.
+ * v5 (M9 Path A): adds `bookAudio` store for pre-baked M4A blobs.
+ * v6 (M6.1): adds `secureKeyring` store for biometric-cached API keys
+ *   (ADR-0007). Single record at key `'current'`. Contains only ciphertext +
+ *   salts + WebAuthn credential id — never plaintext.
  */
+export interface SecureKeyringRecord {
+  /** Fixed key — one enrollment at a time. */
+  key: 'current'
+  /** PRF salt fed to {@link deriveKey} to recover the KEK. */
+  salt: Uint8Array
+  /** WebAuthn credential id (base64url) from {@link enrollPrf}. */
+  credentialId: string
+  /** DEK wrapped with the KEK derived from `(credential, salt)`. */
+  wrappedDek: AesEnvelope
+  /** API-key blob (`{ [providerId]: string }` UTF-8 JSON) encrypted with the DEK. */
+  encryptedKeys: AesEnvelope
+  /** Schema version of this record, for future migrations. */
+  version: number
+  createdAt: number
+}
+
 export interface TaleTrekDB extends DBSchema {
   settings: {
     key: string
@@ -59,10 +80,14 @@ export interface TaleTrekDB extends DBSchema {
       createdAt: number
     }
   }
+  secureKeyring: {
+    key: 'current'
+    value: SecureKeyringRecord
+  }
 }
 
 const DB_NAME = 'taletrek'
-const DB_VERSION = 5
+const DB_VERSION = 6
 
 /** Soft cap on the audio cache (M8). ~1,700 paragraphs at ~300 KB/para. */
 export const AUDIO_CACHE_BUDGET_BYTES = 500 * 1024 * 1024
@@ -114,6 +139,12 @@ export function getDB(): Promise<IDBPDatabase<TaleTrekDB>> {
             db.createObjectStore('bookAudio', { keyPath: 'bookId' })
           }
         }
+        // v6 (M6.1): secureKeyring store for biometric-cached API keys (ADR-0007)
+        if (oldVersion < 6) {
+          if (!db.objectStoreNames.contains('secureKeyring')) {
+            db.createObjectStore('secureKeyring', { keyPath: 'key' })
+          }
+        }
       },
     })
   }
@@ -128,16 +159,22 @@ export function _resetDBForTests(): void {
 /** Clear every store — used by the "Delete all data" flow (Settings). */
 export async function clearAllStores(): Promise<void> {
   const db = await getDB()
-  await Promise.all([
-    db.clear('settings'),
-    db.clear('books'),
-    db.clear('chapters'),
-    db.clear('files'),
-    db.clear('audioCache'),
-    db.clear('audioSegments'),
-    db.clear('bookAudio'),
-  ])
+  const present = ALL_STORE_NAMES.filter((s) => db.objectStoreNames.contains(s))
+  await Promise.all(present.map((s) => db.clear(s as (typeof ALL_STORE_NAMES)[number])))
 }
+
+/** All store names the schema knows about — `clearAllStores` skips any that a
+ * stale DB is missing (see {@link deleteBookCascade}). */
+const ALL_STORE_NAMES = [
+  'settings',
+  'books',
+  'chapters',
+  'files',
+  'audioCache',
+  'audioSegments',
+  'bookAudio',
+  'secureKeyring',
+] as const
 
 /** Clear every store — test-only isolation helper. Call after `_resetDBForTests`. */
 export async function _clearDBForTests(): Promise<void> {

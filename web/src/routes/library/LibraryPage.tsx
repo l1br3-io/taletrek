@@ -1,5 +1,6 @@
 import { X } from 'lucide-react'
 import { LibraryList } from './LibraryList'
+import { OutlineSheet } from './OutlineSheet'
 import { PronunciationReview } from './PronunciationReview'
 import { UploadBookModal } from './UploadBookModal'
 import { UploadButton } from './UploadButton'
@@ -22,9 +23,13 @@ export function Library() {
     handleSelect,
     onRunProcess,
     onRunCancel,
+    handleRename,
     handleEdit,
+    outlineBookId,
     handleOutline,
+    handleOutlineAutoDetect,
     handleOutlineAi,
+    handleOutlineClose,
     handlePronunciation,
     onHintsAccept,
     onHintsClose,
@@ -124,6 +129,7 @@ export function Library() {
           onPronunciation={ai.enabled && online ? handlePronunciation : undefined}
           onOutline={handleOutline}
           onResynthesize={synthesizeOnUpload !== 'off' ? handleResynthesize : undefined}
+          onRename={handleRename}
         />
       )}
 
@@ -133,21 +139,21 @@ export function Library() {
       <UploadBookModal
         open={runCtx !== null}
         state={transform.state}
+        defs={ai.transformDefs}
         initialOps={runInitialOps}
-        initialName={runCtx?.book.title}
         onProcess={onRunProcess}
         onCancel={onRunCancel}
         online={online}
-        outline={
-          runCtx
-            ? {
-                state: outline.state,
-                onGenerate: () => void handleOutline(runCtx.book.id),
-                onGenerateAi: engine ? () => void handleOutlineAi(runCtx.book.id) : undefined,
-                format: runCtx.book.format,
-              }
-            : undefined
-        }
+      />
+
+      <OutlineSheet
+        open={outlineBookId !== null}
+        state={outline.state}
+        format={outlineBookId ? (runCtx?.book.format ?? 'txt') : 'txt'}
+        online={online}
+        onAutoDetect={() => void handleOutlineAutoDetect()}
+        onDetectAi={engine ? () => void handleOutlineAi() : undefined}
+        onClose={handleOutlineClose}
       />
 
       {/* Pronunciation review: scans the opening chapter for name/foreign-word

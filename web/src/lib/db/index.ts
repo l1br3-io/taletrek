@@ -42,6 +42,7 @@ export {
   AUDIO_CACHE_BUDGET_BYTES,
   clearAllStores,
   getDB,
+  type SecureKeyringRecord,
   type TaleTrekDB,
 } from './connection'
 export { deleteBookFile, getBookFile, putBookFile } from './files'

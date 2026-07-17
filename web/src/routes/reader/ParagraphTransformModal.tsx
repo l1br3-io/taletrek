@@ -1,15 +1,6 @@
-import {
-  Eraser,
-  FileText,
-  GraduationCap,
-  Languages,
-  Replace,
-  Sparkles,
-  Undo2,
-  WifiOff,
-} from 'lucide-react'
+import { Eraser, Replace, Sparkles, Undo2, WifiOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import type { TransformOp } from '../../lib/ai/types'
+import type { TransformDefinition, TransformOp } from '../../lib/ai/types'
 import type { CaseMode, DeterministicOp } from '../../lib/transforms/deterministic'
 
 interface ParagraphTransformModalProps {
@@ -26,6 +17,8 @@ interface ParagraphTransformModalProps {
   error: string | null
   /** At least one prior transform can be undone. */
   canUndo: boolean
+  /** Available transform definitions (from Settings → AI → Transform options). */
+  defs: TransformDefinition[]
   onApplyAi: (op: TransformOp) => void
   onApplyDeterministic: (op: DeterministicOp) => void
   onUndo: () => void
@@ -53,14 +46,12 @@ export function ParagraphTransformModal({
   aiBusy,
   error,
   canUndo,
+  defs,
   onApplyAi,
   onApplyDeterministic,
   onUndo,
   onClose,
 }: ParagraphTransformModalProps) {
-  const [target, setTarget] = useState('es')
-  const [ratio, setRatio] = useState(0.5)
-  const [level, setLevel] = useState(2)
   const [find, setFind] = useState('')
   const [replace, setReplace] = useState('')
   const [ignoreCase, setIgnoreCase] = useState(false)
@@ -192,81 +183,25 @@ export function ParagraphTransformModal({
                 <WifiOff className="h-3.5 w-3.5 shrink-0" /> AI requires an internet connection.
               </p>
             )}
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={aiBusy || !online}
-                onClick={() => onApplyAi({ kind: 'cleanup' })}
-                className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
-              >
-                <Sparkles className="h-3.5 w-3.5" /> Clean up
-              </button>
-              <button
-                type="button"
-                disabled={aiBusy || !online}
-                onClick={() => onApplyAi({ kind: 'summarize', ratio })}
-                className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
-              >
-                <FileText className="h-3.5 w-3.5" /> Summarize
-              </button>
-              <button
-                type="button"
-                disabled={aiBusy || !online}
-                onClick={() => onApplyAi({ kind: 'simplify', level })}
-                className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
-              >
-                <GraduationCap className="h-3.5 w-3.5" /> Simplify
-              </button>
-              <div className="flex items-center gap-1 text-xs text-muted">
-                <label className="flex items-center gap-1">
-                  lvl
-                  <input
-                    type="range"
-                    min={1}
-                    max={5}
-                    step={1}
-                    value={level}
-                    onChange={(e) => setLevel(Number(e.target.value))}
-                    disabled={!online}
-                    aria-label="Simplify reading level"
-                    className="w-16 accent-accent"
-                  />
-                </label>
+            {defs.length === 0 ? (
+              <p className="text-xs text-muted">
+                No transforms configured. Add transforms in Settings → AI → Transform options.
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {defs.map((def) => (
+                  <button
+                    key={def.id}
+                    type="button"
+                    disabled={aiBusy || !online}
+                    onClick={() => onApplyAi({ defId: def.id, params: {} })}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" /> {def.label}
+                  </button>
+                ))}
               </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                disabled={aiBusy || !online}
-                onClick={() => onApplyAi({ kind: 'translate', target })}
-                className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-soft px-2.5 py-1 text-sm text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
-              >
-                <Languages className="h-3.5 w-3.5" /> Translate
-              </button>
-              <input
-                type="text"
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-                disabled={!online}
-                aria-label="Target language code"
-                placeholder="es"
-                className="w-20 rounded border border-line bg-surface px-2 py-1 text-sm"
-              />
-              <label className="flex items-center gap-1 text-xs text-muted">
-                summarize
-                <input
-                  type="range"
-                  min={0.2}
-                  max={0.8}
-                  step={0.1}
-                  value={ratio}
-                  onChange={(e) => setRatio(Number(e.target.value))}
-                  disabled={!online}
-                  aria-label="Summarize to fraction of length"
-                  className="w-20 accent-accent"
-                />
-              </label>
-            </div>
+            )}
           </section>
         )}
 

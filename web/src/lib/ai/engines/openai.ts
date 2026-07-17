@@ -5,6 +5,7 @@ import type {
   AiOutlineChapter,
   AiTransformEngine,
   PronunciationCandidate,
+  TransformDefinition,
   TransformOp,
 } from '../types'
 import { consumeSse } from './sse'
@@ -13,6 +14,8 @@ export interface CloudConfig {
   providerId: string
   baseUrl: string
   model: string
+  /** Provider's context window size in tokens (used for chunk computation). */
+  contextLimit: number
 }
 
 /** Typed error from the cloud engine. `status` is the HTTP code (or 401/0 for pre-request failures). */
@@ -51,11 +54,20 @@ export class CloudLlmEngine implements AiTransformEngine {
   async transform(
     input: string[],
     op: TransformOp,
+    def: TransformDefinition,
     onProgress?: (fraction: number) => void,
     signal?: AbortSignal,
   ): Promise<string[]> {
     this.requireKey()
-    return runTransform(input, op, this.complete, onProgress, signal)
+    return runTransform(
+      input,
+      def,
+      op.params,
+      this.config.contextLimit,
+      this.complete,
+      onProgress,
+      signal,
+    )
   }
 
   async proposePronunciationHints(

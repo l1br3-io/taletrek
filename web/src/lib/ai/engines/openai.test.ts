@@ -1,10 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearApiKey, setApiKey } from '../keyring'
+import { type TransformDefinition, transformDefId } from '../types'
 import { CloudLlmEngine } from './openai'
 
 const BASE = 'https://api.openai.com/v1'
 const MODEL = 'gpt-4o-mini'
 const PID = 'provider-1'
+const CTX = 32768
+
+const testDef: TransformDefinition = {
+  id: transformDefId('t'),
+  label: 'Test',
+  hint: '',
+  desc: '',
+  systemPrompt: 'Fix.',
+  params: [],
+}
+
+const summarizeDef: TransformDefinition = {
+  id: transformDefId('s'),
+  label: 'Summarise',
+  hint: '',
+  desc: '',
+  systemPrompt: 'Summarise at {{ratio}} ratio.',
+  params: [{ key: 'ratio', type: 'range', label: 'Ratio', default: 0.5 }],
+}
+
+function soloOp(): {
+  defId: ReturnType<typeof transformDefId>
+  params: Record<string, string | number>
+} {
+  return { defId: transformDefId('t'), params: {} }
+}
 
 function sseData(json: unknown): string {
   return `data: ${JSON.stringify(json)}\n\n`
@@ -69,28 +96,46 @@ afterEach(() => {
 describe('CloudLlmEngine.isReady', () => {
   it('reflects key presence + config', async () => {
     clearApiKey(PID)
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
     expect(await engine.isReady()).toBe(false)
     setApiKey(PID, 'sk-x')
     expect(await engine.isReady()).toBe(true)
   })
 
   it('is false without a baseUrl', async () => {
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: '', model: MODEL })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: '',
+      model: MODEL,
+      contextLimit: CTX,
+    })
     expect(await engine.isReady()).toBe(false)
   })
 })
 
 describe('CloudLlmEngine.transform — cleanup', () => {
-  it('issues one completion per paragraph (solo) with correct request shape', async () => {
-    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ok([delta('CLEAN'), DONE]))
+  it('issues one completion per chunk with correct request shape', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+      ok([delta('CLEAN\n\nCLEAN'), DONE]),
+    )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
-    const out = await engine.transform(['p-one', 'p-two'], { kind: 'cleanup' })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
+    const out = await engine.transform(['p-one', 'p-two'], soloOp(), testDef)
 
+    // Both fit in one chunk; model returns two parts → both get CLEAN.
     expect(out).toEqual(['CLEAN', 'CLEAN'])
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
 
     const [url, init] = callN(fetchMock)
     expect(url).toBe(`${BASE}/chat/completions`)
@@ -107,7 +152,8 @@ describe('CloudLlmEngine.transform — cleanup', () => {
     const msgs = body.messages as Array<{ role: string; content: string }>
     expect(msgs[0]?.role).toBe('system')
     expect(msgs[1]?.role).toBe('user')
-    expect(msgs[1]?.content).toBe('p-one')
+    // Both paragraphs fit in one chunk — sent joined.
+    expect(msgs[1]?.content).toBe('p-one\n\np-two')
   })
 
   it('concatenates SSE deltas split across events', async () => {
@@ -116,54 +162,68 @@ describe('CloudLlmEngine.transform — cleanup', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
-    const out = await engine.transform(['x'], { kind: 'cleanup' })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
+    const out = await engine.transform(['x'], soloOp(), testDef)
     expect(out).toEqual(['Hello, world!'])
   })
 
-  it('reports increasing progress ending at 1', async () => {
+  it('reports progress 1 for a single chunk', async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ok([delta('c'), DONE]))
     vi.stubGlobal('fetch', fetchMock)
 
     const fractions: number[] = []
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
-    await engine.transform(['a', 'b', 'c'], { kind: 'cleanup' }, (f) => fractions.push(f))
-    expect(fractions).toEqual([1 / 3, 2 / 3, 1])
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
+    await engine.transform(['a', 'b', 'c'], soloOp(), testDef, (f) => fractions.push(f))
+    expect(fractions).toEqual([1])
   })
 
-  it('keeps the original paragraph when a completion returns empty', async () => {
-    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
-      const user =
-        (JSON.parse(init.body as string) as { messages: { content: string }[] }).messages[1]
-          ?.content ?? ''
-      return ok([delta(user === 'p-one' ? 'CLEANED' : ''), DONE])
-    })
+  it('keeps the original paragraph when a completion returns empty for it', async () => {
+    // Return only one part for two paragraphs — second falls back to original.
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+      ok([delta('CLEANED\n\n'), DONE]),
+    )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
-    const out = await engine.transform(['p-one', 'p-two'], { kind: 'cleanup' })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
+    const out = await engine.transform(['p-one', 'p-two'], soloOp(), testDef)
     expect(out).toEqual(['CLEANED', 'p-two'])
   })
 })
 
 describe('CloudLlmEngine.transform — summarize', () => {
-  it('appends condensed paragraphs (disjoint windows, overlap=0)', async () => {
-    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
-      const user =
-        (JSON.parse(init.body as string) as { messages: { content: string }[] }).messages[1]
-          ?.content ?? ''
-      return ok([delta(`SUM(${user.length})`), DONE])
-    })
+  it('condenses input paragraphs into fewer output paragraphs', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ok([delta('SUM'), DONE]))
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
     const out = await engine.transform(
       Array.from({ length: 25 }, (_, i) => `p${i}`),
-      { kind: 'summarize', ratio: 0.5 },
+      { defId: transformDefId('s'), params: { ratio: 0.5 } },
+      summarizeDef,
     )
-    // windowed(25, 10, 0) → [0,10), [10,20), [20,25) → 3 condensed chunks appended
-    expect(fetchMock).toHaveBeenCalledTimes(3)
-    expect(out.length).toBe(3)
+    // All 25 short paragraphs fit within 1 chunk at contextLimit 32768 → 1 completion, 1 output.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(out.length).toBe(1)
   })
 })
 
@@ -174,8 +234,13 @@ describe('CloudLlmEngine.transform — errors + abort', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
-    await expect(engine.transform(['a'], { kind: 'cleanup' })).rejects.toMatchObject({
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
+    await expect(engine.transform(['a'], soloOp(), testDef)).rejects.toMatchObject({
       name: 'CloudError',
       status: 429,
     })
@@ -183,8 +248,13 @@ describe('CloudLlmEngine.transform — errors + abort', () => {
 
   it('throws CloudError(401) before any request when no key is set', async () => {
     clearApiKey(PID)
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
-    await expect(engine.transform(['a'], { kind: 'cleanup' })).rejects.toMatchObject({
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
+    await expect(engine.transform(['a'], soloOp(), testDef)).rejects.toMatchObject({
       name: 'CloudError',
       status: 401,
     })
@@ -198,11 +268,14 @@ describe('CloudLlmEngine.transform — errors + abort', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
     ac.abort()
-    await expect(
-      engine.transform(['a'], { kind: 'cleanup' }, undefined, ac.signal),
-    ).rejects.toThrow()
+    await expect(engine.transform(['a'], soloOp(), testDef, undefined, ac.signal)).rejects.toThrow()
     expect(callN(fetchMock)[1].signal).toBe(ac.signal)
   })
 
@@ -214,8 +287,9 @@ describe('CloudLlmEngine.transform — errors + abort', () => {
       providerId: PID,
       baseUrl: 'https://api.openai.com/v1///',
       model: MODEL,
+      contextLimit: CTX,
     })
-    await engine.transform(['a'], { kind: 'cleanup' })
+    await engine.transform(['a'], soloOp(), testDef)
     expect(callN(fetchMock)[0]).toBe('https://api.openai.com/v1/chat/completions')
   })
 })
@@ -232,7 +306,12 @@ describe('CloudLlmEngine.proposePronunciationHints', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
     const out = await engine.proposePronunciationHints(['She met Siobhan at the gate.'])
 
     expect(out).toHaveLength(1)
@@ -251,7 +330,12 @@ describe('CloudLlmEngine.proposePronunciationHints', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
     const out = await engine.proposePronunciationHints(['x y'])
     expect(out).toHaveLength(1)
   })
@@ -262,7 +346,12 @@ describe('CloudLlmEngine.proposePronunciationHints', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const engine = new CloudLlmEngine({ providerId: PID, baseUrl: BASE, model: MODEL })
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
     const out = await engine.proposePronunciationHints(['x'])
     expect(out).toEqual([])
   })

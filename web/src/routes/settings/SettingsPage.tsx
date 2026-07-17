@@ -1,4 +1,5 @@
 import { Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import {
   DEFAULT_AI_SETTINGS,
   type SynthMode,
@@ -68,15 +69,24 @@ export function Settings() {
     handleDeleteAllResult,
   } = useSettingsPageState({ audioCacheBudgetMb, setAudioCacheBudgetMb })
 
-  return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <h1 className="flex items-center gap-2 text-xl font-semibold">
-        <span className="text-accent" aria-hidden>
-          ❯
-        </span>
-        Settings
-      </h1>
+  const [activeTab, setActiveTab] = useState<'general' | 'ai'>(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#ai') return 'ai'
+    return 'general'
+  })
 
+  useEffect(() => {
+    const onHash = () => setActiveTab(window.location.hash === '#ai' ? 'ai' : 'general')
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  const switchTab = (tab: 'general' | 'ai') => {
+    setActiveTab(tab)
+    window.location.hash = tab === 'ai' ? '#ai' : ''
+  }
+
+  const generalContent = (
+    <>
       <InstallPrompt />
 
       <SettingsGroup title="Reading">
@@ -319,8 +329,6 @@ export function Settings() {
         )}
       </SettingsGroup>
 
-      <AiSettingsSection ai={ai} onChange={setAi} />
-
       <BackupSection onImported={() => void reloadSettings()} />
 
       <section className="space-y-3 border border-danger/40 bg-surface p-5">
@@ -351,6 +359,40 @@ export function Settings() {
         Settings are stored on this device (IndexedDB) and survive a reload or restart. Voice models
         download once and are cached offline. Nothing leaves your phone.
       </p>
+    </>
+  )
+
+  const TAB = ({ tab }: { tab: 'general' | 'ai' }) => (
+    <button
+      type="button"
+      onClick={() => switchTab(tab)}
+      aria-pressed={activeTab === tab}
+      className={[
+        'rounded-lg px-3 py-1.5 text-sm font-medium transition-colors',
+        activeTab === tab
+          ? 'border border-accent bg-accent-soft text-accent'
+          : 'border border-line text-muted hover:border-muted',
+      ].join(' ')}
+    >
+      {tab === 'ai' ? 'AI' : 'General'}
+    </button>
+  )
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-6">
+      <h1 className="flex items-center gap-2 text-xl font-semibold">
+        <span className="text-accent" aria-hidden>
+          ❯
+        </span>
+        Settings
+      </h1>
+
+      <div className="flex gap-2">
+        <TAB tab="general" />
+        <TAB tab="ai" />
+      </div>
+
+      {activeTab === 'general' ? generalContent : <AiSettingsSection ai={ai} onChange={setAi} />}
     </div>
   )
 }

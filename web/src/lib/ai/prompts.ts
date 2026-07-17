@@ -9,7 +9,7 @@ import type {
   AiOutlineChapter,
   PronunciationCandidate,
   PronunciationCategory,
-  TransformOp,
+  TransformDefinition,
 } from './types'
 
 /**
@@ -75,34 +75,24 @@ export interface CompletionMessages {
   json?: boolean
 }
 
-/** Build the system + user messages for a transform op over a chunk's paragraphs. */
-export function buildTransformMessages(op: TransformOp, paragraphs: string[]): CompletionMessages {
-  const user = paragraphs.join(PARAGRAPH_DELIMITER)
-  switch (op.kind) {
-    case 'cleanup':
-      return {
-        system:
-          'You repair scanned-book text for text-to-speech. Fix OCR errors. Remove inline artifacts: page numbers, running headers/footers, "Chapter N" labels, "|" separators, and stray markup. Repair words broken across a line-end hyphen (join "glimmer-\\ning" into "glimmering"). Return exactly ONE cleaned paragraph per input paragraph, in order, with paragraphs separated by a blank line. Do not add commentary, headings, or markdown. Do not merge or split paragraphs.',
-        user,
-      }
-    case 'translate':
-      return {
-        system: `You are a literary translator. Translate every input paragraph into language "${op.target}". Preserve paragraph order and count, and the meaning and tone. Return exactly ONE translated paragraph per input paragraph, with paragraphs separated by a blank line. No commentary.`,
-        user,
-      }
-    case 'summarize': {
-      const percent = Math.round(op.ratio * 100)
-      return {
-        system: `Summarize the input to about ${percent}% of its length, keeping the key narrative beats and original order. Return the summary as paragraphs separated by blank lines. No commentary.`,
-        user,
-      }
-    }
-    case 'simplify':
-      return {
-        system: `Rewrite each input paragraph at a Grade ${op.level} reading level: simple words, short sentences. Preserve meaning and paragraph order. Return exactly ONE rewritten paragraph per input paragraph, with paragraphs separated by a blank line. No commentary.`,
-        user,
-      }
+/**
+ * Build the system + user messages for a transform definition over a chunk's
+ * paragraphs. The system prompt is the definition's template with `{{key}}`
+ * slots interpolated from the runtime `opParams` (falling back to the param
+ * spec's default value for each declared parameter). The user message is the
+ * chunk's paragraphs joined with blank-line separators.
+ */
+export function buildTransformMessages(
+  def: TransformDefinition,
+  opParams: Record<string, string | number>,
+  paragraphs: string[],
+): CompletionMessages {
+  let system = def.systemPrompt
+  for (const param of def.params) {
+    const value = String(opParams[param.key] ?? param.default)
+    system = system.replaceAll(`{{${param.key}}}`, value)
   }
+  return { system, user: paragraphs.join(PARAGRAPH_DELIMITER) }
 }
 
 /** Build the JSON-mode messages for a pronunciation-hints scan over a sample. */

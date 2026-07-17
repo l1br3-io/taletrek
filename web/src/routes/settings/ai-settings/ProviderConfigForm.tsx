@@ -46,6 +46,9 @@ export function ProviderConfigForm({
   const [keyDraft, setKeyDraft] = useState('')
   const [hasKey, setHasKey] = useState(() => (provider ? !!getApiKey(provider.id) : false))
   const [label, setLabel] = useState(provider?.label ?? '')
+  const [contextLimit, setContextLimit] = useState(
+    provider?.contextLimit ?? preset.defaultContextLimit ?? 32768,
+  )
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null)
   const [testing, setTesting] = useState(false)
   const [showKeyWarning, setShowKeyWarning] = useState(false)
@@ -116,6 +119,7 @@ export function ProviderConfigForm({
       baseUrl,
       model,
       label: label.trim() || undefined,
+      contextLimit,
     }
     onSave(saved)
   }
@@ -336,6 +340,23 @@ export function ProviderConfigForm({
           </span>
         </p>
       )}
+
+      <label className="block space-y-1">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted">
+          Context window (tokens)
+        </span>
+        <input
+          type="number"
+          value={contextLimit}
+          onChange={(e) => setContextLimit(Number(e.target.value))}
+          aria-label="Context window size in tokens"
+          className="w-48 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-mono"
+        />
+        <p className="text-xs text-muted">
+          Used to compute how many paragraphs fit in one API call. Auto-filled from the preset;
+          increase if your model has a larger window.
+        </p>
+      </label>
 
       <div className="flex items-center gap-2">
         <button

@@ -13,6 +13,8 @@ interface LibraryListProps {
   onOutline?: (id: BookId) => void
   /** When provided (synth mode enabled), shows a "Synthesize" action on each card. */
   onResynthesize?: (id: BookId) => void
+  /** When provided, shows a "Rename" action on each card. */
+  onRename?: (id: BookId) => void
 }
 
 export function LibraryList({
@@ -23,6 +25,7 @@ export function LibraryList({
   onPronunciation,
   onOutline,
   onResynthesize,
+  onRename,
 }: LibraryListProps) {
   if (books.length === 0) {
     return (
@@ -49,6 +52,7 @@ export function LibraryList({
           onPronunciation={onPronunciation}
           onOutline={onOutline}
           onResynthesize={onResynthesize}
+          onRename={onRename}
         />
       ))}
     </ul>
