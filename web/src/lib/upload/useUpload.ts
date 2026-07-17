@@ -14,7 +14,12 @@ export function useUploadState(): JobState {
   return useSyncExternalStore(uploadManager.subscribe, uploadManager.getState)
 }
 
-/** Convenience: true while a synthesis job is running (voice download or synth). */
+/** Convenience: true while a synthesis job is running (or tearing down after cancel). */
 export function isJobActive(state: JobState): boolean {
-  return state.type === 'voiceDownload' || state.type === 'synthesizing'
+  return (
+    state.type === 'voiceDownload' ||
+    state.type === 'synthesizing' ||
+    state.type === 'encoding' ||
+    state.type === 'cancelling'
+  )
 }

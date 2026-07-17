@@ -27,6 +27,7 @@ export type JobState =
       mode: JobMode
     }
   | { type: 'encoding'; book: Book; progress?: number; mode: JobMode }
+  | { type: 'cancelling'; book: Book; mode: JobMode }
   | { type: 'done'; book: Book; mode: JobMode }
   | { type: 'error'; book: Book; message: string; mode: JobMode }
 
@@ -89,7 +90,8 @@ class UploadManager {
     return (
       this.state.type === 'voiceDownload' ||
       this.state.type === 'synthesizing' ||
-      this.state.type === 'encoding'
+      this.state.type === 'encoding' ||
+      this.state.type === 'cancelling'
     )
   }
 
@@ -104,7 +106,15 @@ class UploadManager {
   }
 
   cancel(): void {
-    this.abortController?.abort()
+    if (!this.isActive() || !this.abortController) return
+    const { book, mode } = this.state as {
+      book: Book
+      mode: JobMode
+    }
+    // Flip to `cancelling` immediately so the UI can reflect the request
+    // before the in-flight async work observes the abort and resolves.
+    this.setState({ type: 'cancelling', book, mode })
+    this.abortController.abort()
   }
 
   dismiss(): void {
@@ -213,6 +223,13 @@ class UploadManager {
       }
     } finally {
       this.abortController = null
+      // If the user cancelled but an async path didn't observe the abort
+      // (e.g. the encoding phase has unconditional setState calls that may
+      // have run after abort), make sure we don't strand the UI in
+      // `cancelling` forever — force it back to idle.
+      if (this.state.type === 'cancelling') {
+        this.setState({ type: 'idle' })
+      }
     }
   }
 
