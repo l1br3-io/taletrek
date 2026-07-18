@@ -3,8 +3,6 @@ import type { BookFormat } from '../../types'
 export interface ParsedChapter {
   title: string
   paragraphs: string[]
-  /** Per-paragraph max font size (PDF only). Parallel to `paragraphs`. Undefined for non-PDF. */
-  headingSignals?: number[]
 }
 
 export interface ParseResult {
