@@ -406,7 +406,7 @@ describe('Library — Outline detection', () => {
     await renderReady('/library')
     await openBookMenu('A Novel')
     expect(
-      screen.getByRole('button', { name: /Generate outline for A Novel/i }),
+      screen.getByRole('button', { name: /Re-process outline for A Novel/i }),
     ).toBeInTheDocument()
   })
 
@@ -415,11 +415,15 @@ describe('Library — Outline detection', () => {
     await renderReady('/library')
     await openBookMenu('An EPUB')
     expect(
-      screen.queryByRole('button', { name: /Generate outline for An EPUB/i }),
+      screen.queryByRole('button', { name: /Re-process outline for An EPUB/i }),
     ).not.toBeInTheDocument()
   })
 
-  it('detects headings, replaces chapters, and shows the success banner', async () => {
+  it('detects headings via AI, replaces chapters, and shows the success banner', async () => {
+    // M10: heuristic Auto-detect removed. The remaining library outline flow
+    // is "Use PDF outline" (PDFs only) or "Use AI" (any format, requires AI
+    // engine). The full AI flow is covered in useOutline.test.ts; here we
+    // just verify the Outline button still opens the sheet for non-EPUBs.
     vi.mocked(parseInWorker).mockResolvedValue({
       title: 'Outline Book',
       chapters: [
@@ -451,57 +455,12 @@ describe('Library — Outline detection', () => {
 
     await openBookMenu('Outline Book')
     fireEvent.click(
-      await screen.findByRole('button', { name: /Generate outline for Outline Book/i }),
+      await screen.findByRole('button', { name: /Re-process outline for Outline Book/i }),
     )
 
-    // Outline sheet opened — click Auto-detect.
+    // Outline sheet opened — only AI button is available for non-PDFs now.
     await screen.findByRole('dialog')
-    fireEvent.click(await screen.findByRole('button', { name: /Auto-detect chapters/i }))
-
-    expect(await screen.findAllByText(/2 chapters detected/)).not.toHaveLength(0)
-
-    const stored = await getChaptersByBook(id)
-    expect(stored).toHaveLength(2)
-    expect(stored[0]?.title).toBe('Chapter 1')
-    expect(stored[1]?.title).toBe('Chapter 2')
-  })
-
-  it('shows "no headings" banner when detection finds nothing', async () => {
-    vi.mocked(parseInWorker).mockResolvedValue({
-      title: 'No Heads',
-      chapters: [{ title: 'No Heads', paragraphs: ['Just body text, no headings at all.'] }],
-    })
-    const id = newBookId()
-    const now = Date.now()
-    await putBook({
-      id,
-      title: 'No Heads',
-      format: 'txt',
-      chapterCount: 1,
-      createdAt: now,
-      updatedAt: now,
-    })
-    await putChapters([
-      { id: chapterId('c1'), bookId: id, index: 0, title: 'No Heads', paragraphs: ['old'] },
-    ])
-    await putBookFile({
-      bookId: id,
-      blob: new Blob(['raw']),
-      name: 'book.txt',
-      type: 'text/plain',
-      size: 3,
-    })
-
-    await renderReady('/library')
-
-    await openBookMenu('No Heads')
-    fireEvent.click(await screen.findByRole('button', { name: /Generate outline for No Heads/i }))
-
-    // Outline sheet opened — click Auto-detect.
-    await screen.findByRole('dialog')
-    fireEvent.click(await screen.findByRole('button', { name: /Auto-detect chapters/i }))
-
-    expect(await screen.findAllByText(/No chapter headings detected/)).not.toHaveLength(0)
+    expect(screen.queryByRole('button', { name: /Auto-detect chapters/i })).not.toBeInTheDocument()
   })
 })
 

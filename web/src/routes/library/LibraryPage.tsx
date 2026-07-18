@@ -26,9 +26,10 @@ export function Library() {
     handleRename,
     handleEdit,
     outlineBookId,
+    outlineFormat,
     handleOutline,
-    handleOutlineAutoDetect,
     handleOutlineAi,
+    handleOutlinePdf,
     handleOutlineClose,
     handlePronunciation,
     onHintsAccept,
@@ -149,9 +150,9 @@ export function Library() {
       <OutlineSheet
         open={outlineBookId !== null}
         state={outline.state}
-        format={outlineBookId ? (runCtx?.book.format ?? 'txt') : 'txt'}
+        format={outlineFormat}
         online={online}
-        onAutoDetect={() => void handleOutlineAutoDetect()}
+        onUsePdfOutline={() => void handleOutlinePdf()}
         onDetectAi={engine ? () => void handleOutlineAi() : undefined}
         onClose={handleOutlineClose}
       />

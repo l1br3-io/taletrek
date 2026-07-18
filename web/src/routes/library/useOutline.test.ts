@@ -67,130 +67,143 @@ beforeEach(async () => {
   vi.mocked(parseInWorker).mockReset()
 })
 
-describe('useOutline — happy path', () => {
-  it('re-parses, detects headings, writes new chapters, resets position', async () => {
-    const book = makeBook({ position: { chapterIndex: 0, paragraphIndex: 5 } })
-    await seedBook(book, [makeChapter(['stale paragraph'])])
+describe('useOutline — runWithPdfOutline (M10 Tier 1)', () => {
+  it('applies the PDF outline when the parser produces multiple chapters', async () => {
+    const book = makeBook({ format: 'pdf', chapterCount: 1 })
+    await seedBook(book, [makeChapter(['old single-chapter body'])])
 
     vi.mocked(parseInWorker).mockResolvedValue(
-      mockParseResult([
-        {
-          title: 'Test',
-          paragraphs: ['Chapter 1', 'Hello world.', 'Chapter 2', 'Goodbye.'],
-        },
-      ]),
+      mockParseResult(
+        [
+          { title: 'Chapter 1', paragraphs: ['Body of chapter 1.'] },
+          { title: 'Chapter 2', paragraphs: ['Body of chapter 2.'] },
+        ],
+        'My PDF',
+      ),
     )
 
     const { result } = renderHook(() => useOutline())
     expect(result.current.state.type).toBe('idle')
 
     await act(async () => {
-      await result.current.run(book.id)
+      await result.current.runWithPdfOutline(book.id)
     })
 
     expect(result.current.state.type).toBe('done')
     if (result.current.state.type !== 'done') throw new Error('expected done')
-    expect(result.current.state.message).toMatch(/2 chapters detected/)
+    expect(result.current.state.message).toMatch(/PDF outline applied — 2 chapters/)
 
     const stored = await getChaptersByBook(book.id)
     expect(stored).toHaveLength(2)
     expect(stored[0]?.title).toBe('Chapter 1')
-    expect(stored[0]?.paragraphs).toEqual(['Hello world.'])
     expect(stored[1]?.title).toBe('Chapter 2')
-    expect(stored[1]?.paragraphs).toEqual(['Goodbye.'])
 
     const storedBook = await getBook(book.id)
     expect(storedBook?.chapterCount).toBe(2)
     expect(storedBook?.position).toEqual({ chapterIndex: 0, paragraphIndex: 0 })
-    expect(storedBook?.progressFraction).toBe(0)
   })
 
-  it('assigns fresh chapter IDs (old IDs are gone)', async () => {
-    const book = makeBook()
-    const oldChapter = makeChapter(['old'])
-    await seedBook(book, [oldChapter])
+  it('reports "no embedded outline" when the parser produces a single chapter', async () => {
+    const book = makeBook({ format: 'pdf' })
+    await seedBook(book, [makeChapter(['unchanged'])])
 
     vi.mocked(parseInWorker).mockResolvedValue(
-      mockParseResult([{ title: 'Test', paragraphs: ['Chapter 1', 'Body.'] }]),
+      mockParseResult([{ title: 'My PDF', paragraphs: ['just body, no outline'] }]),
     )
 
     const { result } = renderHook(() => useOutline())
     await act(async () => {
-      await result.current.run(book.id)
-    })
-
-    const stored = await getChaptersByBook(book.id)
-    expect(stored).toHaveLength(1)
-    expect(stored[0]?.id).not.toBe(oldChapter.id)
-  })
-})
-
-describe('useOutline — no detection', () => {
-  it('reports done with "no headings" when none are found, leaves chapters unchanged', async () => {
-    const book = makeBook()
-    const original = makeChapter(['Just some body text without headings.'])
-    await seedBook(book, [original])
-
-    vi.mocked(parseInWorker).mockResolvedValue(
-      mockParseResult([{ title: 'Test', paragraphs: ['Just some body text without headings.'] }]),
-    )
-
-    const { result } = renderHook(() => useOutline())
-    await act(async () => {
-      await result.current.run(book.id)
+      await result.current.runWithPdfOutline(book.id)
     })
 
     expect(result.current.state.type).toBe('done')
     if (result.current.state.type !== 'done') throw new Error('expected done')
-    expect(result.current.state.message).toMatch(/No chapter headings/)
+    expect(result.current.state.message).toMatch(/no embedded outline/i)
 
     const stored = await getChaptersByBook(book.id)
     expect(stored).toHaveLength(1)
-    expect(stored[0]?.id).toBe(original.id)
-    expect(stored[0]?.paragraphs).toEqual(['Just some body text without headings.'])
+    expect(stored[0]?.paragraphs).toEqual(['unchanged'])
   })
 
-  it('does not detect when the parse already yields multiple chapters (EPUB)', async () => {
-    const book = makeBook({ format: 'epub', chapterCount: 2 })
-    await seedBook(book, [
-      makeChapter(['Body 1.'], { index: 0 }),
-      makeChapter(['Body 2.'], { index: 1, id: chapterId('ch-2') }),
-    ])
-
-    vi.mocked(parseInWorker).mockResolvedValue(
-      mockParseResult([
-        { title: 'Chapter 1', paragraphs: ['Body 1.'] },
-        { title: 'Chapter 2', paragraphs: ['Body 2.'] },
-      ]),
-    )
-
-    const { result } = renderHook(() => useOutline())
-    await act(async () => {
-      await result.current.run(book.id)
-    })
-
-    expect(result.current.state.type).toBe('done')
-    if (result.current.state.type !== 'done') throw new Error('expected done')
-    expect(result.current.state.message).toMatch(/No chapter headings/)
-  })
-})
-
-describe('useOutline — errors', () => {
   it('reaches error when the original file is evicted', async () => {
-    const book = makeBook()
+    const book = makeBook({ format: 'pdf' })
     await putBook(book)
     await putChapters([makeChapter(['body'])])
-    // No putBookFile — file is missing
 
     const { result } = renderHook(() => useOutline())
     await act(async () => {
-      await result.current.run(book.id)
+      await result.current.runWithPdfOutline(book.id)
     })
 
     expect(result.current.state.type).toBe('error')
     if (result.current.state.type === 'error') {
       expect(result.current.state.message).toMatch(/Original file/)
     }
+  })
+})
+
+describe('useOutline — runWithAi flattens Tier-1 multi-chapter input (M10)', () => {
+  it('feeds AI a flat paragraph list when parser produced multiple chapters', async () => {
+    const book = makeBook({ format: 'pdf', chapterCount: 3 })
+    await seedBook(book, [
+      makeChapter(['stale'], { index: 0 }),
+      makeChapter(['stale'], { index: 1, id: chapterId('ch-2') }),
+      makeChapter(['stale'], { index: 2, id: chapterId('ch-3') }),
+    ])
+
+    vi.mocked(parseInWorker).mockResolvedValue(
+      mockParseResult(
+        [
+          { title: 'Front Matter', paragraphs: ['intro paragraph'] },
+          { title: 'Chapter 1', paragraphs: ['body one', 'body two'] },
+          { title: 'Chapter 2', paragraphs: ['body three'] },
+        ],
+        'My PDF',
+      ),
+    )
+
+    const detect = vi.fn(async (_paragraphs: string[]) => [
+      { paragraphIndex: 1, title: 'Chapter 1' },
+      { paragraphIndex: 3, title: 'Chapter 2' },
+    ])
+
+    const { result } = renderHook(() => useOutline())
+    await act(async () => {
+      await result.current.runWithAi(book.id, detect)
+    })
+
+    // detect received the flattened paragraph list (4 paragraphs total)
+    expect(detect).toHaveBeenCalledTimes(1)
+    expect(detect.mock.calls[0]?.[0]).toEqual([
+      'intro paragraph',
+      'body one',
+      'body two',
+      'body three',
+    ])
+
+    const stored = await getChaptersByBook(book.id)
+    expect(stored.length).toBe(2)
+    expect(stored[0]?.title).toBe('Chapter 1')
+    expect(stored[1]?.title).toBe('Chapter 2')
+  })
+
+  it('reports "no chapter headings" when AI returns empty', async () => {
+    const book = makeBook()
+    await seedBook(book, [makeChapter(['just body'])])
+
+    vi.mocked(parseInWorker).mockResolvedValue(
+      mockParseResult([{ title: 'Test', paragraphs: ['just body'] }]),
+    )
+
+    const detect = vi.fn(async () => [])
+    const { result } = renderHook(() => useOutline())
+    await act(async () => {
+      await result.current.runWithAi(book.id, detect)
+    })
+
+    expect(result.current.state.type).toBe('done')
+    if (result.current.state.type !== 'done') throw new Error('expected done')
+    expect(result.current.state.message).toMatch(/AI found no chapter headings/i)
   })
 
   it('reaches error when parseInWorker throws', async () => {
@@ -201,7 +214,7 @@ describe('useOutline — errors', () => {
 
     const { result } = renderHook(() => useOutline())
     await act(async () => {
-      await result.current.run(book.id)
+      await result.current.runWithAi(book.id, vi.fn())
     })
 
     expect(result.current.state.type).toBe('error')
@@ -212,8 +225,8 @@ describe('useOutline — errors', () => {
 })
 
 describe('useOutline — re-entrancy guard', () => {
-  it('ignores a second run call while one is in flight', async () => {
-    const book = makeBook()
+  it('ignores a second runWithPdfOutline call while one is in flight', async () => {
+    const book = makeBook({ format: 'pdf' })
     await seedBook(book, [makeChapter(['body'])])
 
     let resolveParse: (() => void) | null = null
@@ -221,27 +234,29 @@ describe('useOutline — re-entrancy guard', () => {
       () =>
         new Promise((resolve) => {
           resolveParse = () =>
-            resolve(mockParseResult([{ title: 'T', paragraphs: ['Chapter 1', 'x'] }]))
+            resolve(
+              mockParseResult([
+                { title: 'C1', paragraphs: ['x'] },
+                { title: 'C2', paragraphs: ['y'] },
+              ]),
+            )
         }),
     )
 
     const { result } = renderHook(() => useOutline())
     let firstRun!: Promise<boolean>
     act(() => {
-      firstRun = result.current.run(book.id)
+      firstRun = result.current.runWithPdfOutline(book.id)
     })
-    // Wait for running state
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
     })
     expect(result.current.state.type).toBe('running')
 
-    // Second call should be a no-op
     await act(async () => {
-      await result.current.run(book.id)
+      await result.current.runWithPdfOutline(book.id)
     })
 
-    // Resolve the first run
     await act(async () => {
       resolveParse?.()
       await firstRun

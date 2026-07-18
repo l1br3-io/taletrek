@@ -28,7 +28,7 @@ interface BookCardProps {
   onEdit?: (id: BookId) => void
   /** When provided (AI enabled), shows a "Hints" action on the card. */
   onPronunciation?: (id: BookId) => void
-  /** When provided, shows an "Outline" action (hidden for EPUB — already has TOC). */
+  /** When provided, shows a "Re-process outline" action (hidden for EPUB — already has TOC). */
   onOutline?: (id: BookId) => void
   /** When provided (synth mode enabled), shows a "Synthesize" action on the card. */
   onResynthesize?: (id: BookId) => void
@@ -85,9 +85,9 @@ export function BookCard({
                 close()
               }}
               className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
-              aria-label={`Generate outline for ${book.title}`}
+              aria-label={`Re-process outline for ${book.title}`}
             >
-              <List className="h-4 w-4" /> Outline
+              <List className="h-4 w-4" /> Re-process outline
             </button>
           )}
           {onRename && (

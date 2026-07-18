@@ -11,7 +11,7 @@ import { ingestBook } from '../../lib/ingest'
 import { reparseChapters } from '../../lib/reprocess'
 import { uploadManager } from '../../lib/upload/manager'
 import { isJobActive, useUploadState } from '../../lib/upload/useUpload'
-import type { Book, BookId, Chapter } from '../../types'
+import type { Book, BookFormat, BookId, Chapter } from '../../types'
 import { useAiTransform } from './useAiTransform'
 import { useOutline } from './useOutline'
 import { usePronunciationHints } from './usePronunciationHints'
@@ -58,6 +58,7 @@ export function useLibraryState() {
   const [hintsTitle, setHintsTitle] = useState<string | null>(null)
   const [parseState, setParseState] = useState<ParseState>({ type: 'idle' })
   const [outlineBookId, setOutlineBookId] = useState<BookId | null>(null)
+  const [outlineFormat, setOutlineFormat] = useState<BookFormat>('txt')
 
   const jobState = useUploadState()
   const uploadBusy = isJobActive(jobState)
@@ -188,19 +189,14 @@ export function useLibraryState() {
   )
 
   const handleOutline = useCallback(
-    (id: BookId): void => {
+    async (id: BookId): Promise<void> => {
       outline.reset()
+      const book = await getBook(id)
+      setOutlineFormat(book?.format ?? 'txt')
       setOutlineBookId(id)
     },
     [outline],
   )
-
-  const handleOutlineAutoDetect = useCallback(async (): Promise<void> => {
-    if (!outlineBookId) return
-    const changed = await outline.run(outlineBookId)
-    if (!changed) return
-    await refreshRunCtxAfterOutline(outlineBookId)
-  }, [outline, outlineBookId, refreshRunCtxAfterOutline])
 
   const handleOutlineAi = useCallback(async (): Promise<void> => {
     if (!outlineBookId) return
@@ -212,6 +208,14 @@ export function useLibraryState() {
     if (!changed) return
     await refreshRunCtxAfterOutline(outlineBookId)
   }, [outline, engine, outlineBookId, refreshRunCtxAfterOutline])
+
+  const handleOutlinePdf = useCallback(async (): Promise<void> => {
+    if (!outlineBookId) return
+    outline.reset()
+    const changed = await outline.runWithPdfOutline(outlineBookId)
+    if (!changed) return
+    await refreshRunCtxAfterOutline(outlineBookId)
+  }, [outline, outlineBookId, refreshRunCtxAfterOutline])
 
   const handleOutlineClose = useCallback((): void => {
     outline.reset()
@@ -314,9 +318,10 @@ export function useLibraryState() {
     handleRename,
     handleEdit,
     outlineBookId,
+    outlineFormat,
     handleOutline,
-    handleOutlineAutoDetect,
     handleOutlineAi,
+    handleOutlinePdf,
     handleOutlineClose,
     handlePronunciation,
     onHintsAccept,
