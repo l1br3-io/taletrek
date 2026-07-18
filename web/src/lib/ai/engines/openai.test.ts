@@ -294,6 +294,44 @@ describe('CloudLlmEngine.transform — errors + abort', () => {
   })
 })
 
+describe('CloudLlmEngine.transform — streaming onDelta', () => {
+  it('invokes onDelta with accumulated text + delta for each SSE event', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+      ok([delta('Hello'), delta(', '), delta('world!'), DONE]),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
+    const seen: Array<{ soFar: string; delta: string }> = []
+    await engine.transform(['x'], soloOp(), testDef, undefined, undefined, (soFar, d) =>
+      seen.push({ soFar, delta: d }),
+    )
+    expect(seen).toEqual([
+      { soFar: 'Hello', delta: 'Hello' },
+      { soFar: 'Hello, ', delta: ', ' },
+      { soFar: 'Hello, world!', delta: 'world!' },
+    ])
+  })
+
+  it('does not call onDelta when omitted (no crash)', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ok([delta('Hello'), DONE]))
+    vi.stubGlobal('fetch', fetchMock)
+    const engine = new CloudLlmEngine({
+      providerId: PID,
+      baseUrl: BASE,
+      model: MODEL,
+      contextLimit: CTX,
+    })
+    const out = await engine.transform(['x'], soloOp(), testDef)
+    expect(out).toEqual(['Hello'])
+  })
+})
+
 describe('CloudLlmEngine.proposePronunciationHints', () => {
   it('requests JSON mode and parses candidates', async () => {
     const payload = {

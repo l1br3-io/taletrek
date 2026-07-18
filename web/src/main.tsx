@@ -8,11 +8,6 @@ import { requestPersistence } from './lib/storage'
 import { reconcileInterruptedUploads } from './lib/upload/boot-sweep'
 import './styles/index.css'
 
-// Debug: inject vConsole on touch devices (M9 iOS testing)
-if (matchMedia('(pointer: coarse)').matches) {
-  import('vconsole').then(({ default: VConsole }) => new VConsole())
-}
-
 const router = createBrowserRouter(routes)
 
 const root = document.getElementById('root')

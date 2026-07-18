@@ -225,6 +225,21 @@ function ReaderPane({
     onPause: player.pause,
   })
 
+  // Esc-to-abort-stream: when no modal is open (modals own their own Esc
+  // handler that closes them), Esc aborts an in-flight AI stream. Priority is
+  // intentional — modals mount their keydown listener above this one when open.
+  useEffect(() => {
+    if (transform.transformOpen || !transform.stream) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        transform.stopAi()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [transform.transformOpen, transform.stream, transform.stopAi])
+
   // --- Progress persistence (debounced + unmount flush) ---
   useProgressPersistence({
     bookId: book.id,
@@ -246,6 +261,8 @@ function ReaderPane({
         pulseParagraphId={pulseId}
         onPulseEnd={() => setPulseId(null)}
         bufferedParagraphIds={bufferedParagraphIds}
+        stream={transform.stream}
+        onStopStream={transform.stopAi}
       />
       <PlayerBar
         status={player.status}

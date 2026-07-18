@@ -139,6 +139,11 @@ export interface AiTransformEngine {
    * windowed-10-0 may reduce — callers handle the difference). Reports progress
    * 0..1 per chunk.
    *
+   * `onDelta` (optional) fires for each incremental SSE token with the
+   * accumulated text-so-far and the new delta. Callers use this to render
+   * streaming UI; the engine still resolves with the final reassembled array.
+   * Per-chunk: `textSoFar` resets at the start of each chunk's `complete` call.
+   *
    * Abort: honours `signal` directly (AbortController on `fetch`).
    */
   transform(
@@ -147,6 +152,7 @@ export interface AiTransformEngine {
     def: TransformDefinition,
     onProgress?: (fraction: number) => void,
     signal?: AbortSignal,
+    onDelta?: (textSoFar: string, delta: string) => void,
   ): Promise<string[]>
   /**
    * Scan a sample (first chapter) for pronunciation candidates. Does not mutate

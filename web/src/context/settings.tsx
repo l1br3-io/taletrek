@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useEffect, useState } from 'react'
+import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import type { AiSettings, CloudProvider } from '../lib/ai/types'
 import type { CleaningConfig } from '../lib/clean/types'
 import { getSetting, setSetting, syncAudioCacheBudget } from '../lib/db'
@@ -32,6 +32,8 @@ export interface Settings {
   synthesizeOnUpload: SynthMode
   /** Audio cache budget in megabytes. Drives LRU eviction in the `audioCache` store (only when mode is `'standard'`). */
   audioCacheBudgetMb: number
+  /** Show the vConsole mobile-debug overlay (M9 iOS testing). Off by default. */
+  vConsoleEnabled: boolean
 }
 
 export const DEFAULT_CLEANING: CleaningConfig = {
@@ -57,6 +59,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ai: DEFAULT_AI_SETTINGS,
   synthesizeOnUpload: 'standard',
   audioCacheBudgetMb: 500,
+  vConsoleEnabled: false,
 }
 
 const SETTINGS_KEY = 'app'
@@ -174,6 +177,28 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     document.documentElement.dataset.theme = settings.theme
     document.documentElement.style.setProperty('--font-scale', String(settings.fontScale))
   }, [settings])
+
+  // Mount/unmount the vConsole debug overlay reactively. The dynamic import
+  // keeps vConsole (~50 KB) out of the main bundle unless explicitly enabled.
+  const vConsoleRef = useRef<{ destroy?: () => void } | null>(null)
+  useEffect(() => {
+    if (!settings.vConsoleEnabled) {
+      vConsoleRef.current?.destroy?.()
+      vConsoleRef.current = null
+      return
+    }
+    if (vConsoleRef.current) return
+    let cancelled = false
+    void import('vconsole').then(({ default: VConsole }) => {
+      if (cancelled) return
+      vConsoleRef.current = new VConsole() as { destroy?: () => void }
+    })
+    return () => {
+      cancelled = true
+      vConsoleRef.current?.destroy?.()
+      vConsoleRef.current = null
+    }
+  }, [settings.vConsoleEnabled])
 
   async function update(patch: Partial<Settings>): Promise<void> {
     const next = { ...settings, ...patch }

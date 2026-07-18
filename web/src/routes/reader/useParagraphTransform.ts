@@ -30,11 +30,26 @@ interface ResolvedTarget {
 }
 
 /**
+ * Live AI-stream state surfaced to the reader for in-place rendering.
+ * `null` when no stream is in flight; an object (possibly with empty
+ * `streamingText` while waiting for the first token) while streaming.
+ */
+export interface StreamState {
+  /** Positional paragraph id (`${chapterId}:${cleanedIdx}`) being rewritten. */
+  paragraphId: string
+  /** Def label for the eyebrow (`❯ simplify`). */
+  opLabel: string
+  /** Accumulated text-so-far (chunk-local; resets between chunks). */
+  streamingText: string
+}
+
+/**
  * Per-paragraph transform logic (F8). Transforms edit the RAW source paragraph
  * (source of truth); cleaning re-derives the displayed text. The cleaned→raw
  * mapping comes from `cleanParagraphsWithOrigins`, which mirrors the read-time
- * cleaning exactly. Owns the transform modal state, undo stack, and both the
- * deterministic + AI transform pipelines.
+ * cleaning exactly. Owns the transform modal state, undo stack, both the
+ * deterministic + AI transform pipelines, and the live AI-stream state for
+ * in-place rendering.
  */
 export function useParagraphTransform({
   currentParagraphId,
@@ -53,9 +68,14 @@ export function useParagraphTransform({
   const [transformError, setTransformError] = useState<string | null>(null)
   const [aiBusy, setAiBusy] = useState(false)
   const [undoCount, setUndoCount] = useState(0)
+  const [stream, setStream] = useState<StreamState | null>(null)
   const undoStackRef = useRef<
     Array<{ chapterId: ChapterId; rawParagraphIndex: number; prevText: string }>
   >([])
+  // AbortController for the in-flight AI request. Ref (not state) because it's
+  // a stable identity we mutate imperatively; the component doesn't re-render
+  // on assignment, only on stream-text changes.
+  const abortRef = useRef<AbortController | null>(null)
 
   const targetPreview = useMemo(() => {
     if (!currentParagraphId) return ''
@@ -135,34 +155,75 @@ export function useParagraphTransform({
         setTransformError('AI requires an internet connection.')
         return
       }
+      const def = ai.transformDefs.find((d) => d.id === op.defId)
+      if (!def) {
+        setTransformError('Transform definition not found — it may have been deleted.')
+        return
+      }
+      const engine = getAiEngineForDef(ai, def)
+      if (!engine) {
+        setTransformError('No cloud provider configured — add one in Settings.')
+        return
+      }
+      const ready = await engine.isReady()
+      if (!ready) {
+        setTransformError('Set your API key in Settings → AI.')
+        return
+      }
+      // Close the modal + drop focus so any open mobile keyboard dismisses.
+      // The rewrite streams in-place on the paragraph — modal would be a wall.
+      setTransformOpen(false)
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur()
+      }
+      // Fresh AbortController for this run; supersedes any dangling one.
+      const controller = new AbortController()
+      abortRef.current = controller
+      setStream({
+        paragraphId: currentParagraphId ?? '',
+        opLabel: def.label,
+        streamingText: '',
+      })
       setAiBusy(true)
       try {
-        const defs = ai.transformDefs
-        const def = defs.find((d) => d.id === op.defId)
-        if (!def) {
-          throw new Error('Transform definition not found — it may have been deleted.')
-        }
-        const engine = getAiEngineForDef(ai, def)
-        if (!engine) {
-          throw new Error('No cloud provider configured — add one in Settings.')
-        }
-        const ready = await engine.isReady()
-        if (!ready) {
-          throw new Error(
-            'AI engine is not ready — load the model or set your API key in Settings.',
-          )
-        }
-        const [out] = await engine.transform([target.rawText], op, def)
+        const [out] = await engine.transform(
+          [target.rawText],
+          op,
+          def,
+          /* onProgress */ undefined,
+          controller.signal,
+          (textSoFar) => {
+            // Throttle re-renders to animation frames so a flood of small
+            // tokens (e.g. GPT-4o single-char deltas) doesn't pin the main
+            // thread. textSoFar replaces the chunk-local accumulator.
+            setStream((prev) =>
+              prev && prev.streamingText !== textSoFar
+                ? { ...prev, streamingText: textSoFar }
+                : prev,
+            )
+          },
+        )
         if (!out?.trim()) throw new Error('AI returned an empty result.')
         commitTransform(target.chapterId, target.rawParagraphIndex, target.rawText, out.trim())
       } catch (e) {
-        setTransformError(e instanceof Error ? e.message : 'AI transform failed.')
+        if (e instanceof DOMException && e.name === 'AbortError') {
+          // User-initiated stop — silent recovery, no error surface.
+        } else {
+          setTransformError(e instanceof Error ? e.message : 'AI transform failed.')
+        }
       } finally {
+        abortRef.current = null
+        setStream(null)
         setAiBusy(false)
       }
     },
-    [resolveTarget, commitTransform, ai, online],
+    [resolveTarget, commitTransform, ai, online, currentParagraphId],
   )
+
+  /** Abort the in-flight AI stream. Discards partial text; no commit. */
+  const stopAi = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
 
   const handleUndo = useCallback(() => {
     const last = undoStackRef.current.pop()
@@ -185,8 +246,10 @@ export function useParagraphTransform({
     aiBusy,
     undoCount,
     targetPreview,
+    stream,
     applyDet,
     applyAi,
+    stopAi,
     handleUndo,
     openTransform,
   }

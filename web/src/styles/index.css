@@ -151,3 +151,28 @@ body {
     animation: none;
   }
 }
+
+/*
+ * AI-transform streaming marker. Distinct from both the active-paragraph
+ * highlight (soft fill + ring) and the outline-nav arrival (transient glow):
+ * a hairline accent bar down the left edge, persisted for the duration of the
+ * stream, then fading back to transparent on commit so the rewrite "sets in
+ * place". The `pl-3 -ml-3` pair pulls the paragraph 12px wider than its
+ * column so the accent bar sits in the gutter without shifting the text. The
+ * 200ms border-color transition is the only animation — the cursor itself
+ * blinks via `.tt-cursor` above (already reduced-motion safe).
+ */
+.tt-streaming {
+  border-left: 2px solid var(--tt-accent);
+  padding-left: 0.75rem;
+  margin-left: -0.75rem;
+  transition:
+    border-color 200ms ease,
+    padding-left 200ms ease,
+    margin-left 200ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tt-streaming {
+    transition: none;
+  }
+}
