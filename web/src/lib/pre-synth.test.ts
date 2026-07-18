@@ -29,7 +29,12 @@ function makeStubEngine(opts: {
     async download() {},
     async synthesize(req: SynthesisRequest): Promise<SynthesisResult> {
       synthCalls.push(req)
-      const result = opts.synthResults?.[callIdx] ?? { audio: new Blob(['x']), synthMs: 100 }
+      const result = opts.synthResults?.[callIdx] ?? {
+        audio: new Blob(['x']),
+        synthMs: 100,
+        durationSeconds: 1,
+        cacheKey: 'k',
+      }
       callIdx++
       return result
     },
@@ -81,8 +86,8 @@ describe('preSynthesizeBook', () => {
     const chapters = makeChapters([['A.', 'B.']])
     const engine = makeStubEngine({
       synthResults: [
-        { audio: new Blob(['x']), synthMs: 0 },
-        { audio: new Blob(['y']), synthMs: 500 },
+        { audio: new Blob(['x']), synthMs: 0, durationSeconds: 1, cacheKey: 'a' },
+        { audio: new Blob(['y']), synthMs: 500, durationSeconds: 1, cacheKey: 'b' },
       ],
     })
     const result = await preSynthesizeBook({

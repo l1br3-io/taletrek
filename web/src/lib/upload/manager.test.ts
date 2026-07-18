@@ -7,9 +7,15 @@ import type { WakeLockHandle } from '../wake-lock'
 import { type JobState, uploadManager } from './manager'
 import { useUploadState } from './useUpload'
 
-const synthMock = vi.fn<(...args: unknown[]) => Promise<{ audio: Blob; synthMs: number }>>()
+const synthMock =
+  vi.fn<
+    (
+      ...args: unknown[]
+    ) => Promise<{ audio?: Blob; synthMs: number; durationSeconds: number; cacheKey: string }>
+  >()
 const isStoredMock = vi.fn<(...args: unknown[]) => Promise<boolean>>()
 const downloadMock = vi.fn<(...args: unknown[]) => Promise<void>>()
+const putBookAudioMock = vi.fn<(...args: unknown[]) => Promise<void>>()
 const acquireUploadWakeLock = vi.fn<() => Promise<WakeLockHandle>>()
 const wakeLockRelease = vi.fn<() => Promise<void>>()
 
@@ -20,6 +26,29 @@ vi.mock('../tts/client', () => ({
     synthesize: (...args: unknown[]) => synthMock(...args),
     listVoices: async () => [],
     remove: async () => {},
+  },
+}))
+
+vi.mock('../book-audio', () => ({
+  putBookAudio: (...args: unknown[]) => putBookAudioMock(...args),
+  getBookAudio: async () => undefined,
+}))
+
+const loadCoreMock = vi.fn<(...args: unknown[]) => Promise<void>>()
+const concatMock =
+  vi.fn<
+    (...args: unknown[]) => Promise<{
+      m4a: ArrayBuffer
+      paragraphOffsets: number[]
+      durations: number[]
+      duration: number
+    }>
+  >()
+
+vi.mock('../audio/concat-client', () => ({
+  concatClient: {
+    loadCore: (...args: unknown[]) => loadCoreMock(...args),
+    concat: (...args: unknown[]) => concatMock(...args),
   },
 }))
 
@@ -58,21 +87,54 @@ const idleCleaning = {
   pronunciation: [],
 }
 
+function stubMobilePointer(isMobile: boolean): void {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: isMobile && query === '(pointer: coarse)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  )
+}
+
 beforeEach(async () => {
   _resetDBForTests()
   await _clearDBForTests()
   synthMock.mockReset()
   isStoredMock.mockReset()
   downloadMock.mockReset()
+  putBookAudioMock.mockReset()
+  loadCoreMock.mockReset()
+  concatMock.mockReset()
   acquireUploadWakeLock.mockReset()
   wakeLockRelease.mockReset()
   isStoredMock.mockResolvedValue(true)
-  synthMock.mockResolvedValue({ audio: new Blob(['x']), synthMs: 100 })
+  putBookAudioMock.mockResolvedValue(undefined)
+  loadCoreMock.mockResolvedValue(undefined)
+  concatMock.mockResolvedValue({
+    m4a: new ArrayBuffer(8),
+    paragraphOffsets: [0],
+    durations: [1],
+    duration: 1,
+  })
+  synthMock.mockResolvedValue({
+    audio: new Blob(['x']),
+    synthMs: 100,
+    durationSeconds: 1,
+    cacheKey: 'k',
+  })
   acquireUploadWakeLock.mockResolvedValue({ release: wakeLockRelease })
   uploadManager._resetForTests()
 })
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   uploadManager._resetForTests()
 })
 
@@ -120,7 +182,9 @@ describe('uploadManager', () => {
     synthMock.mockImplementation(
       () =>
         new Promise((res) => {
-          gates.push(() => res({ audio: new Blob(['x']), synthMs: 50 }))
+          gates.push(() =>
+            res({ audio: new Blob(['x']), synthMs: 50, durationSeconds: 1, cacheKey: 'k' }),
+          )
         }),
     )
     uploadManager.startJob({
@@ -162,7 +226,8 @@ describe('uploadManager', () => {
     synthMock.mockImplementation(
       () =>
         new Promise((res) => {
-          resolveFirst = () => res({ audio: new Blob(['x']), synthMs: 1 })
+          resolveFirst = () =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' })
         }),
     )
     uploadManager.startJob({
@@ -316,7 +381,9 @@ describe('uploadManager', () => {
     synthMock.mockImplementation(
       () =>
         new Promise((res) => {
-          gates.push(() => res({ audio: new Blob(['x']), synthMs: 50 }))
+          gates.push(() =>
+            res({ audio: new Blob(['x']), synthMs: 50, durationSeconds: 1, cacheKey: 'k' }),
+          )
         }),
     )
     uploadManager.startJob({
@@ -337,6 +404,87 @@ describe('uploadManager', () => {
       const req = call[0] as { voiceId: string }
       expect(req.voiceId).toBe('en_US-hfc_female-medium')
     }
+  })
+
+  it('keeps the book and offers retry on transient initial storage errors', async () => {
+    const book = makeBook('Storage Pressure')
+    await putBook(book)
+    synthMock.mockRejectedValue(new DOMException('quota exceeded', 'QuotaExceededError'))
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    const state = await vi.waitFor(() => {
+      const s = uploadManager.getState()
+      expect(s.type).toBe('error')
+      return s as Extract<JobState, { type: 'error' }>
+    })
+    expect(state.mode).toBe('initial')
+    expect(state.retryable).toBe(true)
+    expect(uploadManager.canRetry()).toBe(true)
+    // Book is preserved and uploading flag is cleared.
+    const saved = await getBook(book.id)
+    expect(saved).toBeDefined()
+    expect(saved?.uploading).toBeUndefined()
+  })
+
+  it('skips mobile encode for books that would exceed the size cap', async () => {
+    stubMobilePointer(true)
+    const book = makeBook('Huge Book')
+    await putBook(book)
+    // Each paragraph reports ~8h of audio → >200 MB m4a estimate.
+    synthMock.mockResolvedValue({
+      audio: new Blob(['x']),
+      synthMs: 100,
+      durationSeconds: 30_000,
+      cacheKey: 'k',
+    })
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
+    expect(putBookAudioMock).not.toHaveBeenCalled()
+    const saved = await getBook(book.id)
+    expect(saved?.uploading).toBeUndefined()
+  })
+
+  it('retries putBookAudio once on quota and skips encode if quota persists', async () => {
+    stubMobilePointer(true)
+    const book = makeBook('Quota Book')
+    await putBook(book)
+    putBookAudioMock.mockRejectedValue(new DOMException('quota exceeded', 'QuotaExceededError'))
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
+    expect(putBookAudioMock).toHaveBeenCalledTimes(2)
+    const saved = await getBook(book.id)
+    expect(saved?.uploading).toBeUndefined()
+  })
+
+  it('recovers mobile encode when putBookAudio quota clears on retry', async () => {
+    stubMobilePointer(true)
+    const book = makeBook('Recovering Book')
+    await putBook(book)
+    putBookAudioMock
+      .mockRejectedValueOnce(new DOMException('quota exceeded', 'QuotaExceededError'))
+      .mockResolvedValueOnce(undefined)
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
+    expect(putBookAudioMock).toHaveBeenCalledTimes(2)
   })
 })
 

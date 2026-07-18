@@ -38,6 +38,7 @@ export function GlobalUploadBanner() {
 
   if (state.type === 'error') {
     const isResynth = state.mode === 'resynth'
+    const canRetry = isResynth || state.retryable
     return (
       <div
         role="alert"
@@ -46,10 +47,12 @@ export function GlobalUploadBanner() {
         <span className="text-sm">
           {isResynth
             ? `Couldn't update audio for “${state.book.title}”. Your text is safe — retry when ready.`
-            : `Synthesis failed for “${state.book.title}”.`}
+            : canRetry
+              ? `Synthesis failed for “${state.book.title}”. Your book is safe — retry when ready.`
+              : `Synthesis failed for “${state.book.title}”.`}
         </span>
         <div className="flex items-center gap-3">
-          {isResynth && (
+          {canRetry && (
             <button
               type="button"
               onClick={() => uploadManager.retry()}

@@ -1,6 +1,4 @@
 import type { BookId, Chapter, VoiceId } from '../types'
-import { parseWavDuration } from './audio/ffmpeg'
-import { audioCacheKey } from './audio-cache'
 import type { TtsEngine } from './tts/types'
 
 export interface PreSynthOptions {
@@ -66,17 +64,16 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
       return { total, synthesized, cached, cancelled: true, paragraphs: info }
     }
 
-    const result = await engine.synthesize({ text, voiceId, bookId })
+    // returnAudio: false avoids a main-thread structured-clone of every WAV
+    // Blob on memory-constrained devices; the worker computes duration and
+    // cache key in-process.
+    const result = await engine.synthesize({ text, voiceId, bookId, returnAudio: false })
     if (result.synthMs === 0) cached++
     else synthesized++
     done++
     onProgress?.(done, total)
 
-    const wav = await result.audio.arrayBuffer()
-    const durationSeconds = parseWavDuration(wav)
-    const cacheKey = await audioCacheKey(voiceId, text)
-
-    info.push({ cacheKey, durationSeconds })
+    info.push({ cacheKey: result.cacheKey, durationSeconds: result.durationSeconds })
   }
 
   return { total, synthesized, cached, cancelled: false, paragraphs: info }

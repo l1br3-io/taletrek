@@ -106,7 +106,12 @@ function stubEngine(): TtsEngine & { calls: { text: string; voiceId: VoiceId }[]
     async synthesize(req) {
       calls.push({ text: req.text, voiceId: req.voiceId })
       n++
-      return { audio: new Blob([new Uint8Array([n])], { type: 'audio/x-wav' }), synthMs: n }
+      return {
+        audio: new Blob([new Uint8Array([n])], { type: 'audio/x-wav' }),
+        synthMs: n,
+        durationSeconds: 1,
+        cacheKey: 'k',
+      }
     },
   }
 }
@@ -344,8 +349,18 @@ describe('useParagraphPlayer — playback (lookahead=0)', () => {
 
   it('cancels a stale synthesis when a newer request supersedes it', async () => {
     const engine = stubEngine()
-    let resolveFirst: (v: { audio: Blob; synthMs: number }) => void
-    const slowSynth = new Promise<{ audio: Blob; synthMs: number }>((r) => {
+    let resolveFirst: (v: {
+      audio: Blob
+      synthMs: number
+      durationSeconds: number
+      cacheKey: string
+    }) => void
+    const slowSynth = new Promise<{
+      audio: Blob
+      synthMs: number
+      durationSeconds: number
+      cacheKey: string
+    }>((r) => {
       resolveFirst = r
     })
     const originalSynthesize = engine.synthesize.bind(engine)
@@ -367,7 +382,12 @@ describe('useParagraphPlayer — playback (lookahead=0)', () => {
     expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:1`)
     expect(audio.loadedBlobs).toEqual([expect.any(Blob)])
     await act(async () => {
-      resolveFirst({ audio: new Blob([new Uint8Array([9])]), synthMs: 9 })
+      resolveFirst({
+        audio: new Blob([new Uint8Array([9])]),
+        synthMs: 9,
+        durationSeconds: 1,
+        cacheKey: 'k',
+      })
     })
     expect(audio.loadedBlobs).toHaveLength(1)
     expect(result.current.currentParagraphId).toBe(`${chapterId('c1')}:1`)
@@ -751,7 +771,8 @@ describe('useParagraphPlayer — background synth + cache', () => {
     engine.synthesize = vi.fn(
       () =>
         new Promise<SynthesisResult>((res) => {
-          resolveSynth = () => res({ audio: new Blob(['x']), synthMs: 1 })
+          resolveSynth = () =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' })
         }),
     )
     const audio = new FakeAudio()
@@ -823,7 +844,8 @@ describe('useParagraphPlayer — background synth + cache', () => {
     engine.synthesize = vi.fn(
       () =>
         new Promise<SynthesisResult>((res) => {
-          resolveSynth = () => res({ audio: new Blob(['x']), synthMs: 1 })
+          resolveSynth = () =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' })
         }),
     )
     const audio = new FakeAudio()
@@ -847,7 +869,8 @@ describe('useParagraphPlayer — background synth + cache', () => {
     engine.synthesize = vi.fn(
       () =>
         new Promise<SynthesisResult>((res) => {
-          resolveSynth = () => res({ audio: new Blob(['x']), synthMs: 1 })
+          resolveSynth = () =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' })
         }),
     )
     const audio = new FakeAudio()

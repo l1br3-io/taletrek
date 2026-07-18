@@ -15,6 +15,7 @@ function makeRecord(sizeBytes: number): AudioCacheRecord {
     blob: new Blob(['x']),
     sizeBytes,
     synthMs: 1,
+    durationSeconds: 1,
     voiceId: voiceId('en_US-hfc_female-medium'),
     lastUsed: Date.now(),
     createdAt: Date.now(),

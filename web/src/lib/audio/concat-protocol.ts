@@ -13,4 +13,4 @@ export type ConcatResponse =
       durations: number[]
       duration: number
     }
-  | { id: number; type: 'error'; message: string }
+  | { id: number; type: 'error'; message: string; name?: string; code?: number }

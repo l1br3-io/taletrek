@@ -4,6 +4,11 @@ import { putBookAudio } from '../book-audio'
 import { cleanChapters } from '../clean'
 import type { CleaningConfig } from '../clean/types'
 import { deleteBookCascade, getBook, putBook } from '../db'
+import {
+  evictAudioCacheToBudget,
+  isQuotaExceededError,
+  setPinnedAudioCacheBookId,
+} from '../db/audio-cache'
 import type { ParagraphPreSynthInfo } from '../pre-synth'
 import { preSynthesizeBook } from '../pre-synth'
 import { ttsClient } from '../tts/client'
@@ -31,7 +36,7 @@ export type JobState =
   | { type: 'encoding'; book: Book; progress?: number; mode: JobMode }
   | { type: 'cancelling'; book: Book; mode: JobMode }
   | { type: 'done'; book: Book; mode: JobMode }
-  | { type: 'error'; book: Book; message: string; mode: JobMode }
+  | { type: 'error'; book: Book; message: string; mode: JobMode; retryable?: boolean }
 
 export interface JobSpec {
   book: Book
@@ -62,6 +67,25 @@ function paragraphRefs(chapters: Chapter[]): ParagraphRef[] {
 
 function isMobileDevice(): boolean {
   return typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
+}
+
+/** AAC-LC mono bitrate used by the mobile whole-book encode (bits/s). */
+const MOBILE_AAC_BITRATE = 64_000
+const MOBILE_AAC_BYTES_PER_SECOND = MOBILE_AAC_BITRATE / 8
+/**
+ * Maximum estimated size for a whole-book mobile encode. Above this we skip
+ * the encode and fall back to per-paragraph desktop-style playback on mobile.
+ * 200 MB @ 64kbps ≈ 7 hours of speech.
+ */
+const MAX_MOBILE_M4A_BYTES = 200 * 1024 * 1024
+
+function isTransientStorageError(error: unknown): boolean {
+  return (
+    error instanceof DOMException &&
+    (isQuotaExceededError(error) ||
+      error.name === 'NotReadableError' ||
+      error.name === 'UnknownError')
+  )
 }
 
 async function clearUploadingFlag(bookId: BookId): Promise<void> {
@@ -126,19 +150,23 @@ class UploadManager {
   }
 
   /**
-   * Re-run the last job spec. Only valid from a `resynth`-mode error — initial
-   * errors cascade-delete the book, so there's nothing to retry. No-op
-   * otherwise (e.g. while active, or when the last job succeeded).
+   * Re-run the last job spec. Valid from a `resynth`-mode error or from a
+   * transient storage error in `initial` mode. No-op otherwise (e.g. while
+   * active, or when the last job succeeded).
    */
   retry(): void {
-    if (this.state.type !== 'error' || this.state.mode !== 'resynth') return
+    if (this.state.type !== 'error' || !this.canRetry()) return
     if (this.isActive() || !this.lastSpec) return
     this.startJob(this.lastSpec)
   }
 
   /** Whether a retry is available in the current state (for UI affordances). */
   canRetry(): boolean {
-    return this.state.type === 'error' && this.state.mode === 'resynth' && this.lastSpec !== null
+    return (
+      this.state.type === 'error' &&
+      (this.state.mode === 'resynth' || !!this.state.retryable) &&
+      this.lastSpec !== null
+    )
   }
 
   _resetForTests(): void {
@@ -159,6 +187,10 @@ class UploadManager {
     const cleaned = cleanChapters(chapters, cleaning)
     const refs = paragraphRefs(cleaned)
     const isMobile = isMobileDevice()
+
+    // Pin this book's cache entries while the job runs so the reactive LRU
+    // sweep does not evict paragraphs we are about to encode on mobile.
+    setPinnedAudioCacheBookId(book.id)
 
     // State must flip synchronously so `startJob`'s re-entry guard sees
     // 'synthesizing' before the caller can call startJob again.
@@ -206,7 +238,21 @@ class UploadManager {
       }
 
       if (isMobile && preSynthResult.paragraphs.length > 0) {
-        await this.encodeBook(book, voiceId, preSynthResult.paragraphs, signal, mode)
+        const estimatedM4aBytes = Math.ceil(
+          preSynthResult.paragraphs.reduce(
+            (sum, p) => sum + p.durationSeconds * MOBILE_AAC_BYTES_PER_SECOND,
+            0,
+          ),
+        )
+        if (estimatedM4aBytes <= MAX_MOBILE_M4A_BYTES) {
+          await this.encodeBook(book, voiceId, preSynthResult.paragraphs, signal, mode)
+        } else {
+          console.log(
+            '[taletrek] upload: mobile encode skipped for huge book',
+            book.title,
+            `${Math.round(estimatedM4aBytes / 1024 / 1024)} MB estimated`,
+          )
+        }
       }
 
       await clearUploadingFlag(book.id)
@@ -215,21 +261,45 @@ class UploadManager {
       if (signal?.aborted) {
         this.setState({ type: 'idle' })
       } else {
-        console.error('[taletrek] upload: failed for', book.title, error)
-        // Initial uploads cascade-delete on failure (the book has no audio and
-        // no user investment yet). Re-synths keep the book — the user's text is
-        // intact and they may retry.
-        if (mode === 'initial') {
-          await deleteBookCascade(book.id).catch(() => {})
+        const current = this.state
+        const errorInfo = {
+          title: book.title,
+          stage: current.type,
+          done: current.type === 'synthesizing' ? current.done : undefined,
+          total: current.type === 'synthesizing' ? current.total : undefined,
+          name:
+            error instanceof DOMException
+              ? error.name
+              : error instanceof Error
+                ? error.constructor.name
+                : undefined,
+          code: error instanceof DOMException ? error.code : undefined,
+          message: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
         }
+        console.error('[taletrek] upload: failed', errorInfo, error)
+
+        const transient = isTransientStorageError(error)
+        if (mode === 'initial' && !transient) {
+          // Hard failure during fresh upload — nothing to preserve.
+          await deleteBookCascade(book.id).catch(() => {})
+        } else if (mode === 'initial' && transient) {
+          // Storage-pressure failure: keep the book and offer a retry. Clear
+          // the uploading flag so the boot sweep does not delete it.
+          await clearUploadingFlag(book.id).catch(() => {})
+        }
+        // Resynth mode always keeps the book intact.
+
         this.setState({
           type: 'error',
           book,
           message: error instanceof Error ? error.message : 'Upload failed',
           mode,
+          retryable: mode === 'resynth' || transient,
         })
       }
     } finally {
+      setPinnedAudioCacheBookId(null)
       await wakeLock.release()
       this.abortController = null
       // If the user cancelled but an async path didn't observe the abort
@@ -266,15 +336,41 @@ class UploadManager {
     if (signal?.aborted) return
 
     const m4aBlob = new Blob([result.m4a], { type: 'audio/mp4' })
-    await putBookAudio({
-      bookId: book.id,
-      blob: m4aBlob,
-      duration: result.duration,
-      paragraphOffsets: result.paragraphOffsets,
-      durations: result.durations,
-      voiceId,
-      createdAt: Date.now(),
-    })
+    try {
+      await putBookAudio({
+        bookId: book.id,
+        blob: m4aBlob,
+        duration: result.duration,
+        paragraphOffsets: result.paragraphOffsets,
+        durations: result.durations,
+        voiceId,
+        createdAt: Date.now(),
+      })
+    } catch (err) {
+      if (isQuotaExceededError(err)) {
+        // Evict every non-pinned cache entry to make room, then retry once.
+        await evictAudioCacheToBudget(0)
+        try {
+          await putBookAudio({
+            bookId: book.id,
+            blob: m4aBlob,
+            duration: result.duration,
+            paragraphOffsets: result.paragraphOffsets,
+            durations: result.durations,
+            voiceId,
+            createdAt: Date.now(),
+          })
+        } catch (retryErr) {
+          if (isQuotaExceededError(retryErr)) {
+            console.log('[taletrek] upload: quota persists, skipping mobile encode for', book.title)
+            return
+          }
+          throw retryErr
+        }
+      } else {
+        throw err
+      }
+    }
   }
 }
 

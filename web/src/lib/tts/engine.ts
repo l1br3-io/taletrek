@@ -1,10 +1,15 @@
 import * as piper from '@mintplex-labs/piper-tts-web'
 import type { VoiceId } from '../../types'
+import { parseWavDuration } from '../audio/ffmpeg'
 import { audioCacheKey, lookupAudioCache, storeAudioCache } from '../audio-cache'
 import { normalizeForSpeech } from './normalize'
 import type { SynthesisRequest, SynthesisResult, TtsEngine, Voice } from './types'
 import { CURATED_VOICES } from './voices'
 import { WASM_PATHS } from './wasm-paths'
+
+async function durationFromBlob(blob: Blob): Promise<number> {
+  return parseWavDuration(await blob.arrayBuffer())
+}
 
 /**
  * Concrete `TtsEngine` wrapping `@mintplex-labs/piper-tts-web`. Runs inside the
@@ -56,7 +61,18 @@ export class PiperEngine implements TtsEngine {
     const key = await audioCacheKey(req.voiceId, req.text)
     try {
       const hit = await lookupAudioCache(key)
-      if (hit) return { audio: hit.blob, synthMs: 0 }
+      if (hit) {
+        // Prefer the stored duration; fall back to parsing the blob for legacy
+        // records. A parse failure must not turn a cache hit into a miss.
+        const durationSeconds =
+          hit.durationSeconds ?? (await durationFromBlob(hit.blob).catch(() => 0))
+        return {
+          audio: req.returnAudio === false ? undefined : hit.blob,
+          synthMs: 0,
+          durationSeconds,
+          cacheKey: key,
+        }
+      }
     } catch {
       // Cache lookup must never block synthesis — fail open.
     }
@@ -65,15 +81,22 @@ export class PiperEngine implements TtsEngine {
     const t0 = performance.now()
     const audio = await session.predict(normalizeForSpeech(req.text))
     const synthMs = performance.now() - t0
+    const durationSeconds = await durationFromBlob(audio)
 
     // Best-effort store; failures are swallowed inside `storeAudioCache`.
     void storeAudioCache(key, audio, {
       voiceId: req.voiceId,
       synthMs,
+      durationSeconds,
       ...(req.bookId !== undefined ? { bookId: req.bookId } : {}),
     })
 
-    return { audio, synthMs }
+    return {
+      audio: req.returnAudio === false ? undefined : audio,
+      synthMs,
+      durationSeconds,
+      cacheKey: key,
+    }
   }
 
   /** Return a session bound to `voiceId`, creating a fresh one on voice change. */

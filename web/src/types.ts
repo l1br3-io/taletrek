@@ -74,6 +74,8 @@ export interface AudioCacheRecord {
   sizeBytes: number
   /** Original synthesis wall-clock ms — for diagnostics only. */
   synthMs: number
+  /** Audio duration in seconds, parsed from the WAV. */
+  durationSeconds: number
   /** Voice that produced this audio — for future per-voice clear. */
   voiceId: VoiceId
   /** Date.now() at last hit/insert — drives LRU eviction. */

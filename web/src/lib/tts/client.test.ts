@@ -6,19 +6,19 @@ import type { TtsRequest, TtsResponse } from './protocol'
 const VOICE = voiceId('en_US-hfc_female-medium')
 
 class WorkerStub {
-  private listeners = new Map<string, Set<(e: MessageEvent) => void>>()
+  private listeners = new Map<string, Set<(e: Event) => void>>()
   lastRequest: TtsRequest | null = null
 
   constructor() {
     current = this
   }
 
-  addEventListener(type: string, fn: (e: MessageEvent) => void): void {
+  addEventListener(type: string, fn: (e: Event) => void): void {
     if (!this.listeners.has(type)) this.listeners.set(type, new Set())
     this.listeners.get(type)?.add(fn)
   }
 
-  removeEventListener(type: string, fn: (e: MessageEvent) => void): void {
+  removeEventListener(type: string, fn: (e: Event) => void): void {
     this.listeners.get(type)?.delete(fn)
   }
 
@@ -29,6 +29,13 @@ class WorkerStub {
   emit(msg: TtsResponse): void {
     const evt = { data: msg } as MessageEvent
     this.listeners.get('message')?.forEach((fn) => {
+      fn(evt)
+    })
+  }
+
+  emitError(error: ErrorEventInit & { message?: string }): void {
+    const evt = new ErrorEvent('error', error)
+    this.listeners.get('error')?.forEach((fn) => {
       fn(evt)
     })
   }
@@ -70,10 +77,20 @@ describe('TtsClient', () => {
     const pending = client.synthesize({ text: 'hello', voiceId: VOICE })
     await flushPosted()
     expect(current?.lastRequest?.op).toBe('synthesize')
-    current?.emit({ id: lastId(), type: 'success', op: 'synthesize', audio: wav, synthMs: 42 })
+    current?.emit({
+      id: lastId(),
+      type: 'success',
+      op: 'synthesize',
+      audio: wav,
+      synthMs: 42,
+      durationSeconds: 1,
+      cacheKey: 'k',
+    })
     const result = await pending
     expect(result.audio).toBe(wav)
     expect(result.synthMs).toBe(42)
+    expect(result.durationSeconds).toBe(1)
+    expect(result.cacheKey).toBe('k')
   })
 
   it('download streams progress then resolves', async () => {
@@ -107,14 +124,56 @@ describe('TtsClient', () => {
     await expect(pending).rejects.toThrow('model not downloaded')
   })
 
+  it('reconstructs a DOMException when the worker sends name + code', async () => {
+    vi.stubGlobal('Worker', WorkerStub)
+    const client = new TtsClient()
+    const pending = client.synthesize({ text: 'x', voiceId: VOICE })
+    await flushPosted()
+    current?.emit({
+      id: lastId(),
+      type: 'error',
+      message: 'quota exceeded',
+      name: 'QuotaExceededError',
+      code: 22,
+    })
+    await expect(pending).rejects.toSatisfy((err: unknown) => {
+      return err instanceof DOMException && err.name === 'QuotaExceededError' && err.code === 22
+    })
+  })
+
+  it('rejects pending requests when the worker crashes', async () => {
+    vi.stubGlobal('Worker', WorkerStub)
+    const client = new TtsClient()
+    const pending = client.synthesize({ text: 'x', voiceId: VOICE })
+    await flushPosted()
+    current?.emitError({ message: 'worker exploded' })
+    await expect(pending).rejects.toThrow(/worker crashed/)
+  })
+
   it('ignores responses with a mismatched id', async () => {
     vi.stubGlobal('Worker', WorkerStub)
     const client = new TtsClient()
     const wav = new Blob([new Uint8Array([0])], { type: 'audio/x-wav' })
     const pending = client.synthesize({ text: 'hi', voiceId: VOICE })
     await flushPosted()
-    current?.emit({ id: 999, type: 'success', op: 'synthesize', audio: wav, synthMs: 1 })
-    current?.emit({ id: lastId(), type: 'success', op: 'synthesize', audio: wav, synthMs: 7 })
+    current?.emit({
+      id: 999,
+      type: 'success',
+      op: 'synthesize',
+      audio: wav,
+      synthMs: 1,
+      durationSeconds: 1,
+      cacheKey: 'k',
+    })
+    current?.emit({
+      id: lastId(),
+      type: 'success',
+      op: 'synthesize',
+      audio: wav,
+      synthMs: 7,
+      durationSeconds: 1,
+      cacheKey: 'k',
+    })
     const result = await pending
     expect(result.synthMs).toBe(7)
   })

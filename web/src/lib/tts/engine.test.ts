@@ -51,6 +51,8 @@ describe('PiperEngine', () => {
     const result = await engine.synthesize({ text: 'hello', voiceId: VOICE })
     expect(result.audio).toBe(wav)
     expect(result.synthMs).toBeGreaterThanOrEqual(0)
+    expect(result.durationSeconds).toBe(0)
+    expect(result.cacheKey).toBeDefined()
     expect(predictMock).toHaveBeenCalledWith('hello')
   })
 
@@ -117,13 +119,19 @@ describe('PiperEngine — audio cache (M8)', () => {
     const wav = new Blob([new Uint8Array([9])], { type: 'audio/x-wav' })
     predictMock.mockResolvedValue(wav)
     const engine = new PiperEngine()
+    const { audioCacheKey } = await import('../audio-cache')
+    const key = await audioCacheKey(VOICE, 'cold paragraph')
     // First call: miss → predict → store.
     await engine.synthesize({ text: 'cold paragraph', voiceId: VOICE })
     expect(predictMock).toHaveBeenCalledTimes(1)
+    // Ensure the IndexedDB write is visible before the second lookup.
+    await vi.waitFor(async () => expect(await getAudioCacheEntry(key)).toBeDefined())
     // Second call: same text+voice → hit → no predict.
     const result = await engine.synthesize({ text: 'cold paragraph', voiceId: VOICE })
     expect(predictMock).toHaveBeenCalledTimes(1)
     expect(result.synthMs).toBe(0)
+    expect(result.durationSeconds).toBeGreaterThanOrEqual(0)
+    expect(result.cacheKey).toBeDefined()
     // The audio came back from the cache (fake-indexeddb in jsdom returns a
     // Blob-like object without the Blob prototype, so we assert truthiness +
     // that it has content rather than instanceof/size).
@@ -189,6 +197,8 @@ describe('PiperEngine — audio cache (M8)', () => {
     const engine = new EngineFailing()
     const result = await engine.synthesize({ text: 'fail open', voiceId: VOICE })
     expect(result.audio).toBe(wav)
+    expect(result.durationSeconds).toBe(0)
+    expect(result.cacheKey).toBeDefined()
     vi.doUnmock('../audio-cache')
     vi.resetModules()
   })

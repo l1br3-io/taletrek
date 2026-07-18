@@ -50,7 +50,12 @@ vi.mock('../lib/ai/client', () => ({
 
 const ttsIsStoredMock = vi.fn<(...args: unknown[]) => Promise<boolean>>()
 const ttsDownloadMock = vi.fn<(...args: unknown[]) => Promise<void>>()
-const ttsSynthMock = vi.fn<(...args: unknown[]) => Promise<{ audio: Blob; synthMs: number }>>()
+const ttsSynthMock =
+  vi.fn<
+    (
+      ...args: unknown[]
+    ) => Promise<{ audio?: Blob; synthMs: number; durationSeconds: number; cacheKey: string }>
+  >()
 vi.mock('../lib/tts/client', () => ({
   ttsClient: {
     isStored: (...args: unknown[]) => ttsIsStoredMock(...args),
@@ -105,7 +110,12 @@ beforeEach(async () => {
   ttsDownloadMock.mockReset()
   ttsSynthMock.mockReset()
   ttsIsStoredMock.mockResolvedValue(true)
-  ttsSynthMock.mockResolvedValue({ audio: new Blob(['x']), synthMs: 1 })
+  ttsSynthMock.mockResolvedValue({
+    audio: new Blob(['x']),
+    synthMs: 1,
+    durationSeconds: 1,
+    cacheKey: 'k',
+  })
 })
 
 /** Drive the hidden file input as if the user picked a file. */
@@ -541,6 +551,7 @@ describe('Library — per-book synthesize', () => {
       blob: new Blob(['old']),
       sizeBytes: 3,
       synthMs: 1,
+      durationSeconds: 1,
       voiceId: 'en_US-hfc_female-medium' as never,
       lastUsed: Date.now(),
       createdAt: Date.now(),
@@ -571,7 +582,9 @@ describe('Library — per-book synthesize', () => {
     ttsSynthMock.mockImplementation(
       () =>
         new Promise((res) => {
-          gates.push(() => res({ audio: new Blob(['x']), synthMs: 1 }))
+          gates.push(() =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' }),
+          )
         }),
     )
     await renderReady('/library')

@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+import { getBookAudio } from '../../../lib/book-audio'
 import type { TtsEngine } from '../../../lib/tts/types'
 import type { BookId, Chapter, VoiceId } from '../../../types'
 import type { UseParagraphPlayerResult } from './types'
@@ -30,6 +32,28 @@ export function usePlayer(
   const preloaded = usePreloadedPlayer(args)
   useStreamingPlayer(args)
 
+  const [hasBookAudio, setHasBookAudio] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (!opts.isMobile || !args.bookId) {
+      setHasBookAudio(null)
+      return
+    }
+    let cancelled = false
+    getBookAudio(args.bookId)
+      .then((audio) => {
+        if (!cancelled) setHasBookAudio(audio !== undefined)
+      })
+      .catch(() => {
+        if (!cancelled) setHasBookAudio(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [args.bookId, opts.isMobile])
+
   if (!opts.isMobile) return desktop
+  // Huge-book uploads may intentionally skip the whole-book mobile encode. In
+  // that case fall back to the desktop per-paragraph engine (pauses on lock).
+  if (hasBookAudio === false) return desktop
   return preloaded
 }

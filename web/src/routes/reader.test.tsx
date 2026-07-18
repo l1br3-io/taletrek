@@ -77,7 +77,12 @@ beforeEach(async () => {
   await _clearDBForTests()
   parseInWorker.mockReset()
   synthesize.mockReset()
-  synthesize.mockResolvedValue({ audio: new Blob(['x']), synthMs: 1 })
+  synthesize.mockResolvedValue({
+    audio: new Blob(['x']),
+    synthMs: 1,
+    durationSeconds: 1,
+    cacheKey: 'k',
+  })
   vi.mocked(updateBookProgress).mockClear()
   // jsdom has no layout; stub scrollIntoView so F5/F4 can be asserted.
   window.HTMLElement.prototype.scrollIntoView = vi.fn()
