@@ -55,6 +55,8 @@ function makePlayer(overrides?: Partial<MediaSessionPlayer>) {
     currentParagraphId: null,
     play: () => calls.push('play'),
     pause: () => calls.push('pause'),
+    next: () => calls.push('next'),
+    prev: () => calls.push('prev'),
     nextChapter: () => calls.push('nextChapter'),
     prevChapter: () => calls.push('prevChapter'),
     seekBy: (d) => calls.push(`seekBy:${d}`),
@@ -138,8 +140,8 @@ describe('useMediaSession — handler registration', () => {
       'seekBy:-15',
       'seekBy:15',
       'seekTo:7.5',
-      'nextChapter',
-      'prevChapter',
+      'next',
+      'prev',
     ])
   })
 

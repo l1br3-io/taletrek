@@ -13,6 +13,8 @@ interface LibraryListProps {
   onOutline?: (id: BookId) => void
   /** When provided (synth mode enabled), shows a "Synthesize" action on each card. */
   onResynthesize?: (id: BookId) => void
+  /** When provided, resumes a paused synthesis job for the book (ADR-0010 / M11). */
+  onResume?: (id: BookId) => void
   /** When provided, shows a "Rename" action on each card. */
   onRename?: (id: BookId) => void
 }
@@ -25,6 +27,7 @@ export function LibraryList({
   onPronunciation,
   onOutline,
   onResynthesize,
+  onResume,
   onRename,
 }: LibraryListProps) {
   if (books.length === 0) {
@@ -52,6 +55,7 @@ export function LibraryList({
           onPronunciation={onPronunciation}
           onOutline={onOutline}
           onResynthesize={onResynthesize}
+          onResume={onResume}
           onRename={onRename}
         />
       ))}

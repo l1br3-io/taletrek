@@ -1,4 +1,4 @@
-import { BookOpen, RotateCcw, X } from 'lucide-react'
+import { BookOpen, Pause, Play, RotateCcw, X } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { uploadManager } from '../lib/upload/manager'
 import { useUploadState } from '../lib/upload/useUpload'
@@ -107,6 +107,38 @@ export function GlobalUploadBanner() {
     )
   }
 
+  if (state.type === 'paused') {
+    return (
+      <div
+        role="status"
+        className="flex items-center justify-between gap-3 border-b border-accent/40 bg-accent-soft px-4 py-3 text-accent sm:px-5"
+      >
+        <span className="text-sm">
+          Paused “{state.book.title}” · {state.done} / {state.total} paragraphs
+        </span>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void uploadManager.resume(state.book.id)}
+            aria-label="Resume synthesis"
+            className="inline-flex items-center gap-1.5 border border-accent px-3 py-1.5 text-xs font-medium transition-colors hover:bg-elevated"
+          >
+            <Play className="h-3.5 w-3.5" />
+            Resume
+          </button>
+          <button
+            type="button"
+            onClick={() => uploadManager.dismiss()}
+            aria-label="Dismiss"
+            className="text-xs text-accent/70 hover:text-accent"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   const cancelling = state.type === 'cancelling'
   const fraction =
     state.type === 'voiceDownload'
@@ -119,6 +151,14 @@ export function GlobalUploadBanner() {
             ? state.done / state.total
             : 0
 
+  // Optional second line: the paragraph currently (or last) being synthesized.
+  // Populated via onParagraphStart → JobState.synthesizing.current. Hidden when
+  // not in synth or when the location isn't yet known.
+  const currentLine =
+    state.type === 'synthesizing' && state.current
+      ? `ch. ${state.current.chapterIndex + 1}${state.current.chapterTitle ? ` "${state.current.chapterTitle.slice(0, 30)}"` : ''}, ¶ ${state.current.paragraphInChapter}/${state.current.chapterTotal}`
+      : null
+
   return (
     <div
       role="status"
@@ -126,9 +166,9 @@ export function GlobalUploadBanner() {
       className="flex flex-col gap-2 border-b border-accent/40 bg-accent-soft px-4 py-3 text-accent sm:px-5"
     >
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           <Spinner />
-          <span className="text-sm">
+          <span className="truncate text-sm">
             {cancelling
               ? `Cancelling “${state.book.title}”…`
               : state.type === 'voiceDownload'
@@ -140,7 +180,7 @@ export function GlobalUploadBanner() {
                     : `Synthesizing “${state.book.title}”… ${state.done} / ${state.total}`}
           </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           <button
             type="button"
             onClick={() => navigate(`/reader/${state.book.id}`)}
@@ -149,6 +189,17 @@ export function GlobalUploadBanner() {
             <BookOpen className="h-3.5 w-3.5" />
             Open
           </button>
+          {state.type === 'synthesizing' && uploadManager.canPause() && (
+            <button
+              type="button"
+              onClick={() => uploadManager.pause()}
+              aria-label="Pause synthesis"
+              className="inline-flex items-center gap-1.5 border border-accent px-3 py-1.5 text-xs font-medium transition-colors hover:bg-elevated"
+            >
+              <Pause className="h-3.5 w-3.5" />
+              Pause
+            </button>
+          )}
           <button
             type="button"
             onClick={() => uploadManager.cancel()}
@@ -159,6 +210,11 @@ export function GlobalUploadBanner() {
           </button>
         </div>
       </div>
+      {currentLine && (
+        <span className="text-xs text-accent/70" aria-hidden>
+          {currentLine}
+        </span>
+      )}
       <ProgressBar fraction={fraction} />
     </div>
   )

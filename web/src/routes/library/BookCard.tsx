@@ -1,4 +1,4 @@
-import { AudioLines, List, MoreVertical, Pencil, SpellCheck, Trash2 } from 'lucide-react'
+import { AudioLines, List, MoreVertical, Pencil, Play, SpellCheck, Trash2 } from 'lucide-react'
 import { Menu } from '../../components/Menu'
 import type { Book, BookId } from '../../types'
 
@@ -32,6 +32,8 @@ interface BookCardProps {
   onOutline?: (id: BookId) => void
   /** When provided (synth mode enabled), shows a "Synthesize" action on the card. */
   onResynthesize?: (id: BookId) => void
+  /** When provided, resumes a paused synthesis job for the book (ADR-0010 / M11). */
+  onResume?: (id: BookId) => void
 }
 
 export function BookCard({
@@ -43,6 +45,7 @@ export function BookCard({
   onPronunciation,
   onOutline,
   onResynthesize,
+  onResume,
 }: BookCardProps) {
   const pct = Math.round((book.progressFraction ?? 0) * 100)
   const showOutline = onOutline && book.format !== 'epub'
@@ -64,6 +67,19 @@ export function BookCard({
     >
       {(close) => (
         <>
+          {onResume && book.uploadJob && (
+            <button
+              type="button"
+              onClick={() => {
+                onResume(book.id)
+                close()
+              }}
+              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm text-accent transition-colors hover:bg-elevated"
+              aria-label={`Resume synthesis for ${book.title}`}
+            >
+              <Play className="h-4 w-4" /> Resume synthesis
+            </button>
+          )}
           {onResynthesize && (
             <button
               type="button"
@@ -169,6 +185,21 @@ export function BookCard({
                   Uploading…
                 </span>
               )}
+              {book.uploadJob && !book.uploading && (
+                <span className="ml-2 inline-flex items-center rounded-full bg-warning/20 px-2 py-0.5 text-[10px] font-medium text-warning">
+                  Paused
+                </span>
+              )}
+              {book.uploadJob &&
+                !book.uploading &&
+                book.uploadJob.lastChapterTitle &&
+                typeof book.uploadJob.lastParagraphInChapter === 'number' &&
+                typeof book.uploadJob.lastChapterTotal === 'number' && (
+                  <span className="ml-1 text-[10px] text-muted">
+                    (at “{book.uploadJob.lastChapterTitle.slice(0, 20)}” ¶
+                    {book.uploadJob.lastParagraphInChapter}/{book.uploadJob.lastChapterTotal})
+                  </span>
+                )}
             </span>
             <span className="mt-0.5 flex items-center gap-2 text-xs text-muted">
               <span>{book.format}</span>

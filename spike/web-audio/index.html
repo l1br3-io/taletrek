@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TaleTrek spike — Web Audio mobile engine</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; padding: 16px; font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+        background: #0b1120; color: #e5e7eb; max-width: 720px;
+      }
+      h1 { font-size: 17px; margin: 0 0 4px; }
+      h2 { font-size: 14px; margin: 16px 0 4px; color: #93c5fd; }
+      .muted { color: #9ca3af; font-size: 12px; }
+      button { background:#22c55e; color:#022; border:0; border-radius:6px; padding:8px 12px; font-weight:600; cursor:pointer; font-size: 13px; }
+      button:disabled { opacity:.45; cursor:default; }
+      button.warn { background:#f59e0b; }
+      button.subtle { background:#374151; color:#e5e7eb; }
+      .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
+      input[type=number] { width: 64px; background:#111827; color:#e5e7eb; border:1px solid #1f2937; border-radius:6px; padding:6px; }
+      .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; background:#374151; }
+      .badge.running { background:#16a34a; color:#fff; }
+      .badge.suspended { background:#ca8a04; color:#fff; }
+      .badge.interrupted { background:#dc2626; color:#fff; }
+      .badge.closed { background:#4b5563; color:#fff; }
+      pre { background:#111827; border:1px solid #1f2937; border-radius:6px; padding:10px; white-space:pre-wrap; max-height:300px; overflow:auto; font-size:12px; }
+      .progress { height: 6px; background:#1f2937; border-radius:999px; overflow:hidden; margin: 6px 0; }
+      .progress > div { height:100%; background:#22c55e; width:0%; transition: width 0.1s linear; }
+      code { background:#111827; padding:1px 5px; border-radius:4px; font-size:12px; }
+      ul.checklist { padding-left: 18px; }
+      ul.checklist li { margin: 3px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>TaleTrek spike — Web Audio mobile playback engine</h1>
+    <p class="muted">
+      Probes whether an <code>AudioContext</code> can drive gapless paragraph playback
+      on iOS/Android with the same accepted lock-screen limitation as the MSE
+      <code>&lt;video&gt;</code> path (ADR-0006/0010): it suspends on lock, user taps
+      play to resume. Each "paragraph" below is a short procedural PCM buffer with a
+      distinct pitch + a click marker so you can <em>hear</em> the gapless transition.
+    </p>
+
+    <h2>State</h2>
+    <div class="row">
+      <span>ctx.state:</span><span id="state" class="badge">—</span>
+      <span class="muted">| currentTime: <code id="ctime">0.00</code>s</span>
+      <span class="muted">| playing ¶: <code id="idx">—</code>/<code id="total">0</code></span>
+      <span class="muted">| scheduled through: <code id="end">0.00</code>s</span>
+      <span class="muted">| visibility: <code id="vis">visible</code></span>
+    </div>
+    <div class="progress"><div id="bar"></div></div>
+
+    <h2>Controls</h2>
+    <div class="row">
+      <button id="play">▶ Play</button>
+      <button id="pause" class="subtle">⏸ Pause (suspend)</button>
+      <button id="resume" class="warn">▶ Resume</button>
+      <button id="stop" class="subtle">■ Stop</button>
+    </div>
+    <div class="row">
+      <button id="prev" class="subtle">⏮ prev ¶</button>
+      <button id="next" class="subtle">⏭ next ¶</button>
+      <span class="muted">seek to ¶:</span>
+      <input id="seekN" type="number" min="0" value="3" />
+      <button id="seek" class="subtle">seek</button>
+    </div>
+    <div class="row">
+      <label class="muted">¶ count: <input id="count" type="number" min="1" value="8" /></label>
+      <label class="muted">¶ seconds: <input id="secs" type="number" min="1" value="6" /></label>
+      <label class="muted">rate: <input id="rate" type="number" min="0.5" max="2" step="0.25" value="1" /></label>
+      <button id="build" class="subtle">(re)build buffers</button>
+    </div>
+
+    <h2>Event log</h2>
+    <pre id="log"></pre>
+
+    <h2>Real-device checklist (fill in during the iPhone/Android run)</h2>
+    <ul class="checklist muted">
+      <li>1. <strong>Lock → resume.</strong> Press Play, lock the screen mid-¶. Note <code>ctx.state</code> (suspended/interrupted). Unlock, tap Resume. Audio continues mid-¶ from where it froze? <code id="c1">☐</code></li>
+      <li>2. <strong>Tab hidden, screen on</strong> (jog mode — switch to another app). Does audio keep playing? Note <code>visibility</code> going <code>hidden</code> and whether <code>currentTime</code> keeps advancing. <code id="c2">☐</code></li>
+      <li>3. <strong>Gapless through a lock.</strong> Let it cross a ¶ boundary while locked (or right after resume). No overlap, no gap, no drift? <code id="c3">☐</code></li>
+      <li>4. <strong>Advance loop survives hidden.</strong> With the tab hidden, the highlight <code>idx</code> still advances (setInterval keeps firing ~1/s). <code id="c4">☐</code></li>
+      <li>5. <strong>Media Session on lock screen.</strong> Is there a Now Playing card / controls? (Expected: absent with AudioContext-only — documented escape hatch is a silent <code>&lt;audio&gt;</code> element.) <code id="c5">☐</code></li>
+    </ul>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

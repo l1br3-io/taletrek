@@ -7,22 +7,46 @@ const VOICE = voiceId('en_US-hfc_female-medium')
 const OTHER = voiceId('en_US-ryan-medium')
 
 const predictMock = vi.fn()
+const disposeMock = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
 
-vi.mock('@mintplex-labs/piper-tts-web', () => {
+/** Build a minimal valid PCM-encoded WAV blob (22050Hz mono 16-bit). */
+function makeWav(sampleCount = 1): Blob {
+  const buf = new ArrayBuffer(44 + sampleCount * 2)
+  const v = new DataView(buf)
+  v.setUint32(0, 0x46464952, true) // "RIFF"
+  v.setUint32(4, 36 + sampleCount * 2, true)
+  v.setUint32(8, 0x45564157, true) // "WAVE"
+  v.setUint32(12, 0x20746d66, true) // "fmt "
+  v.setUint32(16, 16, true)
+  v.setUint16(20, 1, true)
+  v.setUint16(22, 1, true)
+  v.setUint32(24, 22050, true)
+  v.setUint32(28, 22050 * 2, true)
+  v.setUint16(32, 2, true)
+  v.setUint16(34, 16, true)
+  v.setUint32(36, 0x61746164, true) // "data"
+  v.setUint32(40, sampleCount * 2, true)
+  return new Blob([buf], { type: 'audio/x-wav' })
+}
+
+// Mock the vendored piper boundary at the module boundary the engine talks to.
+// Real PiperSession.create is replaced by a stub that returns a fake session;
+// the OPFS-backed helpers (storedVoices/downloadVoice/removeVoice) become vi.fn
+// so individual tests can drive their return values.
+vi.mock('./vendor/piper', () => {
   class FakeSession {
-    static _instance: unknown = null
-    static async create(opts: { voiceId: string }): Promise<FakeSession> {
-      return new FakeSession(opts.voiceId)
+    static async create(): Promise<FakeSession> {
+      return new FakeSession()
     }
-    constructor(public voiceId: string) {}
     predict = predictMock
+    dispose = disposeMock
   }
   return {
-    TtsSession: FakeSession,
-    stored: vi.fn<(id: string) => Promise<string[]>>().mockResolvedValue([]),
-    download: vi.fn(),
-    remove: vi.fn(),
-    voices: vi.fn(),
+    PiperSession: FakeSession,
+    storedVoices: vi.fn<() => Promise<string[]>>().mockResolvedValue([]),
+    downloadVoice: vi.fn(),
+    removeVoice: vi.fn(),
+    clearStoredVoices: vi.fn(),
   }
 })
 
@@ -65,26 +89,27 @@ describe('PiperEngine', () => {
     expect(predictMock).toHaveBeenCalledTimes(2)
   })
 
-  it('resets the singleton when the voice changes', async () => {
+  it('resets the session when the voice changes', async () => {
     predictMock.mockResolvedValue(new Blob([new Uint8Array([0])]))
     const engine = new PiperEngine()
     await engine.synthesize({ text: 'a', voiceId: VOICE })
     await engine.synthesize({ text: 'b', voiceId: OTHER })
-    // two distinct sessions -> predict bound on each; singleton reset in between
+    // two distinct sessions -> predict bound on each; old session disposed
     expect(predictMock).toHaveBeenCalledTimes(2)
+    expect(disposeMock).toHaveBeenCalledTimes(1)
   })
 
-  it('isStored delegates to the package and matches by id', async () => {
-    const { stored } = await import('@mintplex-labs/piper-tts-web')
-    vi.mocked(stored).mockResolvedValue([VOICE])
+  it('isStored delegates to the vendor and matches by id', async () => {
+    const { storedVoices } = await import('./vendor/piper')
+    vi.mocked(storedVoices).mockResolvedValue([VOICE])
     const engine = new PiperEngine()
     expect(await engine.isStored(VOICE)).toBe(true)
     expect(await engine.isStored(OTHER)).toBe(false)
   })
 
   it('download reports progress as a 0–1 fraction', async () => {
-    const { download } = await import('@mintplex-labs/piper-tts-web')
-    vi.mocked(download).mockImplementation(async (_id, cb) => {
+    const { downloadVoice } = await import('./vendor/piper')
+    vi.mocked(downloadVoice).mockImplementation(async (_id, cb) => {
       cb?.({ url: 'x', total: 100, loaded: 50 })
       cb?.({ url: 'x', total: 100, loaded: 100 })
     })
@@ -95,8 +120,8 @@ describe('PiperEngine', () => {
   })
 
   it('download ignores progress events with no total', async () => {
-    const { download } = await import('@mintplex-labs/piper-tts-web')
-    vi.mocked(download).mockImplementation(async (_id, cb) => {
+    const { downloadVoice } = await import('./vendor/piper')
+    vi.mocked(downloadVoice).mockImplementation(async (_id, cb) => {
       cb?.({ url: 'x', total: 0, loaded: 0 })
     })
     const engine = new PiperEngine()
@@ -105,12 +130,12 @@ describe('PiperEngine', () => {
     expect(progress).toEqual([])
   })
 
-  it('remove delegates to the package', async () => {
-    const { remove } = await import('@mintplex-labs/piper-tts-web')
-    vi.mocked(remove).mockResolvedValue(undefined)
+  it('remove delegates to the vendor', async () => {
+    const { removeVoice } = await import('./vendor/piper')
+    vi.mocked(removeVoice).mockResolvedValue(undefined)
     const engine = new PiperEngine()
     await engine.remove(VOICE)
-    expect(remove).toHaveBeenCalledWith(VOICE)
+    expect(removeVoice).toHaveBeenCalledWith(VOICE)
   })
 })
 
@@ -201,5 +226,37 @@ describe('PiperEngine — audio cache (M8)', () => {
     expect(result.cacheKey).toBeDefined()
     vi.doUnmock('../audio-cache')
     vi.resetModules()
+  })
+})
+
+describe('PiperEngine — chunking (long paragraphs)', () => {
+  it('splits a long paragraph into chunks and calls predict per chunk', async () => {
+    const { MAX_SYNTH_CHARS } = await import('./normalize')
+    predictMock.mockResolvedValue(makeWav())
+
+    // Build a paragraph that exceeds the cap using unambiguous sentences
+    // joined with spaces after terminators (avoid "word.text" junctions from
+    // repeat() that break the sentence-boundary regex).
+    const base = 'A brief clear sentence. Another one here. Padding the line. More words follow. '
+    const text = base.repeat(Math.ceil((MAX_SYNTH_CHARS * 3) / base.length))
+    expect(text.length).toBeGreaterThan(MAX_SYNTH_CHARS)
+
+    const engine = new PiperEngine()
+    const result = await engine.synthesize({ text, voiceId: VOICE })
+    expect(result.audio).toBeDefined()
+    expect(predictMock.mock.calls.length).toBeGreaterThan(1)
+    // Each call's text is ≤ the cap.
+    for (const call of predictMock.mock.calls) {
+      const arg = call[0] as string
+      expect(arg.length).toBeLessThanOrEqual(MAX_SYNTH_CHARS)
+    }
+  })
+
+  it('uses a single predict call for short text (no unnecessary chunking)', async () => {
+    predictMock.mockResolvedValue(new Blob([new Uint8Array([1])]))
+    const engine = new PiperEngine()
+    await engine.synthesize({ text: 'Hello world. Short paragraph.', voiceId: VOICE })
+    expect(predictMock).toHaveBeenCalledTimes(1)
+    expect(predictMock).toHaveBeenCalledWith('Hello world. Short paragraph.')
   })
 })

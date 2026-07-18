@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useSettings } from '../../../context/settings'
 import { getBookAudio } from '../../../lib/book-audio'
+import { resolveMobileEngine } from '../../../lib/playback/engines'
 import type { TtsEngine } from '../../../lib/tts/types'
 import type { BookId, Chapter, VoiceId } from '../../../types'
 import type { UseParagraphPlayerResult } from './types'
 import { useDesktopPlayer } from './useDesktopPlayer'
 import { usePreloadedPlayer } from './usePreloadedPlayer'
 import { useStreamingPlayer } from './useStreamingPlayer'
+import { useWebAudioPlayer } from './useWebAudioPlayer'
 
 export interface UsePlayerArgs {
   chapters: Chapter[]
@@ -30,11 +33,23 @@ export function usePlayer(
 ): UseParagraphPlayerResult {
   const desktop = useDesktopPlayer(args)
   const preloaded = usePreloadedPlayer(args)
+  const webAudio = useWebAudioPlayer(args)
   useStreamingPlayer(args)
+
+  const { settings } = useSettings()
+  // Engine capabilities never change during a session (cached in engines.ts),
+  // and the setting rarely does — memoize so the per-paragraph synth re-renders
+  // don't even re-run the (cached) resolution.
+  const engineId = useMemo(
+    () => (opts.isMobile ? resolveMobileEngine(settings.playbackEngine) : null),
+    [opts.isMobile, settings.playbackEngine],
+  )
 
   const [hasBookAudio, setHasBookAudio] = useState<boolean | null>(null)
   useEffect(() => {
-    if (!opts.isMobile || !args.bookId) {
+    // The FFmpeg engine plays the whole-book m4a from IDB; the Web Audio engine
+    // reads paragraph WAVs from the cache and ignores bookAudio entirely.
+    if (!opts.isMobile || engineId !== 'ffmpeg' || !args.bookId) {
       setHasBookAudio(null)
       return
     }
@@ -49,11 +64,12 @@ export function usePlayer(
     return () => {
       cancelled = true
     }
-  }, [args.bookId, opts.isMobile])
+  }, [args.bookId, opts.isMobile, engineId])
 
   if (!opts.isMobile) return desktop
-  // Huge-book uploads may intentionally skip the whole-book mobile encode. In
-  // that case fall back to the desktop per-paragraph engine (pauses on lock).
+  if (engineId === 'web-audio') return webAudio
+  // FFmpeg engine: huge-book uploads may intentionally skip the whole-book
+  // encode — in that case fall back to the desktop per-paragraph engine.
   if (hasBookAudio === false) return desktop
   return preloaded
 }

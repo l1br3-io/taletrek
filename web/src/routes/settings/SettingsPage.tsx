@@ -6,7 +6,9 @@ import {
   type Theme,
   useSettings,
 } from '../../context/settings'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import type { CleaningFilters } from '../../lib/clean/types'
+import { MOBILE_ENGINES, type PlaybackEngineSetting } from '../../lib/playback/engines'
 import { CURATED_VOICES } from '../../lib/tts/voices'
 import { AudioCacheIndicator } from './AudioCacheIndicator'
 import { AiSettingsSection } from './ai-settings'
@@ -32,6 +34,16 @@ const SYNTH_MODES: { value: SynthMode; label: string; hint: string }[] = [
   { value: 'no-limit', label: 'No limit', hint: 'Pre-synth with no eviction (power user)' },
 ]
 
+/**
+ * Mobile playback-engine picker options (ADR-0010 / M11). `'auto'` resolves to
+ * Web Audio (native) when supported, else FFmpeg. Only surfaced on coarse-pointer
+ * devices — desktop is always per-paragraph `<audio>`.
+ */
+const ENGINE_OPTIONS: { value: PlaybackEngineSetting; label: string; hint: string }[] = [
+  { value: 'auto', label: 'Auto', hint: 'Recommended — native Web Audio where supported' },
+  ...MOBILE_ENGINES.map((e) => ({ value: e.id, label: e.label, hint: e.description })),
+]
+
 const FILTERS: { key: keyof CleaningFilters; label: string; hint: string }[] = [
   { key: 'urls', label: 'Links & URLs', hint: 'Strip http links and bare URLs' },
   { key: 'images', label: 'Image markers', hint: 'Drop ![alt](url) and [Image: …]' },
@@ -50,7 +62,9 @@ export function Settings() {
   const ai = aiValue ?? DEFAULT_AI_SETTINGS
   const [synthMode, setSynthMode] = useSetting('synthesizeOnUpload')
   const [audioCacheBudgetMb, setAudioCacheBudgetMb] = useSetting('audioCacheBudgetMb')
+  const [playbackEngine, setPlaybackEngine] = useSetting('playbackEngine')
   const [vConsoleEnabled, setVConsoleEnabled] = useSetting('vConsoleEnabled')
+  const isMobile = useIsMobile()
 
   const {
     storedIds,
@@ -266,6 +280,51 @@ export function Settings() {
           </section>
         )}
       </SettingsGroup>
+
+      {isMobile && (
+        <SettingsGroup title="Advanced">
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
+              Playback engine
+            </h3>
+            <p className="text-xs text-muted">
+              Controls how audio is played on this device. Web Audio is native (no download,
+              gapless); FFmpeg is the compatibility fallback (downloads a ~30 MB core on first use).
+              The default — Auto — picks Web Audio when your device supports it.
+            </p>
+            <div className="grid grid-cols-1 gap-3">
+              {ENGINE_OPTIONS.map((opt) => {
+                const supported =
+                  opt.value === 'auto' ||
+                  MOBILE_ENGINES.find((e) => e.id === opt.value)?.supported() === true
+                const selected = playbackEngine === opt.value
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    disabled={!supported}
+                    onClick={() => supported && setPlaybackEngine(opt.value)}
+                    aria-pressed={selected}
+                    className={[
+                      'border p-4 text-left transition-colors',
+                      selected
+                        ? 'border-accent bg-elevated'
+                        : supported
+                          ? 'border-line hover:border-muted'
+                          : 'border-line opacity-50',
+                    ].join(' ')}
+                  >
+                    <div className="font-medium">{opt.label}</div>
+                    <div className="mt-0.5 text-xs text-muted">
+                      {supported ? opt.hint : 'Not supported on this device'}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </section>
+        </SettingsGroup>
+      )}
 
       <SettingsGroup title="Text cleaning">
         <section className="space-y-3">

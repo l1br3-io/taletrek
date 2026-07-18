@@ -1,0 +1,14 @@
+{
+  "name": "taletrek-spike-web-audio",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5175",
+    "build": "vite build",
+    "preview": "vite preview --port 4175"
+  },
+  "devDependencies": {
+    "vite": "8.1.4"
+  }
+}

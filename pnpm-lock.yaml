@@ -31,6 +31,12 @@ importers:
         specifier: 0.1.6
         version: 0.1.6
 
+  spike/web-audio:
+    devDependencies:
+      vite:
+        specifier: 8.1.4
+        version: 8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.49.0)
+
   web:
     dependencies:
       '@ffmpeg/ffmpeg':
@@ -42,9 +48,6 @@ importers:
       '@floating-ui/react':
         specifier: ^0.27.20
         version: 0.27.20(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@mintplex-labs/piper-tts-web':
-        specifier: 1.0.4
-        version: 1.0.4(onnxruntime-web@1.18.0)
       '@tiptap/extension-placeholder':
         specifier: ^3.28.0
         version: 3.28.0(@tiptap/extensions@3.28.0(@tiptap/core@3.28.0(@tiptap/pm@3.28.0))(@tiptap/pm@3.28.0))

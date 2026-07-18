@@ -177,4 +177,29 @@ describe('PlayerBar', () => {
     expect(screen.getByRole('button', { name: 'Previous paragraph' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Next paragraph' })).toBeDisabled()
   })
+
+  describe('synth lockdown (ADR-0010 / M11)', () => {
+    it('disables playback controls while locked down', () => {
+      renderBar({ synthLockdown: true, lockdownLabel: 'Synthesizing… 12/42' })
+      expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Previous paragraph' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Next paragraph' })).toBeDisabled()
+    })
+
+    it('shows the lockdown label in the status area', () => {
+      renderBar({ synthLockdown: true, lockdownLabel: 'Synthesizing… 12/42' })
+      expect(screen.getByText('Synthesizing… 12/42')).toBeInTheDocument()
+    })
+
+    it('disables Stop inside the overflow menu while locked down', () => {
+      renderBar({ synthLockdown: true })
+      openMenu()
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled()
+    })
+
+    it('falls back to the normal status label when lockdown is unset', () => {
+      renderBar({ status: { type: 'idle' } })
+      expect(screen.getByText('Ready')).toBeInTheDocument()
+    })
+  })
 })
