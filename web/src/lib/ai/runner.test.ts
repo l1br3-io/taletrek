@@ -120,6 +120,69 @@ describe('runTransform — abort', () => {
   })
 })
 
+describe('runTransform — streaming (onDelta)', () => {
+  it('forwards onDelta to complete and accumulates within a chunk', async () => {
+    // Single chunk (short input). complete emits three deltas; runTransform
+    // should re-buffer so onDelta callers see chunk-local textSoFar.
+    const complete = vi.fn(async (_msgs, opts) => {
+      opts?.onDelta?.('A', 'A')
+      opts?.onDelta?.('AB', 'B')
+      opts?.onDelta?.('ABC', 'C')
+      return 'ABC'
+    })
+    const seen: Array<{ soFar: string; delta: string }> = []
+    await runTransform(
+      ['p0'],
+      cleanupDef,
+      {},
+      CTX,
+      complete,
+      undefined,
+      undefined,
+      (soFar, delta) => seen.push({ soFar, delta }),
+    )
+    expect(seen).toEqual([
+      { soFar: 'A', delta: 'A' },
+      { soFar: 'AB', delta: 'B' },
+      { soFar: 'ABC', delta: 'C' },
+    ])
+    expect(complete).toHaveBeenCalledTimes(1)
+  })
+
+  it('resets textSoFar between chunks (does not accumulate cross-chunk)', async () => {
+    // Force two chunks: CTX=2048 → budget = max(512, 2048-1-1024) = 1023 tokens.
+    // 2200 chars * 0.25 = 550 tokens per paragraph → first fits (550<1023),
+    // first+second doesn't (1100>1023) → one paragraph per chunk.
+    const bigA = 'a'.repeat(2200)
+    const bigB = 'b'.repeat(2200)
+    const complete = vi.fn(async (_msgs, opts) => {
+      opts?.onDelta?.('X', 'X')
+      opts?.onDelta?.('XY', 'Y')
+      return 'XY'
+    })
+    const seen: string[] = []
+    await runTransform(
+      [bigA, bigB],
+      cleanupDef,
+      {},
+      2048,
+      complete,
+      undefined,
+      undefined,
+      (soFar) => seen.push(soFar),
+    )
+    // Each chunk resets — second chunk's first delta is 'X', not 'XYX'.
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(seen).toEqual(['X', 'XY', 'X', 'XY'])
+  })
+
+  it('does not invoke onDelta when not provided (no crash)', async () => {
+    const complete = vi.fn(async () => 'x')
+    const out = await runTransform(['a'], cleanupDef, {}, CTX, complete)
+    expect(out).toEqual(['x'])
+  })
+})
+
 describe('runHints', () => {
   it('requests JSON mode and parses candidates', async () => {
     const complete = vi.fn(async () =>

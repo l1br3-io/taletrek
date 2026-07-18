@@ -120,4 +120,98 @@ describe('ReaderView', () => {
     const dots = container.querySelectorAll('.tt-reader-text p span[aria-hidden]')
     expect(dots).toHaveLength(0)
   })
+
+  describe('AI streaming', () => {
+    it('renders the streaming chip + cursor + .tt-streaming on the streaming paragraph', () => {
+      const ch = chapter(['First.', 'Second.'])
+      const { container } = render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          stream={{
+            paragraphId: `${ch.id}:1`,
+            opLabel: 'Simplify',
+            streamingText: 'Second paragraph, simplified so far',
+          }}
+        />,
+      )
+      // The chip is present with the op label and a Stop button.
+      const chip = screen.getByTestId('stream-chip')
+      expect(chip).toHaveTextContent('❯Simplify')
+      expect(screen.getByRole('button', { name: 'Stop Simplify' })).toBeInTheDocument()
+
+      // The streaming paragraph carries the .tt-streaming marker.
+      const paragraphs = container.querySelectorAll('.tt-reader-text p')
+      expect(paragraphs[0]?.className).not.toMatch(/tt-streaming/)
+      expect(paragraphs[1]?.className).toMatch(/tt-streaming/)
+
+      // The streaming paragraph shows the streamed text + a blinking cursor (█).
+      expect(paragraphs[1]?.textContent).toContain('Second paragraph, simplified so far')
+      expect(paragraphs[1]?.textContent).toContain('█')
+    })
+
+    it('renders the original text + no chip when stream is null', () => {
+      const { container } = render(
+        <ReaderView book={book} chapters={[chapter(['Hello.'])]} stream={null} />,
+      )
+      expect(screen.queryByTestId('stream-chip')).not.toBeInTheDocument()
+      const p = container.querySelector('.tt-reader-text p')
+      expect(p?.textContent).toBe('Hello.')
+      expect(p?.className).not.toMatch(/tt-streaming/)
+    })
+
+    it('yields active + seekable states while a paragraph is streaming', () => {
+      const onSeek = vi.fn()
+      const ch = chapter(['Active.', 'Streaming.'])
+      const { container } = render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          currentParagraphId={`${ch.id}:1`} // would normally be active
+          onSeekParagraph={onSeek}
+          stream={{
+            paragraphId: `${ch.id}:1`, // same paragraph — streaming wins
+            opLabel: 'Translate',
+            streamingText: 'Translated text',
+          }}
+        />,
+      )
+      const paragraphs = container.querySelectorAll('.tt-reader-text p')
+      // Paragraph 1 is streaming — should NOT carry the active highlight.
+      expect(paragraphs[1]?.className).not.toMatch(/bg-accent-soft|ring-accent/)
+      expect(paragraphs[1]?.className).toMatch(/tt-streaming/)
+      // Paragraph 1 is NOT seekable while streaming (no role=button).
+      expect(paragraphs[1]?.getAttribute('role')).toBeNull()
+    })
+
+    it('calls onStopStream when the Stop button is clicked', () => {
+      const onStop = vi.fn()
+      const ch = chapter(['Hello.'])
+      render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          stream={{ paragraphId: `${ch.id}:0`, opLabel: 'Simplify', streamingText: 'Hi' }}
+          onStopStream={onStop}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Stop Simplify' }))
+      expect(onStop).toHaveBeenCalledTimes(1)
+    })
+
+    it('sets aria-live="off" on the streaming paragraph (SR announce via status region, not per-token)', () => {
+      const ch = chapter(['Hello.'])
+      const { container } = render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          stream={{ paragraphId: `${ch.id}:0`, opLabel: 'Simplify', streamingText: 'Hi' }}
+        />,
+      )
+      const p = container.querySelector('.tt-reader-text p')
+      expect(p?.getAttribute('aria-live')).toBe('off')
+      // Status region is present and announces the op start.
+      expect(screen.getByTestId('stream-status')).toHaveTextContent('Simplify started')
+    })
+  })
 })

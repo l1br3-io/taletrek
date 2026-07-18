@@ -50,6 +50,7 @@ export function Settings() {
   const ai = aiValue ?? DEFAULT_AI_SETTINGS
   const [synthMode, setSynthMode] = useSetting('synthesizeOnUpload')
   const [audioCacheBudgetMb, setAudioCacheBudgetMb] = useSetting('audioCacheBudgetMb')
+  const [vConsoleEnabled, setVConsoleEnabled] = useSetting('vConsoleEnabled')
 
   const {
     storedIds,
@@ -330,6 +331,34 @@ export function Settings() {
       </SettingsGroup>
 
       <BackupSection onImported={() => void reloadSettings()} />
+
+      <SettingsGroup title="Debug">
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
+              vConsole overlay
+            </h3>
+            <button
+              type="button"
+              onClick={() => setVConsoleEnabled(!vConsoleEnabled)}
+              aria-pressed={vConsoleEnabled}
+              aria-label="Toggle vConsole overlay"
+              className={[
+                'border px-3 py-1.5 text-sm font-medium transition-colors',
+                vConsoleEnabled
+                  ? 'border-accent bg-accent-soft text-accent'
+                  : 'border-line text-muted',
+              ].join(' ')}
+            >
+              {vConsoleEnabled ? 'On' : 'Off'}
+            </button>
+          </div>
+          <p className="text-xs text-muted">
+            Show the vConsole mobile-debug panel (console, network, storage) at the bottom of the
+            screen. Useful when troubleshooting playback on iOS. Off by default.
+          </p>
+        </section>
+      </SettingsGroup>
 
       <section className="space-y-3 border border-danger/40 bg-surface p-5">
         <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.15em] text-danger">

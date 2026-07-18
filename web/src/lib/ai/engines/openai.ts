@@ -32,6 +32,8 @@ export class CloudError extends Error {
 interface CompleteOptions {
   json?: boolean
   signal?: AbortSignal
+  /** Live per-token callback: receives accumulated text + the new delta. */
+  onDelta?: (textSoFar: string, delta: string) => void
 }
 
 /**
@@ -57,6 +59,7 @@ export class CloudLlmEngine implements AiTransformEngine {
     def: TransformDefinition,
     onProgress?: (fraction: number) => void,
     signal?: AbortSignal,
+    onDelta?: (textSoFar: string, delta: string) => void,
   ): Promise<string[]> {
     this.requireKey()
     return runTransform(
@@ -67,6 +70,7 @@ export class CloudLlmEngine implements AiTransformEngine {
       this.complete,
       onProgress,
       signal,
+      onDelta,
     )
   }
 
@@ -136,6 +140,7 @@ export class CloudLlmEngine implements AiTransformEngine {
       res.body,
       (delta) => {
         acc += delta
+        opts.onDelta?.(acc, delta)
       },
       opts.signal,
     )

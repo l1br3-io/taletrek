@@ -28,7 +28,11 @@ import type {
 /** Engine-specific completion primitive. */
 export type CompleteFn = (
   messages: CompletionMessages,
-  opts?: { json?: boolean; signal?: AbortSignal },
+  opts?: {
+    json?: boolean
+    signal?: AbortSignal
+    onDelta?: (textSoFar: string, delta: string) => void
+  },
 ) => Promise<string>
 
 /** Progress fraction, treating an empty chunk list as already complete. */
@@ -68,6 +72,7 @@ export async function runTransform(
   complete: CompleteFn,
   onProgress?: (fraction: number) => void,
   signal?: AbortSignal,
+  onDelta?: (textSoFar: string, delta: string) => void,
 ): Promise<string[]> {
   const systemPrompt = buildTransformMessages(def, opParams, []).system
   const systemTokens = estimateTokens(systemPrompt)
@@ -78,8 +83,17 @@ export async function runTransform(
     const out: string[] = []
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i] as NonNullable<(typeof chunks)[0]>
+      // Reset textSoFar at the start of each chunk — `onDelta` callers render
+      // the current chunk's stream, not an accumulating cross-chunk blob.
+      let chunkAcc = ''
       const raw = await complete(buildTransformMessages(def, opParams, chunk.paragraphs), {
         signal,
+        onDelta: onDelta
+          ? (_acc, delta) => {
+              chunkAcc += delta
+              onDelta(chunkAcc, delta)
+            }
+          : undefined,
       })
       out.push(...splitOutput(raw))
       onProgress?.(fraction(i + 1, chunks.length))
@@ -91,7 +105,16 @@ export async function runTransform(
   const out = [...input]
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i] as NonNullable<(typeof chunks)[0]>
-    const raw = await complete(buildTransformMessages(def, opParams, chunk.paragraphs), { signal })
+    let chunkAcc = ''
+    const raw = await complete(buildTransformMessages(def, opParams, chunk.paragraphs), {
+      signal,
+      onDelta: onDelta
+        ? (_acc, delta) => {
+            chunkAcc += delta
+            onDelta(chunkAcc, delta)
+          }
+        : undefined,
+    })
     const parts = splitOutput(raw)
     const max = Math.min(parts.length, chunk.paragraphs.length)
     for (let j = 0; j < max; j++) {
