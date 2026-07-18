@@ -4,8 +4,10 @@ import { putBookAudio } from '../book-audio'
 import { cleanChapters } from '../clean'
 import type { CleaningConfig } from '../clean/types'
 import { deleteBookCascade, getBook, putBook } from '../db'
-import { type ParagraphPreSynthInfo, preSynthesizeBook } from '../pre-synth'
+import type { ParagraphPreSynthInfo } from '../pre-synth'
+import { preSynthesizeBook } from '../pre-synth'
 import { ttsClient } from '../tts/client'
+import { acquireUploadWakeLock } from '../wake-lock'
 
 /**
  * Distinguishes a fresh-upload synth (a failure here is fatal — the book has no
@@ -158,6 +160,8 @@ class UploadManager {
     const refs = paragraphRefs(cleaned)
     const isMobile = isMobileDevice()
 
+    // State must flip synchronously so `startJob`'s re-entry guard sees
+    // 'synthesizing' before the caller can call startJob again.
     this.setState({
       type: 'synthesizing',
       book,
@@ -166,6 +170,10 @@ class UploadManager {
       synthesizedParagraphIds: new Set(),
       mode,
     })
+
+    // Hold a screen wake lock for the full job (synth + mobile encode) so the
+    // auto-lock timer doesn't freeze the workers mid-render. Best-effort.
+    const wakeLock = await acquireUploadWakeLock()
 
     try {
       const preSynthResult = await preSynthesizeBook({
@@ -222,6 +230,7 @@ class UploadManager {
         })
       }
     } finally {
+      await wakeLock.release()
       this.abortController = null
       // If the user cancelled but an async path didn't observe the abort
       // (e.g. the encoding phase has unconditional setState calls that may

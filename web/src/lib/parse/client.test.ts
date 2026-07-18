@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { WakeLockHandle } from '../wake-lock'
+
+const acquireUploadWakeLock = vi.fn<() => Promise<WakeLockHandle>>()
+const releaseMock = vi.fn<() => Promise<void>>()
+vi.mock('../wake-lock', () => ({
+  acquireUploadWakeLock: () => acquireUploadWakeLock(),
+}))
+
 import { _resetWorkerForTests, parseInWorker } from './client'
 import type { ParseRequest } from './protocol'
 
@@ -45,6 +53,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+beforeEach(() => {
+  acquireUploadWakeLock.mockReset()
+  releaseMock.mockReset()
+  acquireUploadWakeLock.mockResolvedValue({ release: releaseMock })
+})
+
 describe('parseInWorker', () => {
   it('resolves with the parsed result on success', async () => {
     vi.stubGlobal('Worker', WorkerStub)
@@ -55,6 +69,8 @@ describe('parseInWorker', () => {
     const result = { title: 'a', chapters: [{ title: 'a', paragraphs: ['hi'] }] }
     current?.emit({ id, type: 'success', result })
     await expect(pending).resolves.toEqual(result)
+    expect(acquireUploadWakeLock).toHaveBeenCalledTimes(1)
+    expect(releaseMock).toHaveBeenCalledTimes(1)
   })
 
   it('rejects with an error message on failure', async () => {
@@ -65,6 +81,8 @@ describe('parseInWorker', () => {
     const id = current?.request?.id
     current?.emit({ id, type: 'error', message: 'Unsupported file type: bad.unknown' })
     await expect(pending).rejects.toThrow('Unsupported file type: bad.unknown')
+    expect(acquireUploadWakeLock).toHaveBeenCalledTimes(1)
+    expect(releaseMock).toHaveBeenCalledTimes(1)
   })
 
   it('ignores responses with a mismatched id', async () => {
