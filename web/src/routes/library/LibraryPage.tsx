@@ -1,4 +1,5 @@
 import { X } from 'lucide-react'
+import { uploadManager } from '../../lib/upload/manager'
 import { LibraryList } from './LibraryList'
 import { OutlineSheet } from './OutlineSheet'
 import { PronunciationReview } from './PronunciationReview'
@@ -130,6 +131,7 @@ export function Library() {
           onPronunciation={ai.enabled && online ? handlePronunciation : undefined}
           onOutline={handleOutline}
           onResynthesize={synthesizeOnUpload !== 'off' ? handleResynthesize : undefined}
+          onResume={(id) => void uploadManager.resume(id)}
           onRename={handleRename}
         />
       )}

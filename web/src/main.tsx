@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router'
 import { routes } from './App'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { SettingsProvider } from './context/settings'
 import { isMediaSessionSupported, supportedMediaSessionActions } from './lib/media-session'
 import { requestPersistence } from './lib/storage'
@@ -40,7 +41,9 @@ void (async () => {
   createRoot(root).render(
     <StrictMode>
       <SettingsProvider>
-        <RouterProvider router={router} />
+        <ErrorBoundary>
+          <RouterProvider router={router} />
+        </ErrorBoundary>
       </SettingsProvider>
     </StrictMode>,
   )

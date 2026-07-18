@@ -15,8 +15,13 @@ function makeWorkerError(msg: Extract<ConcatResponse, { type: 'error' }>): Error
   if (msg.name) {
     try {
       return new DOMException(msg.message, msg.name)
-    } catch {
-      // Fall through.
+    } catch (domErr) {
+      console.warn('[taletrek] concat client: could not reconstruct DOMException', {
+        workerName: msg.name,
+        workerCode: msg.code,
+        workerMessage: msg.message,
+        domConstructorError: (domErr as Error).message,
+      })
     }
   }
   return new Error(msg.message)
@@ -43,6 +48,12 @@ function handleWorkerMessage(event: MessageEvent<ConcatResponse>): void {
   if (msg.type === 'loaded' || msg.type === 'success') {
     entry.resolve(msg)
   } else {
+    console.error('[taletrek] concat client: worker error response', {
+      id: msg.id,
+      workerName: msg.name,
+      workerCode: msg.code,
+      workerMessage: msg.message,
+    })
     entry.reject(makeWorkerError(msg))
   }
 }

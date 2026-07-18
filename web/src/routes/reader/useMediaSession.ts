@@ -18,6 +18,8 @@ export interface MediaSessionPlayer {
   currentParagraphId: string | null
   play: () => void
   pause: () => void
+  next: () => void
+  prev: () => void
   nextChapter: () => void
   prevChapter: () => void
   seekBy: (deltaSeconds: number) => void
@@ -66,8 +68,8 @@ export function useMediaSession({
       seekto: (t) => {
         if (t != null) playerRef.current.seekTo(t)
       },
-      nexttrack: () => playerRef.current.nextChapter(),
-      previoustrack: () => playerRef.current.prevChapter(),
+      nexttrack: () => playerRef.current.next(),
+      previoustrack: () => playerRef.current.prev(),
     })
     return () => {
       cleanup()

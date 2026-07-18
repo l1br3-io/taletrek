@@ -1,4 +1,5 @@
 import type { AppliedProcessing } from './lib/ai/types'
+import type { CleaningConfig } from './lib/clean/types'
 
 export type BookId = string & { readonly __brand: 'BookId' }
 export type ChapterId = string & { readonly __brand: 'ChapterId' }
@@ -33,6 +34,45 @@ export interface Book {
   processing?: AppliedProcessing
   /** True while upload (synth + concat+encode) is in progress. Library badges it. */
   uploading?: boolean
+  /**
+   * A synthesis job paused mid-book (ADR-0010 / M11). When present, the book is
+   * resumable from the library. `uploading` is `false` while paused, so the boot
+   * sweep (ADR-0009) ignores it — only explicit user pause becomes resumable;
+   * true interruptions stay sweep-governed.
+   */
+  uploadJob?: PersistedUploadJob
+}
+
+/**
+ * A paused synthesis job's resumable spec, persisted on the book record.
+ * Resume reloads chapters from IDB and re-runs this spec; the M8 cache
+ * fast-forwards through already-synthesized paragraphs.
+ *
+ * Persisted from `runJob` start (not only on explicit pause) so an
+ * interrupted initial upload (iOS tab eviction, crash) survives the
+ * ADR-0009 boot sweep as a resumable paused book. `done` is bumped per-¶;
+ * `lastFlatIndex` / `lastChapterTitle` / etc. carry the paragraph the
+ * synth died on so the post-eviction library card can show it.
+ */
+export interface PersistedUploadJob {
+  voiceId: VoiceId
+  cleaning: CleaningConfig
+  /** `'initial'` (fresh upload) or `'resynth'` (re-synthesize). */
+  mode: 'initial' | 'resynth'
+  /** Paragraphs synthesized before the pause (best-effort, for UI display). */
+  done: number
+  /** Total paragraphs in the job (best-effort, for UI display). */
+  total: number
+  /** Date.now() at pause time. */
+  pausedAt: number
+  /** Flat index of the paragraph currently (or last) being synthesized. */
+  lastFlatIndex?: number
+  /** Chapter title where the synth is/was sitting. */
+  lastChapterTitle?: string
+  /** Paragraph-within-chapter (1-based, non-empty paragraphs only) of the last attempt. */
+  lastParagraphInChapter?: number
+  /** Total non-empty paragraphs in the chapter containing the last attempt. */
+  lastChapterTotal?: number
 }
 
 export interface Chapter {

@@ -38,7 +38,7 @@ function contentSecurityPolicy(): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   server: {
-    allowedHosts: ['omaha-tramadol-champagne-cities.trycloudflare.com'],
+    allowedHosts: ['testament-outside-stuffed-egg.trycloudflare.com'],
   },
   plugins: [
     react(),

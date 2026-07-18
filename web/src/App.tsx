@@ -1,4 +1,5 @@
 import type { RouteObject } from 'react-router'
+import { RouteErrorElement } from './components/ErrorBoundary'
 import { Layout } from './components/Layout'
 import { Landing } from './routes/landing/LandingPage'
 import { Library } from './routes/library/LibraryPage'
@@ -10,6 +11,7 @@ export const routes: RouteObject[] = [
   {
     path: '/',
     element: <Layout />,
+    errorElement: <RouteErrorElement />,
     children: [
       { index: true, element: <Landing /> },
       { path: 'library', element: <Library /> },

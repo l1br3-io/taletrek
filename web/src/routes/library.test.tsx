@@ -594,6 +594,11 @@ describe('Library — per-book synthesize', () => {
     // The global banner shows the initial re-synth state immediately
     // (manager sets done=0 before the first synth resolves).
     expect(await screen.findByText(/Updating audio for/)).toBeInTheDocument()
+    // Wait for the first synth call to land before resolving its gate —
+    // runJob persists `uploadJob` (IDB write) between setState(synthesizing)
+    // and the first `engine.synthesize` call, so the gate isn't pushed
+    // synchronously.
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(1))
     // Resolve the first synth → onProgress(1, 2) fires; the second is still gated.
     await act(async () => {
       gates[0]?.()

@@ -40,6 +40,14 @@ interface PlayerBarProps {
   onOpenOutline?: () => void
   /** Open the per-paragraph transform modal for the current paragraph. */
   onTransformParagraph?: () => void
+  /**
+   * Mobile synthesis lockdown (ADR-0010 / M11). When true, playback controls are
+   * disabled — on mobile, playback during synthesis would fall back to the
+   * lock-broken per-paragraph engine, so the reader pins to a synthesis mode.
+   */
+  synthLockdown?: boolean
+  /** Status label shown while `synthLockdown` is active (e.g. "Synthesizing… 12/42"). */
+  lockdownLabel?: string
 }
 
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2]
@@ -80,10 +88,14 @@ export function PlayerBar({
   onScrollToTop,
   onOpenOutline,
   onTransformParagraph,
+  synthLockdown = false,
+  lockdownLabel,
 }: PlayerBarProps) {
   const isPlaying = status.type === 'playing'
   const isLoading = status.type === 'loading' || status.type === 'buffering'
   const busy = isLoading
+  // During mobile synthesis lockdown, all playback controls are disabled.
+  const playbackDisabled = busy || synthLockdown
 
   const hasOverflow =
     !!onNextChapter ||
@@ -101,13 +113,13 @@ export function PlayerBar({
       <button
         type="button"
         onClick={onPrev}
-        disabled={busy}
+        disabled={playbackDisabled}
         className="border border-line px-2 py-1 disabled:opacity-40"
         aria-label="Previous paragraph"
       >
         <SkipBack className="h-5 w-5" />
       </button>
-      {isPlaying ? (
+      {isPlaying && !synthLockdown ? (
         <button
           type="button"
           onClick={onPause}
@@ -120,7 +132,7 @@ export function PlayerBar({
         <button
           type="button"
           onClick={onPlay}
-          disabled={busy}
+          disabled={playbackDisabled}
           className="inline-flex items-center justify-center gap-1 border border-accent bg-accent px-4 py-1 text-bg disabled:opacity-40"
           aria-label="Play"
         >
@@ -130,14 +142,14 @@ export function PlayerBar({
       <button
         type="button"
         onClick={onNext}
-        disabled={busy}
+        disabled={playbackDisabled}
         className="border border-line px-2 py-1 disabled:opacity-40"
         aria-label="Next paragraph"
       >
         <SkipForward className="h-5 w-5" />
       </button>
       <span className="min-w-0 flex-1 truncate text-sm text-muted" aria-live="polite">
-        {statusLabel(status, bufferedAhead)}
+        {synthLockdown && lockdownLabel ? lockdownLabel : statusLabel(status, bufferedAhead)}
       </span>
       {hasOverflow && (
         <Menu
@@ -192,7 +204,8 @@ export function PlayerBar({
                   onStop()
                   close()
                 }}
-                className="mt-1 flex w-full items-center gap-2 border border-line px-2 py-1 text-sm"
+                disabled={synthLockdown}
+                className="mt-1 flex w-full items-center gap-2 border border-line px-2 py-1 text-sm disabled:opacity-40"
               >
                 <Square className="h-4 w-4" /> Stop
               </button>

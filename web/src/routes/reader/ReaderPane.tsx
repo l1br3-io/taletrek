@@ -65,6 +65,7 @@ function ReaderPane({
     [chapters, settings.cleaning],
   )
   const cleanedParagraphs = useMemo(() => flattenParagraphs(cleanedChapters), [cleanedChapters])
+  const isMobile = useIsMobile()
 
   // Background synth (upload manager): if a job is running for THIS book,
   // surface buffer state so the player, ReaderView, and Outline can show
@@ -78,6 +79,30 @@ function ReaderPane({
     jobState.type === 'synthesizing' && jobState.book.id === book.id
       ? jobState.synthesizedParagraphIds
       : undefined
+  // Mobile synthesis lockdown (ADR-0010 / M11): on a coarse-pointer device,
+  // pin the reader's playback bar to a synthesis mode while this book's job is
+  // active or paused — playback during synthesis would fall back to the
+  // lock-broken per-paragraph engine.
+  const jobForThisBook =
+    (jobState.type === 'synthesizing' ||
+      jobState.type === 'voiceDownload' ||
+      jobState.type === 'encoding' ||
+      jobState.type === 'cancelling' ||
+      jobState.type === 'paused') &&
+    jobState.book.id === book.id
+  const synthLockdown = isMobile && jobForThisBook
+  const lockdownLabel =
+    jobState.type === 'synthesizing'
+      ? `Synthesizing… ${jobState.done}/${jobState.total}`
+      : jobState.type === 'voiceDownload'
+        ? 'Downloading voice…'
+        : jobState.type === 'encoding'
+          ? 'Encoding audiobook…'
+          : jobState.type === 'paused'
+            ? `Paused · ${jobState.done}/${jobState.total}`
+            : jobState.type === 'cancelling'
+              ? 'Cancelling…'
+              : undefined
 
   // Persistent cache probe: which paragraphs are pre-rendered even when no
   // background synth job is running. Bumps after a job completes to pick up
@@ -133,8 +158,6 @@ function ReaderPane({
     () => resolveInitialIndex(cleanedChapters, book.position),
     [cleanedChapters, book.position],
   )
-
-  const isMobile = useIsMobile()
 
   const player = usePlayer(
     {
@@ -281,6 +304,8 @@ function ReaderPane({
         onScrollToTop={() => scrollToTop()}
         onOpenOutline={cleanedChapters.length > 0 ? () => setOutlineOpen(true) : undefined}
         onTransformParagraph={transform.openTransform}
+        synthLockdown={synthLockdown}
+        lockdownLabel={lockdownLabel}
       />
       {showFab && (
         <button

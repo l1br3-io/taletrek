@@ -1,5 +1,7 @@
 # Plan: M8.1 — iOS Huge-Book Upload Resilience
 
+> Status: ✅ Complete — verified 2026-07-18 (`pnpm typecheck`, 811 tests, `pnpm verify`).
+
 ## Problem
 
 On iOS Safari, uploading a large PDF could fail during the synthesizing stage with a `DOMException`. Investigation showed the failure was a combination of:

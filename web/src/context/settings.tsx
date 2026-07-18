@@ -2,6 +2,7 @@ import { createContext, type ReactNode, useContext, useEffect, useRef, useState 
 import type { AiSettings, CloudProvider } from '../lib/ai/types'
 import type { CleaningConfig } from '../lib/clean/types'
 import { getSetting, setSetting, syncAudioCacheBudget } from '../lib/db'
+import type { PlaybackEngineSetting } from '../lib/playback/engines'
 import { DEFAULT_VOICE_ID } from '../lib/tts/voices'
 import type { VoiceId } from '../types'
 
@@ -32,6 +33,12 @@ export interface Settings {
   synthesizeOnUpload: SynthMode
   /** Audio cache budget in megabytes. Drives LRU eviction in the `audioCache` store (only when mode is `'standard'`). */
   audioCacheBudgetMb: number
+  /**
+   * Mobile playback engine (ADR-0010 / M11). `'auto'` → Web Audio (native) when
+   * supported, else FFmpeg. Only affects coarse-pointer devices; desktop is
+   * always per-paragraph `<audio>`. Surfaced in Settings → Advanced.
+   */
+  playbackEngine: PlaybackEngineSetting
   /** Show the vConsole mobile-debug overlay (M9 iOS testing). Off by default. */
   vConsoleEnabled: boolean
 }
@@ -59,6 +66,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ai: DEFAULT_AI_SETTINGS,
   synthesizeOnUpload: 'standard',
   audioCacheBudgetMb: 500,
+  playbackEngine: 'auto',
   vConsoleEnabled: false,
 }
 
@@ -114,6 +122,7 @@ function migrateAi(ai: unknown): AiSettings {
  * Migrate stored settings forward. Currently handles:
  * - `synthesizeOnUpload: boolean → SynthMode` (true → `'standard'`, false/other → `'off'`).
  * - `ai.cloud: { baseUrl, model } → { providers: [...], activeProviderId }` (multi-provider).
+ * - `playbackEngine`: coerce unknown/missing values to `'auto'` (M11).
  * Returns the merged + migrated settings. Pure given `stored`.
  */
 function migrateSettings(stored: Partial<Settings> | undefined): Settings {
@@ -126,6 +135,13 @@ function migrateSettings(stored: Partial<Settings> | undefined): Settings {
     merged.synthesizeOnUpload !== 'no-limit'
   ) {
     merged.synthesizeOnUpload = 'standard'
+  }
+  if (
+    merged.playbackEngine !== 'auto' &&
+    merged.playbackEngine !== 'web-audio' &&
+    merged.playbackEngine !== 'ffmpeg'
+  ) {
+    merged.playbackEngine = 'auto'
   }
   merged.ai = migrateAi(merged.ai)
   return merged

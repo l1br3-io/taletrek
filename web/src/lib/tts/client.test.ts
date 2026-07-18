@@ -150,6 +150,226 @@ describe('TtsClient', () => {
     await expect(pending).rejects.toThrow(/worker crashed/)
   })
 
+  it('forwards workerError messages without rejecting in-flight requests', async () => {
+    vi.stubGlobal('Worker', WorkerStub)
+    const client = new TtsClient()
+    const warnSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const pending = client.synthesize({ text: 'x', voiceId: VOICE })
+    await flushPosted()
+
+    // A worker-level unhandled rejection (e.g. Piper's printErr throw) arrives
+    // while a synth is in flight. The client must log it but NOT reject the
+    // pending request — the rejection didn't break inference, and rejecting
+    // would surface as a spurious synth failure.
+    current?.emit({
+      type: 'workerError',
+      source: 'unhandledrejection',
+      message: 'PARSE_ERROR: ...',
+      name: 'PARSE_ERROR',
+    })
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[taletrek] tts client: worker-level error forwarded',
+      expect.objectContaining({
+        source: 'unhandledrejection',
+        name: 'PARSE_ERROR',
+        message: 'PARSE_ERROR: ...',
+      }),
+    )
+
+    // The in-flight synth should still resolve normally when its response arrives.
+    const wav = new Blob([new Uint8Array([1])], { type: 'audio/x-wav' })
+    current?.emit({
+      id: lastId(),
+      type: 'success',
+      op: 'synthesize',
+      audio: wav,
+      synthMs: 5,
+      durationSeconds: 1,
+      cacheKey: 'k',
+    })
+    await expect(pending).resolves.toMatchObject({ synthMs: 5 })
+    warnSpy.mockRestore()
+  })
+
+  it('does NOT recycle on a non-fatal workerError (PARSE_ERROR)', async () => {
+    vi.stubGlobal('Worker', WorkerStub)
+    const client = new TtsClient()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // Bootstrap the worker first — `current` is null until a worker-creating
+    // call happens, so emitting a workerError before that is a no-op.
+    const bootSynth = client.synthesize({ text: 'boot', voiceId: VOICE })
+    await flushPosted()
+    current?.emit({
+      id: lastId(),
+      type: 'success',
+      op: 'synthesize',
+      audio: new Blob([new Uint8Array([0])]),
+      synthMs: 1,
+      durationSeconds: 1,
+      cacheKey: 'k0',
+    })
+    await bootSynth
+
+    // PARSE_ERROR fires; per the user's logs, predict() still succeeds with
+    // this error as a worker-level side effect, so we must not trigger a
+    // 4s model reload on every paragraph.
+    current?.emit({
+      type: 'workerError',
+      source: 'unhandledrejection',
+      message: 'PARSE_ERROR: ...',
+      name: 'PARSE_ERROR',
+    })
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('sending resetEngine'),
+      expect.anything(),
+    )
+
+    // Next synth should go straight through without a preceding resetEngine.
+    const synthPending = client.synthesize({ text: 'x', voiceId: VOICE })
+    await flushPosted()
+    expect(current?.lastRequest?.op).toBe('synthesize')
+    current?.emit({
+      id: lastId(),
+      type: 'success',
+      op: 'synthesize',
+      audio: new Blob([new Uint8Array([1])]),
+      synthMs: 5,
+      durationSeconds: 1,
+      cacheKey: 'k',
+    })
+    await synthPending
+  })
+
+  it('recycles the engine before the next synth after a fatal NotFoundError', async () => {
+    vi.stubGlobal('Worker', WorkerStub)
+    const client = new TtsClient()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // Bootstrap the worker so we can deliver a workerError message.
+    const bootSynth = client.synthesize({ text: 'boot', voiceId: VOICE })
+    await flushPosted()
+    current?.emit({
+      id: lastId(),
+      type: 'success',
+      op: 'synthesize',
+      audio: new Blob([new Uint8Array([0])]),
+      synthMs: 1,
+      durationSeconds: 1,
+      cacheKey: 'k0',
+    })
+    await bootSynth
+
+    // Fatal MEMFS error — Emscripten can't find /espeak-ng-data. The session
+    // is permanently broken and would fail every subsequent predict the same
+    // way; flag for recycle.
+    current?.emit({
+      type: 'workerError',
+      source: 'unhandledrejection',
+      message: 'Object cannot be found here',
+      name: 'NotFoundError',
+    })
+
+    // Next synth must first send resetEngine (drain the flag), THEN synthesize.
+    const synthPending = client.synthesize({ text: 'x', voiceId: VOICE })
+    await flushPosted()
+    expect(current?.lastRequest?.op).toBe('resetEngine')
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[taletrek] tts client: sending resetEngine before next synth',
+    )
+
+    // Worker acks the reset.
+    current?.emit({ id: lastId(), type: 'success', op: 'resetEngine' })
+    await flushPosted()
+    // Now the synth request itself goes out.
+    expect(current?.lastRequest?.op).toBe('synthesize')
+    current?.emit({
+      id: lastId(),
+      type: 'success',
+      op: 'synthesize',
+      audio: new Blob([new Uint8Array([1])]),
+      synthMs: 5,
+      durationSeconds: 1,
+      cacheKey: 'k',
+    })
+    await synthPending
+
+    // Flag is drained — a subsequent synth should NOT trigger another reset.
+    warnSpy.mockClear()
+    const synth2 = client.synthesize({ text: 'y', voiceId: VOICE })
+    await flushPosted()
+    expect(current?.lastRequest?.op).toBe('synthesize')
+    expect(warnSpy).not.toHaveBeenCalled()
+    current?.emit({
+      id: lastId(),
+      type: 'success',
+      op: 'synthesize',
+      audio: new Blob([new Uint8Array([2])]),
+      synthMs: 6,
+      durationSeconds: 1,
+      cacheKey: 'k2',
+    })
+    await synth2
+  })
+
+  it('continues synthesizing if resetEngine itself fails', async () => {
+    vi.stubGlobal('Worker', WorkerStub)
+    const client = new TtsClient()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    // Bootstrap the worker.
+    const bootSynth = client.synthesize({ text: 'boot', voiceId: VOICE })
+    await flushPosted()
+    current?.emit({
+      id: lastId(),
+      type: 'success',
+      op: 'synthesize',
+      audio: new Blob([new Uint8Array([0])]),
+      synthMs: 1,
+      durationSeconds: 1,
+      cacheKey: 'k0',
+    })
+    await bootSynth
+
+    // Flag a fatal error.
+    current?.emit({
+      type: 'workerError',
+      source: 'error',
+      message: 'boom',
+      name: 'InvalidStateError',
+    })
+
+    const synthPending = client.synthesize({ text: 'x', voiceId: VOICE })
+    await flushPosted()
+    expect(current?.lastRequest?.op).toBe('resetEngine')
+
+    // The reset itself fails (worker is in a really bad state).
+    current?.emit({
+      id: lastId(),
+      type: 'error',
+      message: 'reset failed',
+      name: 'InvalidStateError',
+    })
+    await flushPosted()
+
+    // Synth should still be attempted (best-effort) — it may or may not work,
+    // but the synth-timeout in pre-synth will catch a hang either way.
+    expect(current?.lastRequest?.op).toBe('synthesize')
+    current?.emit({
+      id: lastId(),
+      type: 'success',
+      op: 'synthesize',
+      audio: new Blob([new Uint8Array([3])]),
+      synthMs: 7,
+      durationSeconds: 1,
+      cacheKey: 'k3',
+    })
+    await expect(synthPending).resolves.toMatchObject({ synthMs: 7 })
+  })
+
   it('ignores responses with a mismatched id', async () => {
     vi.stubGlobal('Worker', WorkerStub)
     const client = new TtsClient()

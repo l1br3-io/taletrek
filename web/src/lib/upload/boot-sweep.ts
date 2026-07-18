@@ -1,5 +1,5 @@
 import { getBookAudio } from '../book-audio'
-import { deleteBookCascade, getAllBooks, putBook } from '../db'
+import { getAllBooks, putBook } from '../db'
 
 /**
  * Boot-time reconciliation for interrupted upload/synth jobs.
@@ -8,30 +8,44 @@ import { deleteBookCascade, getAllBooks, putBook } from '../db'
  * `uploadManager.runJob` never reached `clearUploadingFlag` — most likely
  * because the tab was closed or evicted mid-synth (wake lock couldn't save it).
  *
- * Recovery rule per ADR-0009:
+ * Recovery rule (revised 2026-07-19, superseding ADR-0009's original
+ * cascade-delete contract):
+ *
  * - If the book has audio (`getBookAudio` returns a record): synth actually
  *   completed but the flag just got stranded → clear the flag, keep the book.
  *   Covers interrupted re-synths where the user's old audio is still valid.
  * - If the book has no audio: an `initial`-mode job was interrupted before
- *   any audio landed → cascade-delete to match the existing failure contract
- *   in `manager.ts` (initial failures delete the book; the user has no
- *   investment in a half-baked upload). The original file is gone with it,
- *   which is correct — the user hadn't successfully used it yet.
+ *   any m4a landed → **convert to paused** (`uploading = false`, leave the
+ *   `uploadJob` that `runJob` persists from the start). The M8 content-addressed
+ *   audioCache entries survive (keyed by content hash; only deleted if the
+ *   book itself is cascade-deleted), so resume fast-forwards through whatever
+ *   paragraphs already synthesized. The library shows a Resume button.
+ *   - Legacy edge: a stuck book with no `uploadJob` (started under pre-2026-07
+ *     code) — just clear the flag and leave it as a normal card; user hits
+ *     "Synthesize" from the menu. Strictly better than cascade-deleting.
+ *
+ * Why the change: the original contract cascade-deleted interrupted initial
+ * uploads on the premise that the user had "no investment" in a half-baked
+ * upload. In practice the user invests minutes of waiting + the synth work
+ * already landed in the audioCache — losing all of it on iOS tab eviction was
+ * the single most painful failure mode in real use. The pluggable-engine work
+ * (ADR-0010) made pausable synthesis first-class; extending the same machinery
+ * to true interruptions (not just explicit pauses) closes the gap.
  *
  * Idempotent and safe to call multiple times. Silent — logs only.
  */
 export interface SweepReport {
   clearedFlags: number
-  deletedIncomplete: number
+  convertedToPaused: number
 }
 
 export async function reconcileInterruptedUploads(): Promise<SweepReport> {
   const books = await getAllBooks()
   const stuck = books.filter((b) => b.uploading === true)
-  if (stuck.length === 0) return { clearedFlags: 0, deletedIncomplete: 0 }
+  if (stuck.length === 0) return { clearedFlags: 0, convertedToPaused: 0 }
 
   let clearedFlags = 0
-  let deletedIncomplete = 0
+  let convertedToPaused = 0
 
   await Promise.all(
     stuck.map(async (book) => {
@@ -46,18 +60,21 @@ export async function reconcileInterruptedUploads(): Promise<SweepReport> {
         })
         clearedFlags += 1
       } else {
-        // No audio → initial-mode job was interrupted mid-synth. Cascade-delete
-        // to match the fresh-upload failure contract.
-        await deleteBookCascade(book.id).catch((error) => {
-          console.info('[taletrek] boot-sweep: could not delete', book.id, error)
+        // No audio → interrupted initial-mode job. Convert to paused so the
+        // library shows Resume. `uploadJob` should already be persisted (runJob
+        // writes it from the start); the legacy edge handles older books.
+        delete book.uploading
+        book.updatedAt = Date.now()
+        await putBook(book).catch((error) => {
+          console.info('[taletrek] boot-sweep: could not convert', book.id, error)
         })
-        deletedIncomplete += 1
+        convertedToPaused += 1
       }
     }),
   )
 
-  if (clearedFlags || deletedIncomplete) {
-    console.info('[taletrek] boot-sweep:', { clearedFlags, deletedIncomplete })
+  if (clearedFlags || convertedToPaused) {
+    console.info('[taletrek] boot-sweep:', { clearedFlags, convertedToPaused })
   }
-  return { clearedFlags, deletedIncomplete }
+  return { clearedFlags, convertedToPaused }
 }

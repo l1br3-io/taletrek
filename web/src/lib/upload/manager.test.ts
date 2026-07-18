@@ -2,7 +2,7 @@ import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Book, Chapter } from '../../types'
 import { newBookId, newChapterId, voiceId } from '../../types'
-import { _clearDBForTests, _resetDBForTests, getBook, putBook } from '../db'
+import { _clearDBForTests, _resetDBForTests, getBook, putBook, putChapters } from '../db'
 import type { WakeLockHandle } from '../wake-lock'
 import { type JobState, uploadManager } from './manager'
 import { useUploadState } from './useUpload'
@@ -55,6 +55,18 @@ vi.mock('../audio/concat-client', () => ({
 vi.mock('../wake-lock', () => ({
   acquireUploadWakeLock: () => acquireUploadWakeLock(),
 }))
+
+/**
+ * Force-resolve the mobile engine to FFmpeg so the encode path stays exercisable
+ * in jsdom (which can't express `HTMLVideoElement.canPlayType` / OPFS support, so
+ * the real `resolveMobileEngine` would fall back to 'web-audio' and skip the
+ * encode — ADR-0010). Per-test overrides via `resolveEngineMock.mockReturnValue`.
+ */
+const resolveEngineMock = vi.fn<(...args: unknown[]) => 'web-audio' | 'ffmpeg'>()
+vi.mock('../playback/engines', async (importActual) => {
+  const actual = await importActual<typeof import('../playback/engines')>()
+  return { ...actual, resolveMobileEngine: (...args: unknown[]) => resolveEngineMock(...args) }
+})
 
 function makeBook(title = 'Test Book'): Book {
   const now = Date.now()
@@ -130,6 +142,8 @@ beforeEach(async () => {
     cacheKey: 'k',
   })
   acquireUploadWakeLock.mockResolvedValue({ release: wakeLockRelease })
+  resolveEngineMock.mockReset()
+  resolveEngineMock.mockReturnValue('ffmpeg')
   uploadManager._resetForTests()
 })
 
@@ -277,6 +291,102 @@ describe('uploadManager', () => {
     expect(uploadManager.getState().type).toBe('idle')
   })
 
+  it('pause persists the resumable spec and transitions to paused (ADR-0010)', async () => {
+    const book = makeBook('Pausable')
+    await putBook(book)
+    // Gate the first synth so the job is in-flight when we pause.
+    let resolveFirst: (() => void) | undefined
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveFirst = () =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' })
+        }),
+    )
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(synthMock).toHaveBeenCalled())
+    uploadManager.pause()
+    await act(async () => {
+      resolveFirst?.()
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('paused'))
+
+    const state = uploadManager.getState()
+    expect(state.type).toBe('paused')
+    if (state.type === 'paused') {
+      expect(state.done).toBe(1) // ¶0 synthesized before the abort was observed
+      expect(state.total).toBe(3)
+    }
+    // The persisted spec carries the resumable job; uploading is false so
+    // ADR-0009's boot sweep ignores the book.
+    const saved = await getBook(book.id)
+    expect(saved?.uploadJob).toBeDefined()
+    expect(saved?.uploadJob?.voiceId).toBe(voiceId('en_US-hfc_female-medium'))
+    expect(saved?.uploadJob?.done).toBe(1)
+    expect(saved?.uploadJob?.total).toBe(3)
+    expect(saved?.uploading).toBe(false)
+    // A paused job is not active, so another job could start.
+    expect(uploadManager.isActive()).toBe(false)
+  })
+
+  it('resume reloads the spec from IDB and re-runs the job to completion', async () => {
+    const book = makeBook('Resumable')
+    const chapters = makeChapters()
+    // Tie the chapters to this book so getChaptersByBook finds them on resume.
+    const firstChapter = chapters[0]
+    if (firstChapter) firstChapter.bookId = book.id
+    await putBook(book)
+    await putChapters(chapters)
+
+    // Pause after one paragraph.
+    let resolveFirst: (() => void) | undefined
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveFirst = () =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' })
+        }),
+    )
+    uploadManager.startJob({
+      book,
+      chapters,
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(synthMock).toHaveBeenCalled())
+    uploadManager.pause()
+    await act(async () => {
+      resolveFirst?.()
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('paused'))
+
+    // Resume: synth now resolves normally; cache hits make it fast-forward.
+    synthMock.mockResolvedValue({
+      audio: new Blob(['x']),
+      synthMs: 0,
+      durationSeconds: 1,
+      cacheKey: 'k',
+    })
+    await uploadManager.resume(book.id)
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
+
+    const saved = await getBook(book.id)
+    expect(saved?.uploadJob).toBeUndefined()
+    expect(saved?.uploading).toBeUndefined()
+  })
+
+  it('resume is a no-op when the book has no paused spec', async () => {
+    const book = makeBook('Nothing to resume')
+    await putBook(book)
+    await uploadManager.resume(book.id)
+    expect(uploadManager.getState().type).toBe('idle')
+  })
+
   it('transitions to error on synth failure', async () => {
     const book = makeBook()
     synthMock.mockRejectedValue(new Error('worker exploded'))
@@ -291,10 +401,12 @@ describe('uploadManager', () => {
       expect(s.type).toBe('error')
       return s
     })
-    expect((state as Extract<JobState, { type: 'error' }>).message).toBe('worker exploded')
+    expect((state as Extract<JobState, { type: 'error' }>).message).toBe(
+      "Synth failed at chapter 1 'Chapter 1', paragraph 1/3 (¶ 1/3 overall): worker exploded",
+    )
   })
 
-  it('initial mode cascade-deletes the book on failure (fresh-upload contract)', async () => {
+  it('initial mode keeps the book on failure and offers retry', async () => {
     const book = makeBook('Doomed Upload')
     await putBook(book)
     synthMock.mockRejectedValue(new Error('boom'))
@@ -311,8 +423,11 @@ describe('uploadManager', () => {
       return s as Extract<JobState, { type: 'error' }>
     })
     expect(state.mode).toBe('initial')
-    expect(await getBook(book.id)).toBeUndefined()
-    expect(uploadManager.canRetry()).toBe(false)
+    // Book is kept so the user can retry — cascade-deleting was too aggressive.
+    expect(await getBook(book.id)).toBeDefined()
+    const kept = await getBook(book.id)
+    expect(kept?.uploading).toBeUndefined()
+    expect(uploadManager.canRetry()).toBe(true)
     // Wake lock still released on the error path.
     expect(wakeLockRelease).toHaveBeenCalledTimes(1)
   })
@@ -485,6 +600,214 @@ describe('uploadManager', () => {
     })
     await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
     expect(putBookAudioMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('skips the whole-book encode when the Web Audio engine is resolved (ADR-0010)', async () => {
+    stubMobilePointer(true)
+    resolveEngineMock.mockReturnValue('web-audio')
+    const book = makeBook('Web Audio Book')
+    await putBook(book)
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
+    // No m4a is built — the Web Audio engine reads paragraph WAVs directly.
+    expect(putBookAudioMock).not.toHaveBeenCalled()
+    expect(loadCoreMock).not.toHaveBeenCalled()
+  })
+
+  it('persists uploadJob at runJob start so an eviction becomes resumable', async () => {
+    // The fresh-upload contract: a book that gets its tab evicted mid-synth
+    // must land in the library as Paused, not vanish. That requires uploadJob
+    // to be in IDB from the very first tick — if it's only written on pause,
+    // a surprise eviction loses everything.
+    const book = { ...makeBook('Eviction-Proof'), uploading: true }
+    await putBook(book)
+    // Gated synth so cancel() can finalize (cooperative abort only resolves
+    // at the next paragraph boundary — never-resolving synth would strand
+    // state in 'cancelling' for the duration of the test).
+    let resolveFirst: (() => void) | undefined
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveFirst = () =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' })
+        }),
+    )
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    // Wait for the persisted uploadJob to land — runJob writes it inside the
+    // try block (after wake lock acquire), so it lags setState by a tick.
+    await vi.waitFor(async () => {
+      const saved = await getBook(book.id)
+      expect(saved?.uploadJob).toBeDefined()
+    })
+
+    const inFlight = await getBook(book.id)
+    expect(inFlight?.uploading).toBe(true)
+    expect(inFlight?.uploadJob).toBeDefined()
+    expect(inFlight?.uploadJob?.voiceId).toBe(voiceId('en_US-hfc_female-medium'))
+    expect(inFlight?.uploadJob?.mode).toBe('initial')
+    expect(inFlight?.uploadJob?.total).toBe(3)
+    expect(inFlight?.uploadJob?.done).toBe(0)
+    uploadManager.cancel()
+    // Resolve the in-flight synth so cancel() can finalize.
+    await act(async () => {
+      resolveFirst?.()
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('idle'))
+  })
+
+  it('bumps persisted uploadJob.done per-paragraph (visible progress after eviction)', async () => {
+    const book = { ...makeBook('Per-Para Progress'), uploading: true }
+    await putBook(book)
+    const gates: Array<() => void> = []
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          gates.push(() =>
+            res({ audio: new Blob(['x']), synthMs: 50, durationSeconds: 1, cacheKey: 'k' }),
+          )
+        }),
+    )
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    // Resolve the first paragraph and let the IDB write settle.
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(1))
+    act(() => gates[0]?.())
+    // patchUploadJob is fire-and-forget from onProgress; give it a tick to land.
+    await vi.waitFor(async () => {
+      const saved = await getBook(book.id)
+      expect(saved?.uploadJob?.done).toBe(1)
+    })
+
+    // Drain remaining gates so the job completes cleanly.
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(2))
+    act(() => gates[1]?.())
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(3))
+    act(() => gates[2]?.())
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
+
+    // After completion the uploadJob should be cleared (clearUploadJob runs at end).
+    const completed = await getBook(book.id)
+    expect(completed?.uploadJob).toBeUndefined()
+    expect(completed?.uploading).toBeUndefined()
+  })
+
+  it('records the last-attempted paragraph location on uploadJob (debuggability)', async () => {
+    const book = { ...makeBook('Location Tracking'), uploading: true }
+    await putBook(book)
+    const gates: Array<() => void> = []
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          gates.push(() =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' }),
+          )
+        }),
+    )
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    // Resolve the first paragraph so onProgress fires with done=1 + location
+    // (persistence happens in onProgress only — see manager.ts for the race
+    // rationale).
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(1))
+    act(() => gates[0]?.())
+    await vi.waitFor(async () => {
+      const saved = await getBook(book.id)
+      expect(saved?.uploadJob?.done).toBe(1)
+      expect(saved?.uploadJob?.lastChapterTitle).toBe('Chapter 1')
+      expect(saved?.uploadJob?.lastParagraphInChapter).toBe(1)
+    })
+
+    // Live UI state also carries the current paragraph's location.
+    const state = uploadManager.getState()
+    if (state.type === 'synthesizing') {
+      expect(state.current?.chapterTitle).toBe('Chapter 1')
+    }
+
+    // Drain remaining gates.
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(2))
+    act(() => gates[1]?.())
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(3))
+    act(() => gates[2]?.())
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
+  })
+
+  it('clears uploadJob on caught error so library does not show Paused for an error-state book', async () => {
+    const book = makeBook('Failing Then Error')
+    await putBook(book)
+    synthMock.mockRejectedValue(new Error('boom'))
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('error'))
+
+    const saved = await getBook(book.id)
+    expect(saved).toBeDefined()
+    expect(saved?.uploading).toBeUndefined()
+    // uploadJob was set at runJob start; the error path must clear it so the
+    // library card doesn't show a Resume button for a book in error state.
+    expect(saved?.uploadJob).toBeUndefined()
+  })
+
+  it('cancel clears both uploading flag and uploadJob', async () => {
+    const book = { ...makeBook('Cancellable'), uploading: true }
+    await putBook(book)
+    // Gated synth so cancel() can finalize at the next paragraph boundary
+    // (cooperative abort — never-resolving synth would strand state in
+    // 'cancelling' forever).
+    let resolveFirst: (() => void) | undefined
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveFirst = () =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' })
+        }),
+    )
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    // Wait for uploadJob to land before cancelling — runJob writes it inside
+    // the try block, so it lags setState by a tick.
+    await vi.waitFor(async () => {
+      expect((await getBook(book.id))?.uploadJob).toBeDefined()
+    })
+
+    uploadManager.cancel()
+    await act(async () => {
+      resolveFirst?.()
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('idle'))
+    // The cancel cleanup (clearUploadingFlag + clearUploadJob) is
+    // fire-and-forget so the wake lock release doesn't slip past a test
+    // boundary — poll for the persisted state to settle.
+    await vi.waitFor(async () => {
+      const saved = await getBook(book.id)
+      expect(saved?.uploading).toBeUndefined()
+      expect(saved?.uploadJob).toBeUndefined()
+    })
   })
 })
 
