@@ -45,7 +45,7 @@ export async function lookupAudioCache(key: string): Promise<AudioCacheRecord | 
 export async function storeAudioCache(
   key: string,
   blob: Blob,
-  meta: { bookId?: BookId; voiceId: VoiceId; synthMs: number },
+  meta: { bookId?: BookId; voiceId: VoiceId; synthMs: number; durationSeconds: number },
 ): Promise<void> {
   const now = Date.now()
   const record: AudioCacheRecord = {
@@ -53,6 +53,7 @@ export async function storeAudioCache(
     blob,
     sizeBytes: blob.size,
     synthMs: meta.synthMs,
+    durationSeconds: meta.durationSeconds,
     voiceId: meta.voiceId,
     lastUsed: now,
     createdAt: now,

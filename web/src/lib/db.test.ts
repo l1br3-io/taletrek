@@ -32,6 +32,7 @@ import {
   putBook,
   putBookFile,
   putChapters,
+  setPinnedAudioCacheBookId,
   setSetting,
   syncAudioCacheBudget,
   updateBookProcessing,
@@ -303,6 +304,7 @@ function makeAudioCacheRecord(overrides: Partial<AudioCacheRecord> = {}): AudioC
     bookId: newBookId(),
     sizeBytes: overrides.sizeBytes ?? blob.size,
     synthMs: 12,
+    durationSeconds: 1,
     voiceId: voiceId('en_US-hfc_female-medium'),
     lastUsed: Date.now(),
     createdAt: Date.now(),
@@ -382,6 +384,40 @@ describe('audio cache store (M8)', () => {
     expect(await getAudioCacheEntry('b')).toBeUndefined()
     expect(await getAudioCacheEntry('c')).toBeDefined()
     expect(await getAudioCacheEntry('d')).toBeDefined()
+  })
+
+  it('evictAudioCacheToBudget skips entries pinned to the active book', async () => {
+    const pinnedBook = newBookId()
+    const otherBook = newBookId()
+    await putAudioCacheEntry(
+      makeAudioCacheRecord({ bookId: otherBook, key: 'other', sizeBytes: 100, lastUsed: 1000 }),
+    )
+    await putAudioCacheEntry(
+      makeAudioCacheRecord({ bookId: pinnedBook, key: 'pinned', sizeBytes: 100, lastUsed: 2000 }),
+    )
+    setPinnedAudioCacheBookId(pinnedBook)
+    const removed = await evictAudioCacheToBudget(100)
+    setPinnedAudioCacheBookId(null)
+    expect(removed).toBe(1)
+    expect(await getAudioCacheEntry('other')).toBeUndefined()
+    expect(await getAudioCacheEntry('pinned')).toBeDefined()
+  })
+
+  it('evictAudioCacheFraction skips entries pinned to the active book', async () => {
+    const pinnedBook = newBookId()
+    const otherBook = newBookId()
+    await putAudioCacheEntry(
+      makeAudioCacheRecord({ bookId: otherBook, key: 'other', sizeBytes: 100, lastUsed: 1000 }),
+    )
+    await putAudioCacheEntry(
+      makeAudioCacheRecord({ bookId: pinnedBook, key: 'pinned', sizeBytes: 100, lastUsed: 2000 }),
+    )
+    setPinnedAudioCacheBookId(pinnedBook)
+    const removed = await evictAudioCacheFraction(0.5)
+    setPinnedAudioCacheBookId(null)
+    expect(removed).toBe(1)
+    expect(await getAudioCacheEntry('other')).toBeUndefined()
+    expect(await getAudioCacheEntry('pinned')).toBeDefined()
   })
 
   it('putAudioCacheEntry triggers an LRU sweep when over budget', async () => {

@@ -63,7 +63,7 @@ describe('lookupAudioCache / storeAudioCache', () => {
   it('round-trips a blob through store then lookup', async () => {
     const key = await audioCacheKey(VOICE, 'paragraph one')
     const wav = new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/x-wav' })
-    await storeAudioCache(key, wav, { voiceId: VOICE, synthMs: 950 })
+    await storeAudioCache(key, wav, { voiceId: VOICE, synthMs: 950, durationSeconds: 1 })
     const hit = await lookupAudioCache(key)
     expect(hit).toBeDefined()
     expect(hit?.blob).toBeDefined()
@@ -75,14 +75,19 @@ describe('lookupAudioCache / storeAudioCache', () => {
   it('threads bookId onto the record when provided', async () => {
     const bookId = newBookId()
     const key = await audioCacheKey(VOICE, 'with book')
-    await storeAudioCache(key, new Blob(['x']), { bookId, voiceId: VOICE, synthMs: 1 })
+    await storeAudioCache(key, new Blob(['x']), {
+      bookId,
+      voiceId: VOICE,
+      synthMs: 1,
+      durationSeconds: 1,
+    })
     const hit = await lookupAudioCache(key)
     expect(hit?.bookId).toBe(bookId)
   })
 
   it('omits bookId when not provided (no cascade clear, LRU only)', async () => {
     const key = await audioCacheKey(VOICE, 'no book')
-    await storeAudioCache(key, new Blob(['x']), { voiceId: VOICE, synthMs: 1 })
+    await storeAudioCache(key, new Blob(['x']), { voiceId: VOICE, synthMs: 1, durationSeconds: 1 })
     const hit = await lookupAudioCache(key)
     expect(hit?.bookId).toBeUndefined()
   })
@@ -101,7 +106,7 @@ describe('lookupAudioCache / storeAudioCache', () => {
     const { storeAudioCache: store } = await import('./audio-cache')
     const key = await audioCacheKey(VOICE, 'failing put')
     await expect(
-      store(key, new Blob(['x']), { voiceId: VOICE, synthMs: 1 }),
+      store(key, new Blob(['x']), { voiceId: VOICE, synthMs: 1, durationSeconds: 1 }),
     ).resolves.toBeUndefined()
     vi.doUnmock('./db')
     vi.resetModules()

@@ -246,6 +246,7 @@ describe('exportBackup', () => {
       bookId: newBookId(),
       sizeBytes: 4,
       synthMs: 10,
+      durationSeconds: 1,
       voiceId: 'en_US-hfc_female-medium' as never,
       lastUsed: Date.now(),
       createdAt: Date.now(),

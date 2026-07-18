@@ -11,12 +11,21 @@ ctx.onmessage = async (event: MessageEvent<TtsRequest>) => {
   try {
     switch (req.op) {
       case 'synthesize': {
-        const { audio, synthMs } = await engine.synthesize({
+        const { audio, synthMs, durationSeconds, cacheKey } = await engine.synthesize({
           text: req.text,
           voiceId: req.voiceId,
+          returnAudio: req.returnAudio,
           ...(req.bookId !== undefined ? { bookId: req.bookId } : {}),
         })
-        const res: TtsResponse = { id: req.id, type: 'success', op: 'synthesize', audio, synthMs }
+        const res: TtsResponse = {
+          id: req.id,
+          type: 'success',
+          op: 'synthesize',
+          audio,
+          synthMs,
+          durationSeconds,
+          cacheKey,
+        }
         ctx.postMessage(res)
         break
       }
@@ -54,6 +63,7 @@ ctx.onmessage = async (event: MessageEvent<TtsRequest>) => {
       id: req.id,
       type: 'error',
       message: error instanceof Error ? error.message : 'unknown error',
+      ...(error instanceof DOMException ? { name: error.name, code: error.code } : {}),
     }
     ctx.postMessage(res)
   }

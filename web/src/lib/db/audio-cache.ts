@@ -2,6 +2,17 @@ import type { AudioCacheRecord, BookId } from '../../types'
 import { getDB } from './connection'
 import { getEffectiveAudioCacheBudget } from './settings'
 
+let pinnedBookId: BookId | null = null
+
+/**
+ * Pin entries for the given book so they are skipped by LRU eviction. Used
+ * during an upload/resynth job so the cache does not evict paragraphs it is
+ * still in the process of synthesizing. Pass `null` to clear the pin.
+ */
+export function setPinnedAudioCacheBookId(bookId: BookId | null): void {
+  pinnedBookId = bookId
+}
+
 /**
  * Lookup a cached audio entry by its content-addressed key. Bumps `lastUsed`
  * on hit so the LRU eviction policy treats recently-played entries as hot.
@@ -99,9 +110,11 @@ export async function evictAudioCacheToBudget(budgetBytes: number): Promise<numb
   const tx = db.transaction('audioCache', 'readwrite')
   let cursor = await tx.store.index('lastUsed').openCursor()
   while (cursor && total > budgetBytes) {
-    total -= cursor.value.sizeBytes
-    await cursor.delete()
-    removed++
+    if (cursor.value.bookId !== pinnedBookId) {
+      total -= cursor.value.sizeBytes
+      await cursor.delete()
+      removed++
+    }
     cursor = await cursor.continue()
   }
   await tx.done
@@ -120,8 +133,10 @@ export async function evictAudioCacheFraction(fraction: number): Promise<number>
   const tx = db.transaction('audioCache', 'readwrite')
   let cursor = await tx.store.index('lastUsed').openCursor()
   while (cursor && removed < toRemove) {
-    await cursor.delete()
-    removed++
+    if (cursor.value.bookId !== pinnedBookId) {
+      await cursor.delete()
+      removed++
+    }
     cursor = await cursor.continue()
   }
   await tx.done
@@ -137,7 +152,7 @@ export async function clearAudioCache(): Promise<number> {
 }
 
 /** Best-effort detection of quota-exceeded across browsers. */
-function isQuotaExceededError(err: unknown): boolean {
+export function isQuotaExceededError(err: unknown): boolean {
   if (!(err instanceof DOMException)) return false
   return (
     err.name === 'QuotaExceededError' ||

@@ -16,7 +16,9 @@ export {
   getAudioCacheEntry,
   getAudioCacheKeysByBook,
   getAudioCacheSize,
+  isQuotaExceededError,
   putAudioCacheEntry,
+  setPinnedAudioCacheBookId,
 } from './audio-cache'
 export {
   deleteBook,

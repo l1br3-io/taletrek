@@ -29,6 +29,7 @@ ctx.onmessage = async (event: MessageEvent<ConcatRequest>) => {
       id: req.id,
       type: 'error',
       message: error instanceof Error ? error.message : 'concat failed',
+      ...(error instanceof DOMException ? { name: error.name, code: error.code } : {}),
     } satisfies ConcatResponse)
   }
 }

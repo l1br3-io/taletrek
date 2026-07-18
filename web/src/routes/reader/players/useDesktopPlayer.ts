@@ -115,6 +115,9 @@ export function useDesktopPlayer({
             ...(bookIdRef.current !== undefined ? { bookId: bookIdRef.current } : {}),
           })
           if (gen !== genRef.current) return
+          if (!result.audio) {
+            throw new Error('engine returned no audio for desktop playback')
+          }
           queueRef.current.set(para.id, { blob: result.audio, index: i })
           onSynthRef.current?.(para.id)
           syncBufferedAhead()
@@ -151,6 +154,9 @@ export function useDesktopPlayer({
               ...(bookIdRef.current !== undefined ? { bookId: bookIdRef.current } : {}),
             })
             if (token !== tokenRef.current) return
+            if (!result.audio) {
+              throw new Error('engine returned no audio for desktop playback')
+            }
             queueRef.current.set(para.id, { blob: result.audio, index })
             onSynthRef.current?.(para.id)
           } catch (error) {

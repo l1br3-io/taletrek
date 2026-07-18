@@ -23,13 +23,23 @@ export interface SynthesisRequest {
    * the audio is still cached but only LRU-reapable (no per-book cascade).
    */
   bookId?: BookId
+  /**
+   * Optional: when true, the engine omits the WAV Blob from the response.
+   * Used by the upload pipeline on memory-constrained devices (iOS) to avoid
+   * a structured-clone round-trip of every paragraph's audio to the main thread.
+   */
+  returnAudio?: boolean
 }
 
 export interface SynthesisResult {
   /** WAV audio (22050 Hz mono 16-bit per the Piper spike). */
-  audio: Blob
+  audio?: Blob
   /** Wall-clock synthesis time in milliseconds, for diagnostics. */
   synthMs: number
+  /** Audio duration in seconds, parsed from the WAV. Always returned. */
+  durationSeconds: number
+  /** Content-addressed cache key for this paragraph's WAV. Always returned. */
+  cacheKey: string
 }
 
 /**
