@@ -3,12 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Book, Chapter } from '../../types'
 import { newBookId, newChapterId, voiceId } from '../../types'
 import { _clearDBForTests, _resetDBForTests, getBook, putBook } from '../db'
+import type { WakeLockHandle } from '../wake-lock'
 import { type JobState, uploadManager } from './manager'
 import { useUploadState } from './useUpload'
 
 const synthMock = vi.fn<(...args: unknown[]) => Promise<{ audio: Blob; synthMs: number }>>()
 const isStoredMock = vi.fn<(...args: unknown[]) => Promise<boolean>>()
 const downloadMock = vi.fn<(...args: unknown[]) => Promise<void>>()
+const acquireUploadWakeLock = vi.fn<() => Promise<WakeLockHandle>>()
+const wakeLockRelease = vi.fn<() => Promise<void>>()
 
 vi.mock('../tts/client', () => ({
   ttsClient: {
@@ -18,6 +21,10 @@ vi.mock('../tts/client', () => ({
     listVoices: async () => [],
     remove: async () => {},
   },
+}))
+
+vi.mock('../wake-lock', () => ({
+  acquireUploadWakeLock: () => acquireUploadWakeLock(),
 }))
 
 function makeBook(title = 'Test Book'): Book {
@@ -57,8 +64,11 @@ beforeEach(async () => {
   synthMock.mockReset()
   isStoredMock.mockReset()
   downloadMock.mockReset()
+  acquireUploadWakeLock.mockReset()
+  wakeLockRelease.mockReset()
   isStoredMock.mockResolvedValue(true)
   synthMock.mockResolvedValue({ audio: new Blob(['x']), synthMs: 100 })
+  acquireUploadWakeLock.mockResolvedValue({ release: wakeLockRelease })
   uploadManager._resetForTests()
 })
 
@@ -98,6 +108,8 @@ describe('uploadManager', () => {
     // Wait for done by polling.
     await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
     expect(synthMock).toHaveBeenCalledTimes(3) // whitespace paragraph skipped
+    expect(acquireUploadWakeLock).toHaveBeenCalledTimes(1)
+    expect(wakeLockRelease).toHaveBeenCalledTimes(1)
   })
 
   it('tracks synthesizedParagraphIds as paragraphs complete', async () => {
@@ -168,6 +180,8 @@ describe('uploadManager', () => {
       resolveFirst?.()
     })
     await vi.waitFor(() => expect(uploadManager.getState().type).toBe('idle'))
+    expect(acquireUploadWakeLock).toHaveBeenCalledTimes(1)
+    expect(wakeLockRelease).toHaveBeenCalledTimes(1)
   })
 
   it('cancel transitions to cancelling immediately for UX feedback', async () => {
@@ -234,6 +248,8 @@ describe('uploadManager', () => {
     expect(state.mode).toBe('initial')
     expect(await getBook(book.id)).toBeUndefined()
     expect(uploadManager.canRetry()).toBe(false)
+    // Wake lock still released on the error path.
+    expect(wakeLockRelease).toHaveBeenCalledTimes(1)
   })
 
   it('resynth mode keeps the book on failure and offers retry', async () => {
