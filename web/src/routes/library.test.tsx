@@ -66,6 +66,49 @@ vi.mock('../lib/tts/client', () => ({
   },
 }))
 
+// Mock the parallel-synthesis pool (ADR-0011) as a passthrough to the
+// (mocked) singleton `ttsClient`. Pool-internal behaviour is covered by
+// `pool.test.ts`; route tests just need the synth mock surface to work.
+vi.mock('../lib/tts/pool', () => ({
+  PoolEngine: class {
+    readonly concurrency: number
+    private readonly voiceEngine: unknown
+    constructor(concurrency: number, voiceEngine: unknown) {
+      this.concurrency = concurrency
+      this.voiceEngine = voiceEngine
+    }
+    async synthesize(req: unknown) {
+      // @ts-expect-error — voiceEngine is typed unknown to avoid importing the real type
+      return this.voiceEngine.synthesize(req)
+    }
+    async listVoices() {
+      // @ts-expect-error — same as above
+      return this.voiceEngine.listVoices()
+    }
+    async isStored(id: unknown) {
+      // @ts-expect-error — same as above
+      return this.voiceEngine.isStored(id)
+    }
+    async download(id: unknown, onProgress?: (f: number) => void) {
+      // @ts-expect-error — same as above
+      return this.voiceEngine.download(id, onProgress)
+    }
+    async remove(id: unknown) {
+      // @ts-expect-error — same as above
+      return this.voiceEngine.remove(id)
+    }
+    async clearAllStored() {
+      // @ts-expect-error — same as above
+      return this.voiceEngine.clearAllStored()
+    }
+    dispose() {}
+  },
+}))
+
+vi.mock('../lib/tts/pool-size', () => ({
+  preferredPoolSize: () => 1,
+}))
+
 function makeBook(overrides: Partial<Book> = {}): Book {
   const now = Date.now()
   return {

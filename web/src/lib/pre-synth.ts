@@ -6,7 +6,7 @@ export interface PreSynthOptions {
   chapters: Chapter[]
   voiceId: VoiceId
   engine: TtsEngine
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number, completed?: ParagraphLocation) => void
   onVoiceDownload?: (fraction: number) => void
   /**
    * Fired before each paragraph's synth attempt. Carries the book-relative
@@ -14,6 +14,10 @@ export interface PreSynthOptions {
    * synthesizing ¶ X/Y in chapter Z" in the UI, and (b) persist the location
    * onto the book record — surviving tab eviction, where vConsole state is
    * lost. The text preview is bounded to 60 chars.
+   *
+   * With `concurrency > 1`, fires in dispatch order (flat order) for every
+   * dispatched paragraph — including ones that may already be in flight. Use
+   * `onProgress`'s `completed` arg for the *completed* paragraph's location.
    */
   onParagraphStart?: (info: {
     flatIndex: number
@@ -21,8 +25,16 @@ export interface PreSynthOptions {
     location: ParagraphLocation
     textPreview: string
   }) => void
-  /** Abort the run cooperatively — checked between paragraphs. */
+  /** Abort the run cooperatively — checked before each new dispatch. */
   signal?: AbortSignal
+  /**
+   * Max paragraphs synthesized in parallel (ADR-0011 / parallel synthesis).
+   * Default `1` = today's sequential behavior. Set to `>1` (typically
+   * `PoolEngine.concurrency`) to overlap cold model loads and pipeline cache
+   * hits with slow predicts. In-flight synths are NOT cancelled on abort —
+   * their results land in the cache and a resume fast-forwards through them.
+   */
+  concurrency?: number
 }
 
 export interface ParagraphPreSynthInfo {
@@ -145,11 +157,13 @@ interface FlatParagraph {
 }
 
 /**
- * Pre-synthesize every paragraph in a book sequentially, storing results in
- * the audio cache. Cache hits are free (no Piper inference).
+ * Pre-synthesize every paragraph in a book, storing results in the audio cache.
+ * Cache hits are free (no Piper inference).
  *
  * Returns per-paragraph cache keys and durations for downstream concat+encode
- * (mobile Path A) or streaming (future M9.1).
+ * (mobile Path A) or streaming (future M9.1). The `paragraphs` array is
+ * indexed by flat position — `paragraphs[i]` is always paragraph `i`'s cache
+ * key, regardless of completion order under `concurrency > 1`.
  *
  * The caller is responsible for passing **cleaned** chapters — the cache key
  * is derived from the paragraph text, so it must match what the reader will
@@ -162,6 +176,13 @@ interface FlatParagraph {
  * through anything that succeeded before the abort. Skipping failed
  * paragraphs would desync the concat/Web-Audio consumers, which expect one
  * cache entry per paragraph, so failures remain hard-fail.
+ *
+ * Concurrency: when `concurrency > 1` (ADR-0011 / parallel synthesis), up to
+ * that many paragraphs are synth'd in parallel against a worker pool.
+ * In-flight synths are not cancelled on abort — their results land in the
+ * cache and resume fast-forwards through them. The first-fail-hard contract
+ * is preserved: any rejection tears down the run immediately, abandoning the
+ * remaining in-flight results to the cache.
  */
 export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynthResult> {
   const {
@@ -173,7 +194,9 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
     onVoiceDownload,
     onParagraphStart,
     signal,
+    concurrency: concurrencyRaw,
   } = opts
+  const concurrency = Math.max(1, concurrencyRaw ?? 1)
 
   // Flatten chapters into a located paragraph list. Empty/whitespace-only
   // paragraphs are skipped (matches reader behavior — they're never read).
@@ -199,7 +222,7 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
   const total = flat.length
 
   const voiceStored = await engine.isStored(voiceId)
-  console.log('[taletrek] pre-synth: start', { bookId, voiceId, total, voiceStored })
+  console.log('[taletrek] pre-synth: start', { bookId, voiceId, total, voiceStored, concurrency })
 
   if (!voiceStored) {
     console.log('[taletrek] pre-synth: downloading voice', { voiceId })
@@ -210,22 +233,26 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
   let done = 0
   let synthesized = 0
   let cached = 0
-  const info: ParagraphPreSynthInfo[] = []
+  // Indexed by flat position — `info[i]` is paragraph i's cache info,
+  // regardless of completion order. Holes remain only on a cancelled run;
+  // downstream (concat) isn't reached in that case.
+  const info: ParagraphPreSynthInfo[] = new Array(total)
 
-  for (const para of flat) {
-    if (signal?.aborted) {
-      console.log('[taletrek] pre-synth: aborted', { done, total })
-      return { total, synthesized, cached, cancelled: true, paragraphs: info }
+  /** Dispatch the paragraph at `flatIndex`, fire onParagraphStart, return the result. */
+  const dispatchOne = (flatIndex: number): Promise<SynthesisResult> => {
+    const para = flat[flatIndex]
+    if (!para) {
+      // Should be impossible — flatIndex only comes from `nextDispatch` which
+      // is bounded by `flat.length`. Defensive throw keeps TS happy without a
+      // non-null assertion.
+      throw new Error(`pre-synth: flat index out of range (${flatIndex}/${total})`)
     }
-
-    // returnAudio: false avoids a main-thread structured-clone of every WAV
-    // Blob on memory-constrained devices; the worker computes duration and
-    // cache key in-process.
     const chapterTotal = chapterTotals[para.chapterIndex] ?? 0
     const textPreview = para.text.slice(0, 60)
     console.log('[taletrek] pre-synth: synth start', {
-      index: done,
+      index: flatIndex,
       total,
+      concurrency,
       chapterIndex: para.chapterIndex,
       paragraphInChapter: para.paragraphInChapter,
       chapterTotal,
@@ -233,7 +260,7 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
       textPreview,
     })
     onParagraphStart?.({
-      flatIndex: done,
+      flatIndex,
       flatTotal: total,
       location: {
         chapterIndex: para.chapterIndex,
@@ -243,17 +270,57 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
       },
       textPreview,
     })
-    let result: SynthesisResult
-    try {
-      result = await synthesizeWithTimeout(
-        engine,
-        { text: para.text, voiceId, bookId, returnAudio: false },
-        signal,
-      )
-    } catch (err) {
+    return synthesizeWithTimeout(
+      engine,
+      { text: para.text, voiceId, bookId, returnAudio: false },
+      signal,
+    )
+  }
+
+  // Bounded-concurrency dispatch window. With concurrency=1 this is exactly
+  // the previous sequential behaviour: dispatch one, await it, dispatch the
+  // next. With concurrency>1, the window fills up to that many in-flight
+  // synths; completion of any one frees a slot for the next dispatch.
+  let nextDispatch = 0
+  const inflight: Array<{ flatIndex: number; promise: Promise<SynthesisResult> }> = []
+
+  while (nextDispatch < total || inflight.length > 0) {
+    // Fill the window up to `concurrency`, honouring the abort signal — no
+    // new dispatches once aborted, but in-flight synths drain to completion
+    // (their cache entries are useful for resume).
+    while (!signal?.aborted && inflight.length < concurrency && nextDispatch < total) {
+      const flatIndex = nextDispatch++
+      inflight.push({ flatIndex, promise: dispatchOne(flatIndex) })
+    }
+    if (inflight.length === 0) break // signal aborted + nothing in-flight
+
+    // Wait for any one in-flight synth to settle, then process it.
+    const settled = await Promise.race(
+      inflight.map(async (entry) => {
+        try {
+          const r = await entry.promise
+          return { entry, ok: true as const, r }
+        } catch (e) {
+          return { entry, ok: false as const, e }
+        }
+      }),
+    )
+    // Remove the settled entry from the window.
+    const removeIdx = inflight.indexOf(settled.entry)
+    if (removeIdx >= 0) inflight.splice(removeIdx, 1)
+
+    if (!settled.ok) {
+      const err = settled.e
+      const para = flat[settled.entry.flatIndex]
+      if (!para) {
+        throw new Error(`pre-synth: flat index out of range (${settled.entry.flatIndex}/${total})`)
+      }
+      const chapterTotal = chapterTotals[para.chapterIndex] ?? 0
+      const textPreview = para.text.slice(0, 60)
       console.error('[taletrek] pre-synth: synth failed', {
-        index: done,
+        index: settled.entry.flatIndex,
         total,
+        concurrency,
         chapterIndex: para.chapterIndex,
         paragraphInChapter: para.paragraphInChapter,
         chapterTotal,
@@ -273,26 +340,48 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
           paragraphInChapter: para.paragraphInChapter,
           chapterTotal,
         },
-        flatIndex: done,
+        flatIndex: settled.entry.flatIndex,
         flatTotal: total,
         text: para.text,
         cause: err,
       })
     }
+
+    const para = flat[settled.entry.flatIndex]
+    if (!para) {
+      throw new Error(`pre-synth: flat index out of range (${settled.entry.flatIndex}/${total})`)
+    }
+    const chapterTotal = chapterTotals[para.chapterIndex] ?? 0
+    const location: ParagraphLocation = {
+      chapterIndex: para.chapterIndex,
+      chapterTitle: para.chapterTitle,
+      paragraphInChapter: para.paragraphInChapter,
+      chapterTotal,
+    }
     console.log('[taletrek] pre-synth: synth done', {
-      index: done,
+      index: settled.entry.flatIndex,
       total,
-      synthMs: result.synthMs,
-      cached: result.synthMs === 0,
+      synthMs: settled.r.synthMs,
+      cached: settled.r.synthMs === 0,
     })
-    if (result.synthMs === 0) cached++
+    info[settled.entry.flatIndex] = {
+      cacheKey: settled.r.cacheKey,
+      durationSeconds: settled.r.durationSeconds,
+    }
+    if (settled.r.synthMs === 0) cached++
     else synthesized++
     done++
-    onProgress?.(done, total)
-
-    info.push({ cacheKey: result.cacheKey, durationSeconds: result.durationSeconds })
+    onProgress?.(done, total, location)
   }
 
-  console.log('[taletrek] pre-synth: done', { total, synthesized, cached })
-  return { total, synthesized, cached, cancelled: false, paragraphs: info }
+  const cancelled = signal?.aborted === true
+  if (cancelled) {
+    console.log('[taletrek] pre-synth: aborted', { done, total })
+  } else {
+    console.log('[taletrek] pre-synth: done', { total, synthesized, cached })
+  }
+  // On cancel, compact `info` (downstream isn't reached, but the type says
+  // `ParagraphPreSynthInfo[]` and holes would be surprising to inspect).
+  const compacted = cancelled ? info.filter((p) => p !== undefined) : info
+  return { total, synthesized, cached, cancelled, paragraphs: compacted }
 }

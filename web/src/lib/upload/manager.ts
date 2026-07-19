@@ -11,9 +11,12 @@ import {
 } from '../db/audio-cache'
 import { formatError } from '../format-error'
 import { type PlaybackEngineSetting, resolveMobileEngine } from '../playback/engines'
+import { isMobileDevice } from '../platform'
 import type { ParagraphLocation, ParagraphPreSynthInfo } from '../pre-synth'
 import { preSynthesizeBook } from '../pre-synth'
 import { ttsClient } from '../tts/client'
+import { PoolEngine } from '../tts/pool'
+import { preferredPoolSize } from '../tts/pool-size'
 import { acquireUploadWakeLock } from '../wake-lock'
 
 /**
@@ -72,10 +75,6 @@ function paragraphRefs(chapters: Chapter[]): ParagraphRef[] {
     })
   }
   return refs
-}
-
-function isMobileDevice(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
 }
 
 /**
@@ -193,6 +192,23 @@ async function clearUploadJob(bookId: BookId): Promise<void> {
     book.updatedAt = Date.now()
     await putBook(book)
   })
+}
+
+/**
+ * Lazy parallel-synthesis pool (ADR-0011). Pre-synth only — the singleton
+ * `ttsClient` still backs reader/playback per-paragraph synth and voice
+ * management. Constructed on first use so the cost (one worker per logical
+ * core, or 2 on mobile) is paid only when a book actually uploads. Each
+ * worker lazy-loads its Piper model from OPFS on first synth (the upload
+ * pipeline pre-downloads the voice via the singleton before pre-synth starts,
+ * so workers never hit the network).
+ */
+let preSynthPool: PoolEngine | null = null
+function getPreSynthPool(): PoolEngine {
+  if (!preSynthPool) {
+    preSynthPool = new PoolEngine(preferredPoolSize(), ttsClient)
+  }
+  return preSynthPool
 }
 
 class UploadManager {
@@ -352,15 +368,6 @@ class UploadManager {
     return new Set(refs.slice(0, done).map((r) => r.id))
   }
 
-  /**
-   * Read the `current` ParagraphLocation from a `synthesizing` state, or
-   * undefined if not in synth. Used by `onProgress` to preserve the location
-   * set by `onParagraphStart` across progress updates.
-   */
-  private peekCurrentLocation(): ParagraphLocation | undefined {
-    return this.state.type === 'synthesizing' ? this.state.current : undefined
-  }
-
   private setState(next: JobState): void {
     this.state = next
     for (const ln of this.listeners) ln()
@@ -428,11 +435,13 @@ class UploadManager {
         console.warn('[taletrek] upload: could not persist initial uploadJob', err)
       })
 
+      const preSynthPool = getPreSynthPool()
       const preSynthResult = await preSynthesizeBook({
         bookId: book.id,
         chapters: cleaned,
         voiceId,
-        engine: ttsClient,
+        engine: preSynthPool,
+        concurrency: preSynthPool.concurrency,
         signal,
         onVoiceDownload: (fraction) => {
           if (signal?.aborted) return
@@ -440,6 +449,10 @@ class UploadManager {
         },
         onParagraphStart: ({ flatTotal, location }) => {
           if (signal?.aborted) return
+          // "Currently working on" UI hint. With concurrency > 1 multiple
+          // paragraphs are in flight simultaneously; the latest dispatch is
+          // the most reasonable "current" signal. The completed location is
+          // tracked separately via onProgress's `completed` arg.
           this.setState({
             type: 'synthesizing',
             book,
@@ -449,23 +462,16 @@ class UploadManager {
             mode,
             current: location,
           })
-          // Note: no IDB write here. The location is persisted in onProgress
-          // once the paragraph completes — combining into a single write per
-          // ¶ avoids a read-modify-write race between the two callbacks
-          // (both reading the uploadJob, patching different fields, and
-          // writing back — one would clobber the other).
         },
-        onProgress: (done, total) => {
+        onProgress: (done, total, completed) => {
           // Capture progress even during an in-flight abort so `pause` can
           // persist the correct `done` (the abort guard below prevents setState
           // from clobbering the cancelling/paused transition).
           this.lastSynthDone = done
           this.lastSynthTotal = total
           if (signal?.aborted) return
-          // The paragraph that just completed is the one whose location was
-          // last reported via onParagraphStart — read it back so we can
-          // persist it alongside `done` in a single IDB write.
-          const completed = this.peekCurrentLocation()
+          // `completed` is the paragraph that just finished — out-of-order
+          // under concurrency > 1, so don't infer it from onParagraphStart.
           this.setState({
             type: 'synthesizing',
             book,
