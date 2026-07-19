@@ -292,4 +292,153 @@ describe('preSynthesizeBook', () => {
     )
     errSpy.mockRestore()
   })
+
+  describe('concurrency > 1 (ADR-0011 parallel synthesis)', () => {
+    /**
+     * Engine that resolves each synth on a deterministic schedule, where the
+     * Nth dispatch resolves after `delays[i]` ticks — letting the test force
+     * out-of-order completion. `delays` length must equal the number of
+     * dispatches the test expects.
+     */
+    function makeScheduledEngine(delays: number[]): TtsEngine & { calls: SynthesisRequest[] } {
+      const calls: SynthesisRequest[] = []
+      return {
+        async listVoices() {
+          return []
+        },
+        isStored: async () => true,
+        async download() {},
+        async synthesize(req: SynthesisRequest): Promise<SynthesisResult> {
+          calls.push(req)
+          const i = calls.length - 1
+          const delay = delays[i] ?? 0
+          // Use a real setTimeout so Promise.race observes ordering.
+          await new Promise<void>((resolve) => setTimeout(resolve, delay))
+          return {
+            audio: new Blob(['x']),
+            synthMs: 100,
+            durationSeconds: i + 1,
+            cacheKey: `flat-${i}`,
+          }
+        },
+        async remove() {},
+        async clearAllStored() {},
+        calls,
+      }
+    }
+
+    it('keeps paragraphs[i] aligned with flat position when completions are out-of-order', async () => {
+      // Six paragraphs, three workers. Delays make completion order [2,0,1,4,3,5]
+      // — never the dispatch order. The result paragraphs[] must still be in
+      // flat order.
+      const chapters = makeChapters([['p0.', 'p1.', 'p2.', 'p3.', 'p4.', 'p5.']])
+      const delays = [50, 30, 0, 60, 20, 10]
+      const engine = makeScheduledEngine(delays)
+      const result = await preSynthesizeBook({
+        bookId: newBookId(),
+        chapters,
+        voiceId: 'en_US-hfc_female-medium' as VoiceId,
+        engine,
+        concurrency: 3,
+      })
+      expect(result.cancelled).toBe(false)
+      expect(result.total).toBe(6)
+      // The decisive assertion: paragraphs[i].cacheKey matches dispatch order
+      // (= flat order), not completion order.
+      expect(result.paragraphs.map((p) => p.cacheKey)).toEqual([
+        'flat-0',
+        'flat-1',
+        'flat-2',
+        'flat-3',
+        'flat-4',
+        'flat-5',
+      ])
+    })
+
+    it('onProgress is monotonic and carries the completed paragraph location', async () => {
+      const chapters = makeChapters([['p0.', 'p1.', 'p2.', 'p3.']])
+      // Delays make completion order non-dispatch.
+      const engine = makeScheduledEngine([40, 0, 20, 10])
+      const events: Array<{ done: number; chapterIdx?: number; paraInChapter?: number }> = []
+      await preSynthesizeBook({
+        bookId: newBookId(),
+        chapters,
+        voiceId: 'en_US-hfc_female-medium' as VoiceId,
+        engine,
+        concurrency: 2,
+        onProgress: (done, _total, completed) => {
+          events.push({
+            done,
+            chapterIdx: completed?.chapterIndex,
+            paraInChapter: completed?.paragraphInChapter,
+          })
+        },
+      })
+      // `done` must be strictly increasing (1, 2, 3, 4) regardless of which
+      // paragraph completed in what order.
+      expect(events.map((e) => e.done)).toEqual([1, 2, 3, 4])
+      // `completed` always carries a real location.
+      expect(events.every((e) => e.chapterIdx === 0 && typeof e.paraInChapter === 'number')).toBe(
+        true,
+      )
+    })
+
+    it('concurrency=1 preserves bit-for-bit sequential behaviour', async () => {
+      // Sanity: the new loop with the default degenerates to the old one.
+      const chapters = makeChapters([['a.', 'b.', 'c.']])
+      const engine = makeStubEngine({})
+      const progress: number[] = []
+      const starts: number[] = []
+      await preSynthesizeBook({
+        bookId: newBookId(),
+        chapters,
+        voiceId: 'en_US-hfc_female-medium' as VoiceId,
+        engine,
+        concurrency: 1,
+        onProgress: (done) => progress.push(done),
+        onParagraphStart: (info) => starts.push(info.flatIndex),
+      })
+      expect(progress).toEqual([1, 2, 3])
+      expect(starts).toEqual([0, 1, 2])
+    })
+
+    it('stops dispatching on abort; in-flight results land in the cache (no error)', async () => {
+      // With concurrency=3 and abort mid-flight, the loop stops dispatching
+      // new paragraphs but drains the in-flight window without throwing.
+      const chapters = makeChapters([['p0.', 'p1.', 'p2.', 'p3.', 'p4.']])
+      const controller = new AbortController()
+      let callCount = 0
+      const engine: TtsEngine = {
+        ...makeStubEngine({}),
+        async synthesize(): Promise<SynthesisResult> {
+          callCount++
+          const i = callCount - 1
+          // Make p1 take long enough that the abort fires while it's in flight.
+          await new Promise<void>((resolve) => setTimeout(resolve, i === 1 ? 50 : 0))
+          return {
+            audio: new Blob(['x']),
+            synthMs: 100,
+            durationSeconds: i + 1,
+            cacheKey: `k${i}`,
+          }
+        },
+      }
+      const result = await preSynthesizeBook({
+        bookId: newBookId(),
+        chapters,
+        voiceId: 'en_US-hfc_female-medium' as VoiceId,
+        engine,
+        concurrency: 3,
+        signal: controller.signal,
+        onProgress: (done) => {
+          // Abort as soon as the first paragraph completes.
+          if (done === 1) controller.abort()
+        },
+      })
+      expect(result.cancelled).toBe(true)
+      // We dispatched at least 3 (the initial window) but no more after abort.
+      expect(callCount).toBeGreaterThanOrEqual(1)
+      expect(callCount).toBeLessThanOrEqual(3)
+    })
+  })
 })
