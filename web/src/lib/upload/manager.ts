@@ -27,6 +27,40 @@ import { acquireUploadWakeLock } from '../wake-lock'
  */
 export type JobMode = 'initial' | 'resynth'
 
+/**
+ * Discriminated result of {@link UploadManager.cancelForBook}. `'blocked'` is
+ * reported when a job is running for *another* book — the caller should refuse
+ * the delete and surface why (cascading now would race the active job's writes
+ * against the same IDB stores).
+ */
+export type CancelForBookResult =
+  | { type: 'cancelled' }
+  | { type: 'no-op' }
+  | { type: 'blocked'; activeBookTitle: string }
+
+/**
+ * Upper bound on `cancelForBook`'s wait for the in-flight work to observe the
+ * abort. Defensive — the abort is observed at the next paragraph boundary, so
+ * the wait typically resolves in <1s. The cap exists so a stuck worker can't
+ * block a delete forever.
+ */
+const CANCEL_FOR_BOOK_TIMEOUT_MS = 5000
+
+/**
+ * Hide-duration threshold (ms) above which a `visibilitychange → visible`
+ * transition triggers recovery (pause → resume) on the active synth. Shorter
+ * hides are tab switches, not phone locks — the wake lock holds and synth
+ * continues, so recovering would just churn (lose one paragraph's inference
+ * for no benefit). 5s is well above the typical tab-switch duration and well
+ * below the iOS Safari tab-freeze threshold.
+ *
+ * Distinct from ADR-0009 / ADR-0010's "auto-resume on boot" rejection — this
+ * fires on a still-alive tab returning to foreground, not a cold launch. If
+ * the tab was evicted (long lock, iOS kill), the boot sweep handles recovery
+ * via the existing paused-book contract.
+ */
+const LOCK_RECOVERY_THRESHOLD_MS = 5000
+
 export type JobState =
   | { type: 'idle' }
   | { type: 'voiceDownload'; book: Book; fraction: number; mode: JobMode }
@@ -250,6 +284,23 @@ class UploadManager {
    * {@link ETA_SAMPLE_WINDOW}. Reset in `runJob`.
    */
   private recentSynthMs: number[] = []
+  /**
+   * True while the manager is mid-recovery after the tab was hidden long
+   * enough to suggest a phone lock (Issue 4 / `LOCK_RECOVERY_THRESHOLD_MS`).
+   * Read by the global synth banner to render a "Resuming after lock…"
+   * state instead of flashing pausing/paused/synthesizing on the way through.
+   * Toggled with a notify so `useSyncExternalStore` consumers re-render.
+   */
+  private recovering = false
+  /** Timestamp of the most recent `visibilitychange → hidden` while a job ran. */
+  private hiddenAt: number | null = null
+  /** The installed visibility handler, kept so it can be detached in `finally`. */
+  private visibilityHandler: (() => void) | null = null
+
+  /** True while a hide-recovery (pause → resume) is in flight. */
+  isRecovering(): boolean {
+    return this.recovering
+  }
 
   getState = (): JobState => this.state
 
@@ -295,6 +346,61 @@ class UploadManager {
     // before the in-flight async work observes the abort and resolves.
     this.setState({ type: 'cancelling', book, mode })
     this.abortController.abort()
+  }
+
+  /**
+   * Cancel any in-progress job for a specific book and wait for the manager
+   * to settle. Used by `handleDelete` so the cascade-delete doesn't race the
+   * manager's writes (ghost banner, leaked cache pin, stray IDB errors). No-op
+   * when no job is active for this book; `'blocked'` when a job is active for
+   * a different book (caller should refuse the delete).
+   *
+   * The wait is bounded by `CANCEL_FOR_BOOK_TIMEOUT_MS` — if the in-flight
+   * Piper inference doesn't observe the abort within ~5s (defensive —
+   * shouldn't happen in practice), we resolve anyway so a stuck worker can't
+   * block the delete forever.
+   */
+  async cancelForBook(bookId: BookId): Promise<CancelForBookResult> {
+    if (!this.isActive()) return { type: 'no-op' }
+    const activeBook = (this.state as { book?: Book }).book
+    if (activeBook && activeBook.id !== bookId) {
+      return { type: 'blocked', activeBookTitle: activeBook.title }
+    }
+    this.cancel()
+    await this.waitForSettled()
+    return { type: 'cancelled' }
+  }
+
+  /**
+   * Resolve once the manager reaches a non-active state (`idle` / `done` /
+   * `error` / `paused`). Used by `cancelForBook` to await the cancel's full
+   * transition before letting the caller cascade-delete the book. Bounded by
+   * `CANCEL_FOR_BOOK_TIMEOUT_MS` so a stuck worker can't block forever.
+   */
+  private waitForSettled(): Promise<void> {
+    return new Promise((resolve) => {
+      const settled = () =>
+        this.state.type === 'idle' ||
+        this.state.type === 'done' ||
+        this.state.type === 'error' ||
+        this.state.type === 'paused'
+      if (settled()) {
+        resolve()
+        return
+      }
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        unsubscribe()
+        clearTimeout(timer)
+        resolve()
+      }
+      const unsubscribe = this.subscribe(() => {
+        if (settled()) finish()
+      })
+      const timer = setTimeout(finish, CANCEL_FOR_BOOK_TIMEOUT_MS)
+    })
   }
 
   /**
@@ -419,7 +525,90 @@ class UploadManager {
     this.lastSynthDone = 0
     this.lastSynthTotal = 0
     this.recentSynthMs = []
+    this.detachVisibilityHandler()
+    this.recovering = false
     this.state = { type: 'idle' }
+  }
+
+  /**
+   * Attach the `visibilitychange` listener that drives lock-phone recovery
+   * (Issue 4). Called at `runJob` start; detached in its `finally`. While a
+   * job is active, hides longer than `LOCK_RECOVERY_THRESHOLD_MS` trigger
+   * `recoverFromHide` — a pause → resume round-trip that respawns workers
+   * and fast-forwards through the M8 cache. Hides shorter than the threshold
+   * are tab switches (the wake lock holds; synth continues), so we ignore
+   * them and don't churn.
+   *
+   * Distinct from ADR-0009 / ADR-0010's "auto-resume on boot" rejection —
+   * this fires on a still-alive tab returning to foreground, not a cold
+   * launch. If the tab was evicted, the boot sweep handles it.
+   */
+  private attachVisibilityHandler(): void {
+    if (typeof document === 'undefined' || this.visibilityHandler) return
+    this.hiddenAt = null
+    this.visibilityHandler = () => {
+      if (document.visibilityState === 'hidden') {
+        this.hiddenAt = Date.now()
+      } else if (document.visibilityState === 'visible' && this.hiddenAt !== null) {
+        const hiddenMs = Date.now() - this.hiddenAt
+        this.hiddenAt = null
+        if (hiddenMs > LOCK_RECOVERY_THRESHOLD_MS) {
+          void this.recoverFromHide()
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', this.visibilityHandler)
+  }
+
+  private detachVisibilityHandler(): void {
+    if (this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
+      this.visibilityHandler = null
+    }
+    this.hiddenAt = null
+  }
+
+  /**
+   * Recover from a long hide (presumed phone lock). Pairs with
+   * {@link attachVisibilityHandler}. Runs pause → wait-for-settled → resume
+   * so any workers that died under memory pressure are respawned and the M8
+   * content-addressed cache fast-forwards through whatever already landed.
+   *
+   * The `recovering` flag stays set across the whole round-trip and notifies
+   * listeners on each toggle so the banner can render a stable
+   * "Resuming after lock…" state instead of flashing pausing → paused →
+   * synthesizing. If the user explicitly cancelled or paused while we were
+   * mid-recovery, the resume step is a no-op (`isActive()` guard).
+   */
+  private async recoverFromHide(): Promise<void> {
+    // Only act on active synth — explicit pauses, cancels, errors, and done
+    // states are user-driven and stay as-is.
+    if (this.state.type !== 'synthesizing') return
+    const bookId = this.state.book.id
+    this.recovering = true
+    for (const ln of this.listeners) ln()
+    console.log('[taletrek] upload: recovering after long hide (visibilitychange)')
+    try {
+      this.pause()
+      await this.waitForSettled()
+      // Skip the resume if the user cancelled during the pause, or navigated
+      // to a different book, or the spec was cleared. `resume` is itself a
+      // no-op when no paused spec exists. Read state through a method call —
+      // TS's control-flow analysis keeps the early-return `synthesizing`
+      // narrow on `this.state` across the await, but a method call returns
+      // the declared `JobState` union without the narrow.
+      const s = this.getState()
+      if (s.type === 'paused') {
+        if (s.book.id === bookId) {
+          await this.resume(bookId)
+        }
+      }
+    } catch (err) {
+      console.warn('[taletrek] upload: recovery failed', err)
+    } finally {
+      this.recovering = false
+      for (const ln of this.listeners) ln()
+    }
   }
 
   /**
@@ -447,6 +636,11 @@ class UploadManager {
     // Pin this book's cache entries while the job runs so the reactive LRU
     // sweep does not evict paragraphs we are about to encode on mobile.
     setPinnedAudioCacheBookId(book.id)
+
+    // Listen for hide → visible transitions longer than the lock threshold so
+    // a phone lock mid-synth triggers recovery (pause → resume). Detached in
+    // the finally below.
+    this.attachVisibilityHandler()
 
     // State must flip synchronously so `startJob`'s re-entry guard sees
     // 'synthesizing' before the caller can call startJob again.
@@ -684,6 +878,7 @@ class UploadManager {
       }
     } finally {
       setPinnedAudioCacheBookId(null)
+      this.detachVisibilityHandler()
       await wakeLock.release()
       this.abortController = null
       // If the user cancelled but an async path didn't observe the abort

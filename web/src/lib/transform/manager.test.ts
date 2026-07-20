@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Book, Chapter, VoiceId } from '../../types'
-import { newBookId, newChapterId, voiceId } from '../../types'
+import { bookId, newBookId, newChapterId, voiceId } from '../../types'
 import type {
   AiSettings,
   AiTransformEngine,
@@ -141,10 +141,10 @@ function makeAiSettings(): AiSettings {
   }
 }
 
-function makeBook(): Book {
+function makeBook(title = 'Test Book'): Book {
   return {
     id: newBookId(),
-    title: 'Test Book',
+    title,
     format: 'txt',
     chapterCount: 2,
     createdAt: 0,
@@ -553,6 +553,92 @@ describe('bookTransformManager — cancel', () => {
     expect(updated?.transformJob).toBeUndefined()
     expect(updated?.transforming).toBeUndefined()
   })
+
+  it('cancelForBook is a no-op when no job is active', async () => {
+    const result = await bookTransformManager.cancelForBook(bookId('any-id'))
+    expect(result).toEqual({ type: 'no-op' })
+  })
+
+  it('cancelForBook is blocked when a transform is active for another book', async () => {
+    const active = makeBook('Active Transform')
+    const other = makeBook('Target Other')
+    await putBook(active)
+    await putBook(other)
+    await putChapters(makeChapters(active))
+    const def = makeDef('cleanup')
+    const op = makeOp('cleanup')
+
+    let resolveTransform: () => void
+    const blockedEngine: AiTransformEngine = {
+      ...makeFakeEngine(),
+      async transform() {
+        await new Promise<void>((resolve) => {
+          resolveTransform = resolve
+        })
+        return []
+      },
+    }
+    getAiEngineForDefMock.mockReturnValue(blockedEngine)
+
+    const startPromise = bookTransformManager.start(
+      {
+        book: active,
+        chapters: makeChapters(active),
+        ops: [op],
+        voiceId: VOICE,
+        cleaning: CLEANING,
+      },
+      { ai: makeAiSettings(), defs: [def], synthEnabled: false },
+    )
+    await new Promise((r) => setTimeout(r, 10))
+    await vi.waitFor(() => expect(bookTransformManager.getState().type).toBe('running'))
+
+    const result = await bookTransformManager.cancelForBook(other.id)
+    expect(result).toEqual({ type: 'blocked', activeBookTitle: 'Active Transform' })
+    expect(bookTransformManager.getState().type).toBe('running')
+
+    // Cleanup so subsequent tests start from idle.
+    bookTransformManager.pause()
+    resolveTransform!()
+    await startPromise
+    await bookTransformManager.cancel()
+  })
+
+  it('cancelForBook cancels a running transform for the same book and awaits idle', async () => {
+    const b = makeBook('Cancellable Transform')
+    await putBook(b)
+    const chapters = makeChapters(b)
+    await putChapters(chapters)
+    const def = makeDef('cleanup')
+    const op = makeOp('cleanup')
+
+    let resolveTransform: () => void
+    const blockedEngine: AiTransformEngine = {
+      ...makeFakeEngine(),
+      async transform() {
+        await new Promise<void>((resolve) => {
+          resolveTransform = resolve
+        })
+        return []
+      },
+    }
+    getAiEngineForDefMock.mockReturnValue(blockedEngine)
+
+    const startPromise = bookTransformManager.start(
+      { book: b, chapters, ops: [op], voiceId: VOICE, cleaning: CLEANING },
+      { ai: makeAiSettings(), defs: [def], synthEnabled: false },
+    )
+    await new Promise((r) => setTimeout(r, 10))
+    await vi.waitFor(() => expect(bookTransformManager.getState().type).toBe('running'))
+
+    const resultPromise = bookTransformManager.cancelForBook(b.id)
+    resolveTransform!()
+    const result = await resultPromise
+    await startPromise
+
+    expect(result).toEqual({ type: 'cancelled' })
+    expect(bookTransformManager.getState().type).toBe('idle')
+  })
 })
 
 describe('bookTransformManager — reductive ops', () => {
@@ -666,6 +752,124 @@ describe('bookTransformManager — subscribe', () => {
     await new Promise((r) => setTimeout(r, 300))
     expect(rafSpy).not.toHaveBeenCalled()
     rafSpy.mockRestore()
+  })
+})
+
+describe('bookTransformManager — visibility recovery (Issue 4)', () => {
+  const setVisible = (v: boolean) =>
+    Object.defineProperty(document, 'visibilityState', {
+      value: v ? 'visible' : 'hidden',
+      configurable: true,
+    })
+  const dispatch = () => document.dispatchEvent(new Event('visibilitychange'))
+
+  it('recovers (pause → resume) when the tab was hidden longer than the lock threshold', async () => {
+    const b = makeBook('Locky Transform')
+    await putBook(b)
+    const chapters = makeChapters(b)
+    await putChapters(chapters)
+    const def = makeDef('cleanup')
+    const op = makeOp('cleanup')
+
+    // Track ALL pending transform resolvers so the test can release each
+    // call independently — recovery's resume kicks off a second call, and
+    // the original `resolveTransform` pattern (single variable) couldn't
+    // express that.
+    const resolvers: Array<() => void> = []
+    const blockedEngine: AiTransformEngine = {
+      ...makeFakeEngine(),
+      async transform() {
+        await new Promise<void>((resolve) => {
+          resolvers.push(resolve)
+        })
+        return []
+      },
+    }
+    getAiEngineForDefMock.mockReturnValue(blockedEngine)
+
+    const startPromise = bookTransformManager.start(
+      { book: b, chapters, ops: [op], voiceId: VOICE, cleaning: CLEANING },
+      { ai: makeAiSettings(), defs: [def], synthEnabled: false },
+    )
+    await new Promise((r) => setTimeout(r, 10))
+    await vi.waitFor(() => expect(bookTransformManager.getState().type).toBe('running'))
+    await vi.waitFor(() => expect(resolvers.length).toBeGreaterThanOrEqual(1))
+    expect(bookTransformManager.isRecovering()).toBe(false)
+
+    // Hide >5s → visible: triggers recovery.
+    setVisible(false)
+    dispatch()
+    vi.setSystemTime(Date.now() + 6_000)
+    setVisible(true)
+    dispatch()
+
+    await vi.waitFor(() => expect(bookTransformManager.isRecovering()).toBe(true))
+
+    // Release the first transform so the original loop's catch lands at
+    // paused; recovery then resumes into chapter 2's transform call.
+    resolvers[0]?.()
+    await startPromise
+    // Wait for the resume's second call to land, then release it so the
+    // resumed runLoop can complete and recovery's `recovering` flag clears.
+    await vi.waitFor(() => expect(resolvers.length).toBeGreaterThanOrEqual(2))
+    resolvers[1]?.()
+
+    // Recovery completes once the resumed loop settles. Drain any
+    // setTimeout(250ms) emits so the test leaves no litter.
+    await vi.waitFor(() => expect(bookTransformManager.isRecovering()).toBe(false), {
+      timeout: 3000,
+    })
+    // Release any stragglers so the next test starts clean.
+    for (const r of resolvers) r()
+    await new Promise((r) => setTimeout(r, 300))
+    expect(bookTransformManager.getState().type).not.toBe('error')
+    vi.useRealTimers()
+  })
+
+  it('does NOT recover when the tab was hidden briefly (tab switch)', async () => {
+    const b = makeBook('Tabby Transform')
+    await putBook(b)
+    const chapters = makeChapters(b)
+    await putChapters(chapters)
+    const def = makeDef('cleanup')
+    const op = makeOp('cleanup')
+
+    const resolvers: Array<() => void> = []
+    const blockedEngine: AiTransformEngine = {
+      ...makeFakeEngine(),
+      async transform() {
+        await new Promise<void>((resolve) => {
+          resolvers.push(resolve)
+        })
+        return []
+      },
+    }
+    getAiEngineForDefMock.mockReturnValue(blockedEngine)
+
+    const startPromise = bookTransformManager.start(
+      { book: b, chapters, ops: [op], voiceId: VOICE, cleaning: CLEANING },
+      { ai: makeAiSettings(), defs: [def], synthEnabled: false },
+    )
+    await new Promise((r) => setTimeout(r, 10))
+    await vi.waitFor(() => expect(bookTransformManager.getState().type).toBe('running'))
+
+    // Hide <5s → visible: should NOT trigger recovery.
+    setVisible(false)
+    dispatch()
+    vi.setSystemTime(Date.now() + 2_000)
+    setVisible(true)
+    dispatch()
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(bookTransformManager.isRecovering()).toBe(false)
+    expect(bookTransformManager.getState().type).toBe('running')
+
+    // Cleanup.
+    bookTransformManager.pause()
+    resolvers[0]?.()
+    await startPromise
+    await bookTransformManager.cancel()
+    vi.useRealTimers()
   })
 })
 

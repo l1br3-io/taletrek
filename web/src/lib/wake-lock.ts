@@ -27,6 +27,15 @@ function isWakeLockSupported(): boolean {
   return typeof navigator !== 'undefined' && 'wakeLock' in navigator
 }
 
+/**
+ * Public export of {@link isWakeLockSupported} for UI affordances — the
+ * global synth banner shows a stronger "your browser can't keep the screen
+ * awake" warning when this returns false (iOS Safari < 16.4, older Firefox).
+ */
+export function canKeepScreenAwake(): boolean {
+  return isWakeLockSupported()
+}
+
 class ActiveHandle implements WakeLockHandle {
   private sentinel: WakeLockSentinel | null = null
   private deliberatelyReleased = false

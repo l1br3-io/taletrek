@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Book, Chapter } from '../../types'
-import { newBookId, newChapterId, voiceId } from '../../types'
+import { bookId, newBookId, newChapterId, voiceId } from '../../types'
 import { _clearDBForTests, _resetDBForTests, getBook, putBook, putChapters } from '../db'
 import type { WakeLockHandle } from '../wake-lock'
 import { type JobState, uploadManager } from './manager'
@@ -977,6 +977,188 @@ describe('uploadManager', () => {
       expect(saved?.uploading).toBeUndefined()
       expect(saved?.uploadJob).toBeUndefined()
     })
+  })
+
+  it('cancelForBook is a no-op when no job is active', async () => {
+    const result = await uploadManager.cancelForBook(bookId('any-id'))
+    expect(result).toEqual({ type: 'no-op' })
+  })
+
+  it('cancelForBook cancels an active job for the same book and awaits idle', async () => {
+    const book = { ...makeBook('Cancellable For Book'), uploading: true }
+    await putBook(book)
+    let resolveFirst: (() => void) | undefined
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveFirst = () =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' })
+        }),
+    )
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(async () => {
+      expect((await getBook(book.id))?.uploadJob).toBeDefined()
+    })
+
+    const resultPromise = uploadManager.cancelForBook(book.id)
+    await act(async () => {
+      resolveFirst?.()
+    })
+    const result = await resultPromise
+    expect(result).toEqual({ type: 'cancelled' })
+    expect(uploadManager.getState().type).toBe('idle')
+  })
+
+  it('cancelForBook is blocked when a job is active for another book', async () => {
+    const active = { ...makeBook('Active Other'), uploading: true }
+    const other = makeBook('Target Other')
+    await putBook(active)
+    await putBook(other)
+    let resolveFirst: (() => void) | undefined
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveFirst = () =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' })
+        }),
+    )
+    uploadManager.startJob({
+      book: active,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('synthesizing'))
+
+    const result = await uploadManager.cancelForBook(other.id)
+    expect(result).toEqual({ type: 'blocked', activeBookTitle: 'Active Other' })
+    // The active job is untouched — caller must cancel it explicitly.
+    expect(uploadManager.getState().type).toBe('synthesizing')
+
+    // Tear down so the next test starts from idle.
+    uploadManager.cancel()
+    await act(async () => {
+      resolveFirst?.()
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('idle'))
+  })
+
+  it('recovers (pause → resume) when the tab was hidden longer than the lock threshold (Issue 4)', async () => {
+    const book = { ...makeBook('Locky'), uploading: true }
+    await putBook(book)
+    // Gate each synth so the job stays mid-synth while we toggle visibility.
+    const gates: Array<() => void> = []
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          gates.push(() =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' }),
+          )
+        }),
+    )
+    const setVisible = (v: boolean) =>
+      Object.defineProperty(document, 'visibilityState', {
+        value: v ? 'visible' : 'hidden',
+        configurable: true,
+      })
+    const dispatch = () => document.dispatchEvent(new Event('visibilitychange'))
+
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('synthesizing'))
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(1))
+    expect(uploadManager.isRecovering()).toBe(false)
+
+    // Hide → fast-forward past LOCK_RECOVERY_THRESHOLD_MS (5s) → visible.
+    // Recovery uses Date.now() to compute hide duration, so we advance the
+    // system clock rather than fake-timer ticks.
+    setVisible(false)
+    dispatch()
+    vi.setSystemTime(Date.now() + 6_000)
+    setVisible(true)
+    dispatch()
+
+    // Recovery sets the flag immediately, then runs pause → wait → resume.
+    await vi.waitFor(() => expect(uploadManager.isRecovering()).toBe(true))
+
+    // Resolve the in-flight synth so the abort is observed + the manager can
+    // settle to paused; recovery then calls resume.
+    await act(async () => {
+      for (const g of gates) g()
+    })
+
+    // Recovery completes (flag clears) and the resumed job finishes via the
+    // cache (already-cached paragraphs fast-forward; the mock bypasses cache
+    // lookup so the loop runs each synth again — resolve any stragglers).
+    await vi.waitFor(() => expect(uploadManager.isRecovering()).toBe(false))
+    await act(async () => {
+      for (const g of gates) g()
+    })
+    await vi.waitFor(() => {
+      const t = uploadManager.getState().type
+      return t === 'done' || t === 'idle' || t === 'synthesizing'
+    })
+    // Recovery completed and we did NOT strand the manager in an error.
+    expect(uploadManager.getState().type).not.toBe('error')
+    expect(uploadManager.isRecovering()).toBe(false)
+    vi.useRealTimers()
+  })
+
+  it('does NOT recover when the tab was hidden briefly (tab switch)', async () => {
+    const book = { ...makeBook('Tabby'), uploading: true }
+    await putBook(book)
+    const gates: Array<() => void> = []
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          gates.push(() =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' }),
+          )
+        }),
+    )
+    const setVisible = (v: boolean) =>
+      Object.defineProperty(document, 'visibilityState', {
+        value: v ? 'visible' : 'hidden',
+        configurable: true,
+      })
+    const dispatch = () => document.dispatchEvent(new Event('visibilitychange'))
+
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('synthesizing'))
+
+    // Hide → fast-forward only 2s (under the 5s threshold) → visible.
+    setVisible(false)
+    dispatch()
+    vi.setSystemTime(Date.now() + 2_000)
+    setVisible(true)
+    dispatch()
+
+    // Allow the visibility handler to fire — no recovery should start.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(uploadManager.isRecovering()).toBe(false)
+    expect(uploadManager.getState().type).toBe('synthesizing')
+
+    // Cleanup.
+    uploadManager.cancel()
+    await act(async () => {
+      for (const g of gates) g()
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('idle'))
+    vi.useRealTimers()
   })
 })
 

@@ -141,7 +141,10 @@ export function Library() {
       {list.type === 'ready' && (
         <>
           {aiUnusableReason && (
-            <AiStatusChip reason={aiUnusableReason} onOpenSettings={() => navigate('/settings')} />
+            <AiStatusChip
+              reason={aiUnusableReason}
+              onOpenSettings={() => navigate('/settings#ai')}
+            />
           )}
           <LibraryList
             books={list.books}
@@ -203,7 +206,7 @@ export function Library() {
           onClose={onUnavailableFeatureClose}
           onOpenSettings={() => {
             onUnavailableFeatureClose()
-            navigate('/settings')
+            navigate('/settings#ai')
           }}
         />
       )}
