@@ -20,6 +20,7 @@ import {
 import type {
   AiOutlineChapter,
   AppliedProcessing,
+  ChunkStreamInfo,
   PronunciationCandidate,
   TransformDefinition,
   TransformOp,
@@ -32,6 +33,8 @@ export type CompleteFn = (
     json?: boolean
     signal?: AbortSignal
     onDelta?: (textSoFar: string, delta: string) => void
+    /** Per-reasoning-delta callback (reasoning models only). See {@link CompleteOptions.onReasoning}. */
+    onReasoning?: (reasoningSoFar: string, delta: string) => void
   },
 ) => Promise<string>
 
@@ -44,11 +47,27 @@ function fraction(done: number, total: number): number {
 const REQUEST_DELAY_MS = 400
 
 /**
+ * Guard against silent provider failures that return 200 OK but empty bodies.
+ * Without this, `splitOutput('')` returns `[]` and the manager commits a
+ * chapter with zero paragraphs — wiping the user's book. Throw loudly so the
+ * manager surfaces a clear error in the banner and the user can retry / pick
+ * a different model. Only throws when the input was non-empty (otherwise the
+ * guard would fire on legitimately-empty cleanup passes).
+ */
+function assertNonEmptyResponse(raw: string, inputParagraphs: string[]): void {
+  if (raw.trim() === '' && inputParagraphs.some((p) => p.trim() !== '')) {
+    throw new Error(
+      'Provider returned an empty response — check your API key, quota, and model availability.',
+    )
+  }
+}
+
+/**
  * Whether the definition's params suggest a reductive transform (output may be
  * shorter than input — append rather than in-place-replace). Detected from
  * param keys that indicate percentage/ratio condensation.
  */
-function isReductive(def: TransformDefinition): boolean {
+export function isReductive(def: TransformDefinition): boolean {
   return def.params.some((p) => p.key === 'percent' || p.key === 'ratio')
 }
 
@@ -73,6 +92,7 @@ export async function runTransform(
   onProgress?: (fraction: number) => void,
   signal?: AbortSignal,
   onDelta?: (textSoFar: string, delta: string) => void,
+  onChunkStreamed?: (info: ChunkStreamInfo) => void,
 ): Promise<string[]> {
   const systemPrompt = buildTransformMessages(def, opParams, []).system
   const systemTokens = estimateTokens(systemPrompt)
@@ -83,19 +103,55 @@ export async function runTransform(
     const out: string[] = []
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i] as NonNullable<(typeof chunks)[0]>
-      // Reset textSoFar at the start of each chunk — `onDelta` callers render
-      // the current chunk's stream, not an accumulating cross-chunk blob.
+      // Reset textSoFar at the start of each chunk — `onDelta`/`onChunkStreamed`
+      // callers render the current chunk's stream, not an accumulating cross-chunk blob.
       let chunkAcc = ''
+      let reasoningAcc = ''
+      // Shared fire routine — called whenever content OR reasoning updates,
+      // so the consumer sees a consistent (textSoFar, reasoningSoFar) pair.
+      const fire = (delta: string): void => {
+        onChunkStreamed?.({
+          chunkIndex: i,
+          chunkTotal: chunks.length,
+          chunkStartInputIndex: chunk.start,
+          chunkInputCount: chunk.paragraphs.length,
+          textSoFar: chunkAcc,
+          reasoningSoFar: reasoningAcc,
+          delta,
+          isFinal: false,
+        })
+      }
       const raw = await complete(buildTransformMessages(def, opParams, chunk.paragraphs), {
         signal,
-        onDelta: onDelta
+        onDelta:
+          onDelta || onChunkStreamed
+            ? (_acc, delta) => {
+                chunkAcc += delta
+                onDelta?.(chunkAcc, delta)
+                fire(delta)
+              }
+            : undefined,
+        onReasoning: onChunkStreamed
           ? (_acc, delta) => {
-              chunkAcc += delta
-              onDelta(chunkAcc, delta)
+              reasoningAcc += delta
+              fire(delta)
             }
           : undefined,
       })
-      out.push(...splitOutput(raw))
+      assertNonEmptyResponse(raw, chunk.paragraphs)
+      const finalParagraphs = splitOutput(raw)
+      out.push(...finalParagraphs)
+      onChunkStreamed?.({
+        chunkIndex: i,
+        chunkTotal: chunks.length,
+        chunkStartInputIndex: chunk.start,
+        chunkInputCount: chunk.paragraphs.length,
+        textSoFar: raw,
+        reasoningSoFar: reasoningAcc,
+        delta: '',
+        isFinal: true,
+        finalParagraphs,
+      })
       onProgress?.(fraction(i + 1, chunks.length))
       if (i < chunks.length - 1) await delay(signal)
     }
@@ -106,21 +162,54 @@ export async function runTransform(
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i] as NonNullable<(typeof chunks)[0]>
     let chunkAcc = ''
+    let reasoningAcc = ''
+    const fire = (delta: string): void => {
+      onChunkStreamed?.({
+        chunkIndex: i,
+        chunkTotal: chunks.length,
+        chunkStartInputIndex: chunk.start,
+        chunkInputCount: chunk.paragraphs.length,
+        textSoFar: chunkAcc,
+        reasoningSoFar: reasoningAcc,
+        delta,
+        isFinal: false,
+      })
+    }
     const raw = await complete(buildTransformMessages(def, opParams, chunk.paragraphs), {
       signal,
-      onDelta: onDelta
+      onDelta:
+        onDelta || onChunkStreamed
+          ? (_acc, delta) => {
+              chunkAcc += delta
+              onDelta?.(chunkAcc, delta)
+              fire(delta)
+            }
+          : undefined,
+      onReasoning: onChunkStreamed
         ? (_acc, delta) => {
-            chunkAcc += delta
-            onDelta(chunkAcc, delta)
+            reasoningAcc += delta
+            fire(delta)
           }
         : undefined,
     })
+    assertNonEmptyResponse(raw, chunk.paragraphs)
     const parts = splitOutput(raw)
     const max = Math.min(parts.length, chunk.paragraphs.length)
     for (let j = 0; j < max; j++) {
       const idx = chunk.start + j
       if (idx < out.length) out[idx] = parts[j] ?? out[idx] ?? ''
     }
+    onChunkStreamed?.({
+      chunkIndex: i,
+      chunkTotal: chunks.length,
+      chunkStartInputIndex: chunk.start,
+      chunkInputCount: chunk.paragraphs.length,
+      textSoFar: raw,
+      reasoningSoFar: reasoningAcc,
+      delta: '',
+      isFinal: true,
+      finalParagraphs: parts,
+    })
     onProgress?.(fraction(i + 1, chunks.length))
     if (i < chunks.length - 1) await delay(signal)
   }

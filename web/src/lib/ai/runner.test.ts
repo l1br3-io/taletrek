@@ -183,6 +183,192 @@ describe('runTransform — streaming (onDelta)', () => {
   })
 })
 
+describe('runTransform — chunk streaming (onChunkStreamed)', () => {
+  it('fires onChunkStreamed on each token batch with isFinal=false', async () => {
+    const complete = vi.fn(async (_msgs, opts) => {
+      opts?.onDelta?.('A', 'A')
+      opts?.onDelta?.('AB', 'B')
+      return 'AB'
+    })
+    const events: Array<{ textSoFar: string; delta: string; isFinal: boolean }> = []
+    await runTransform(
+      ['p0'],
+      cleanupDef,
+      {},
+      CTX,
+      complete,
+      undefined,
+      undefined,
+      undefined,
+      (info) =>
+        events.push({ textSoFar: info.textSoFar, delta: info.delta, isFinal: info.isFinal }),
+    )
+    // Two non-final fires (one per delta), then one final fire with empty delta.
+    expect(events).toEqual([
+      { textSoFar: 'A', delta: 'A', isFinal: false },
+      { textSoFar: 'AB', delta: 'B', isFinal: false },
+      { textSoFar: 'AB', delta: '', isFinal: true },
+    ])
+  })
+
+  it('propagates reasoning tokens via reasoningSoFar (reasoning-model support)', async () => {
+    // Reasoning models (glm-5.2, DeepSeek-R1) emit thinking tokens via a
+    // separate callback BEFORE the visible content. The runner must thread
+    // these through to onChunkStreamed.reasoningSoFar so the UI can surface
+    // "model is thinking" feedback during the otherwise-opaque gap.
+    const complete = vi.fn(async (_msgs, opts) => {
+      opts?.onReasoning?.('Thinking A', 'Thinking A')
+      opts?.onReasoning?.('Thinking AThinking B', 'Thinking B')
+      opts?.onDelta?.('Hello', 'Hello') // Content starts AFTER reasoning
+      return 'Hello'
+    })
+    const events: Array<{ textSoFar: string; reasoningSoFar: string }> = []
+    await runTransform(
+      ['p0'],
+      cleanupDef,
+      {},
+      CTX,
+      complete,
+      undefined,
+      undefined,
+      undefined,
+      (info) => events.push({ textSoFar: info.textSoFar, reasoningSoFar: info.reasoningSoFar }),
+    )
+    // First two fires: reasoning only, no content yet.
+    expect(events[0]).toEqual({ textSoFar: '', reasoningSoFar: 'Thinking A' })
+    expect(events[1]).toEqual({ textSoFar: '', reasoningSoFar: 'Thinking AThinking B' })
+    // Third fire: content arrives, reasoning still carried along.
+    expect(events[2]).toEqual({ textSoFar: 'Hello', reasoningSoFar: 'Thinking AThinking B' })
+    // Final fire includes accumulated reasoning.
+    expect(events[events.length - 1]?.reasoningSoFar).toBe('Thinking AThinking B')
+  })
+
+  it('includes chunkIndex, chunkTotal, chunkStartInputIndex in each fire', async () => {
+    // Force two chunks (one paragraph each) by using a small context limit.
+    const bigA = 'a'.repeat(2200)
+    const bigB = 'b'.repeat(2200)
+    const complete = vi.fn(async (_msgs, opts) => {
+      opts?.onDelta?.('X', 'X')
+      return 'X'
+    })
+    const events: Array<{ chunkIndex: number; chunkTotal: number; chunkStartInputIndex: number }> =
+      []
+    await runTransform(
+      [bigA, bigB],
+      cleanupDef,
+      {},
+      2048,
+      complete,
+      undefined,
+      undefined,
+      undefined,
+      (info) =>
+        events.push({
+          chunkIndex: info.chunkIndex,
+          chunkTotal: info.chunkTotal,
+          chunkStartInputIndex: info.chunkStartInputIndex,
+        }),
+    )
+    expect(events).toEqual([
+      { chunkIndex: 0, chunkTotal: 2, chunkStartInputIndex: 0 },
+      { chunkIndex: 0, chunkTotal: 2, chunkStartInputIndex: 0 },
+      { chunkIndex: 1, chunkTotal: 2, chunkStartInputIndex: 1 },
+      { chunkIndex: 1, chunkTotal: 2, chunkStartInputIndex: 1 },
+    ])
+  })
+
+  it('attaches finalParagraphs on the isFinal=true fire (non-reductive)', async () => {
+    const complete = vi.fn(async () => 'CLEAN-A\n\nCLEAN-B')
+    const finals: Array<{ finalParagraphs?: string[]; isFinal: boolean }> = []
+    await runTransform(
+      ['a', 'b'],
+      cleanupDef,
+      {},
+      CTX,
+      complete,
+      undefined,
+      undefined,
+      undefined,
+      (info) => {
+        if (info.isFinal) finals.push({ finalParagraphs: info.finalParagraphs, isFinal: true })
+      },
+    )
+    expect(finals).toEqual([{ finalParagraphs: ['CLEAN-A', 'CLEAN-B'], isFinal: true }])
+  })
+
+  it('attaches finalParagraphs on the isFinal=true fire (reductive — summarize)', async () => {
+    const complete = vi.fn(async () => 'SUM-A\n\nSUM-B')
+    const finals: Array<{ finalParagraphs?: string[]; isFinal: boolean }> = []
+    await runTransform(
+      Array.from({ length: 5 }, (_, i) => `p${i}`),
+      summarizeDef,
+      { ratio: 0.5 },
+      CTX,
+      complete,
+      undefined,
+      undefined,
+      undefined,
+      (info) => {
+        if (info.isFinal) finals.push({ finalParagraphs: info.finalParagraphs, isFinal: true })
+      },
+    )
+    expect(finals).toEqual([{ finalParagraphs: ['SUM-A', 'SUM-B'], isFinal: true }])
+  })
+
+  it('resets textSoFar at each chunk boundary', async () => {
+    const bigA = 'a'.repeat(2200)
+    const bigB = 'b'.repeat(2200)
+    const complete = vi.fn(async (_msgs, opts) => {
+      opts?.onDelta?.('X', 'X')
+      opts?.onDelta?.('XY', 'Y')
+      return 'XY'
+    })
+    const firstDeltas: string[] = []
+    await runTransform(
+      [bigA, bigB],
+      cleanupDef,
+      {},
+      2048,
+      complete,
+      undefined,
+      undefined,
+      undefined,
+      (info) => {
+        if (!info.isFinal && info.delta) firstDeltas.push(info.textSoFar)
+      },
+    )
+    // First fire of each chunk should be 'X', not accumulating across chunks.
+    expect(firstDeltas).toEqual(['X', 'XY', 'X', 'XY'])
+  })
+
+  it('does not fire when onChunkStreamed is not provided (no crash)', async () => {
+    const complete = vi.fn(async () => 'x')
+    const out = await runTransform(['a'], cleanupDef, {}, CTX, complete)
+    expect(out).toEqual(['x'])
+  })
+
+  it('fires onChunkStreamed even when onDelta is not provided', async () => {
+    // Engine should still wire onDelta internally to feed onChunkStreamed.
+    const complete = vi.fn(async (_msgs, opts) => {
+      opts?.onDelta?.('A', 'A')
+      return 'A'
+    })
+    const events: string[] = []
+    await runTransform(
+      ['p0'],
+      cleanupDef,
+      {},
+      CTX,
+      complete,
+      undefined,
+      undefined,
+      undefined,
+      (info) => events.push(info.textSoFar),
+    )
+    expect(events).toEqual(['A', 'A']) // one non-final, one final
+  })
+})
+
 describe('runHints', () => {
   it('requests JSON mode and parses candidates', async () => {
     const complete = vi.fn(async () =>
@@ -243,5 +429,42 @@ describe('opsFromProcessing', () => {
   it('returns [] for an empty ops list', () => {
     const p: AppliedProcessing = { appliedAt: 1, ops: [] }
     expect(opsFromProcessing(p)).toEqual([])
+  })
+})
+
+describe('runTransform — empty-response guard', () => {
+  // Some providers return 200 OK with an empty SSE body (quota hit, model
+  // down, misconfigured reverse proxy). Without this guard, splitOutput('')
+  // returns [] and the manager commits a chapter with zero paragraphs —
+  // wiping the user's book. The guard throws so the manager surfaces a
+  // clear error in the reader banner.
+  it('throws when the provider returns empty output for non-empty input', async () => {
+    const emptyComplete: CompleteFn = async () => ''
+    await expect(runTransform(['hello world'], cleanupDef, {}, CTX, emptyComplete)).rejects.toThrow(
+      /empty response/,
+    )
+  })
+
+  it('throws when the provider returns only whitespace', async () => {
+    const wsComplete: CompleteFn = async () => '   \n  \t  '
+    await expect(runTransform(['hello world'], cleanupDef, {}, CTX, wsComplete)).rejects.toThrow(
+      /empty response/,
+    )
+  })
+
+  it('does NOT throw when input is also empty (legitimate cleanup pass)', async () => {
+    const emptyComplete: CompleteFn = async () => ''
+    // All-whitespace input is a normal outcome of upstream cleaning — should
+    // not trigger the guard. Output preserves the whitespace input unchanged
+    // (count-preserving fallback path).
+    const result = await runTransform(['   '], cleanupDef, {}, CTX, emptyComplete)
+    expect(result).toEqual(['   '])
+  })
+
+  it('throws on the reductive branch too (summarize)', async () => {
+    const emptyComplete: CompleteFn = async () => ''
+    await expect(
+      runTransform(['hello world'], summarizeDef, { ratio: 0.5 }, CTX, emptyComplete),
+    ).rejects.toThrow(/empty response/)
   })
 })

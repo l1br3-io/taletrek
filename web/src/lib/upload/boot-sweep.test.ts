@@ -36,7 +36,7 @@ describe('reconcileInterruptedUploads', () => {
     const stuck = makeBook({ uploading: true, title: 'Interrupted' })
     await putBook(stuck)
     const report = await reconcileInterruptedUploads()
-    expect(report).toEqual({ clearedFlags: 0, convertedToPaused: 1 })
+    expect(report).toEqual({ clearedFlags: 0, convertedToPaused: 1, transformedToPaused: 0 })
 
     const refreshed = await getBook(stuck.id)
     expect(refreshed).toBeDefined()
@@ -101,7 +101,7 @@ describe('reconcileInterruptedUploads', () => {
     })
 
     const report = await reconcileInterruptedUploads()
-    expect(report).toEqual({ clearedFlags: 1, convertedToPaused: 0 })
+    expect(report).toEqual({ clearedFlags: 1, convertedToPaused: 0, transformedToPaused: 0 })
 
     const refreshed = await getBook(stuck.id)
     expect(refreshed).toBeDefined()
@@ -141,7 +141,7 @@ describe('reconcileInterruptedUploads', () => {
     })
 
     const report = await reconcileInterruptedUploads()
-    expect(report).toEqual({ clearedFlags: 1, convertedToPaused: 2 })
+    expect(report).toEqual({ clearedFlags: 1, convertedToPaused: 2, transformedToPaused: 0 })
 
     const all = await getAllBooks()
     const ids = new Set(all.map((b) => b.id))
@@ -155,7 +155,7 @@ describe('reconcileInterruptedUploads', () => {
     const clean = makeBook({ title: 'Done' })
     await putBook(clean)
     const report = await reconcileInterruptedUploads()
-    expect(report).toEqual({ clearedFlags: 0, convertedToPaused: 0 })
+    expect(report).toEqual({ clearedFlags: 0, convertedToPaused: 0, transformedToPaused: 0 })
   })
 
   it('is idempotent — running twice produces the same DB state', async () => {
@@ -165,7 +165,7 @@ describe('reconcileInterruptedUploads', () => {
     await reconcileInterruptedUploads()
     const second = await reconcileInterruptedUploads()
 
-    expect(second).toEqual({ clearedFlags: 0, convertedToPaused: 0 })
+    expect(second).toEqual({ clearedFlags: 0, convertedToPaused: 0, transformedToPaused: 0 })
     // Book survives the sweep; only uploading was cleared.
     expect(await getAllBooks()).toHaveLength(1)
   })
@@ -187,7 +187,7 @@ describe('reconcileInterruptedUploads', () => {
     await putBook(paused)
 
     const report = await reconcileInterruptedUploads()
-    expect(report).toEqual({ clearedFlags: 0, convertedToPaused: 0 })
+    expect(report).toEqual({ clearedFlags: 0, convertedToPaused: 0, transformedToPaused: 0 })
 
     const refreshed = await getBook(paused.id)
     expect(refreshed).toBeDefined()

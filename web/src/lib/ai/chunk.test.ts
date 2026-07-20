@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chunksForParagraphs, estimateTokens, sample } from './chunk'
+import { CHUNK_UX_CAP_TOKENS, chunksForParagraphs, estimateTokens, sample } from './chunk'
 
 function paragraphs(n: number): string[] {
   return Array.from({ length: n }, (_, i) => `para-${i}`)
@@ -123,5 +123,41 @@ describe('chunksForParagraphs', () => {
     // easily fit in one chunk.
     expect(chunks).toHaveLength(1)
     expect(chunks[0]?.paragraphs).toEqual([para, para, para])
+  })
+
+  it('applies the UX chunk-size cap regardless of contextLimit (large-context regression guard)', () => {
+    // Regression guard for the 2026-07-20 finding: glm-4.7 with 128K context
+    // received a 12K-token chapter as ONE chunk, and the user waited 268s
+    // for the model's prefill before any token streamed. The UX cap splits
+    // the chapter into multiple smaller chunks so each chunk's prefill is
+    // tolerable (target: under ~30s on typical models).
+    //
+    // Setup: 200 paragraphs × ~50 tokens each = 10,000 tokens total.
+    //   - Without UX cap: budget = 128K - 100 - 1024 = ~127K → 1 chunk.
+    //   - With UX cap of 2000: budget = min(127K, 2000) = 2000 → 5 chunks
+    //     (40 paras × 50 tokens = 2000 each).
+    const para50Tokens = 'x'.repeat(200) // 200 chars × 0.25 = 50 tokens
+    const input = Array.from({ length: 200 }, () => para50Tokens)
+    const chunks = chunksForParagraphs(input, 128_000, 100)
+    expect(chunks.length).toBeGreaterThan(1)
+    // Each chunk's token count must stay under the UX cap.
+    for (const c of chunks) {
+      const tokens = c.paragraphs.reduce((sum, p) => sum + estimateTokens(p), 0)
+      // Allow the cap + one paragraph overflow (chunk boundary is at
+      // paragraph granularity, so a chunk can be slightly over if the last
+      // paragraph pushed it past). Verify the bound is the UX cap, not the
+      // contextLimit.
+      expect(tokens).toBeLessThanOrEqual(CHUNK_UX_CAP_TOKENS + estimateTokens(para50Tokens))
+    }
+  })
+
+  it('does not apply the UX cap when contextLimit is smaller than the cap', () => {
+    // For very small context models (e.g. older 4K-context Llama variants),
+    // the context budget is the binding constraint, not the UX cap.
+    // budget = min(contextBudget, UX_MAX) = min(972, 2000) = 972.
+    const bigPara = 'x'.repeat(4000) // ~1000 tokens each
+    const input = [bigPara, bigPara, bigPara]
+    const chunks = chunksForParagraphs(input, 2096, 100)
+    expect(chunks).toHaveLength(3)
   })
 })

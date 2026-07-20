@@ -5,10 +5,12 @@ import { SettingsProvider } from '../context/settings'
 import {
   _clearDBForTests,
   _resetDBForTests,
+  getChaptersByBook,
   putBook,
   putChapters,
   updateBookProgress,
 } from '../lib/db'
+import type { BookTransformState } from '../lib/transform/manager'
 import type { Book } from '../types'
 import { newBookId, newChapterId } from '../types'
 import { Reader } from './reader/ReaderPane'
@@ -38,6 +40,14 @@ vi.mock('../lib/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/db')>()
   return { ...actual, updateBookProgress: vi.fn() }
 })
+
+// Controllable transform-manager state so the chapter-refresh test (M13) can
+// drive `state.done` increments without spinning up the real manager + engine.
+// Other tests get the default `idle` (no transform active for this book).
+let transformState: BookTransformState = { type: 'idle' }
+vi.mock('../lib/transform/useBookTransformState', () => ({
+  useBookTransformState: () => transformState,
+}))
 
 function makeBook(overrides: Partial<Book> = {}): Book {
   const now = Date.now()
@@ -86,6 +96,7 @@ beforeEach(async () => {
   vi.mocked(updateBookProgress).mockClear()
   // jsdom has no layout; stub scrollIntoView so F5/F4 can be asserted.
   window.HTMLElement.prototype.scrollIntoView = vi.fn()
+  transformState = { type: 'idle' }
 })
 
 describe('Reader routing', () => {
@@ -338,5 +349,132 @@ describe('Reader — unknown book redirect', () => {
   it('redirects to /library when the book id does not exist', async () => {
     renderAt(`/reader/${newBookId()}`)
     expect(await screen.findByTestId('capture')).toHaveTextContent('/library')
+  })
+})
+
+describe('Reader chapter refresh on M13 transform commits', () => {
+  it('reloads chapters from IDB when state.done increments (chapter committed)', async () => {
+    const id = newBookId()
+    await putBook(makeBook({ id, title: 'Stream' }))
+    const chId = newChapterId()
+    await putChapters([
+      {
+        id: chId,
+        bookId: id,
+        index: 0,
+        title: 'Stream',
+        paragraphs: ['original-0', 'original-1'],
+      },
+    ])
+    const { rerender } = renderAt(`/reader/${id}`)
+    await screen.findByRole('heading', { name: 'Stream' })
+    expect(screen.getByText('original-0')).toBeInTheDocument()
+
+    // Simulate the manager committing chapter 0 after a transform: rewrite
+    // chapters in IDB, then flip the manager state to running with done=1.
+    await putChapters([
+      {
+        id: chId,
+        bookId: id,
+        index: 0,
+        title: 'Stream',
+        paragraphs: ['rewritten-0', 'rewritten-1'],
+      },
+    ])
+    transformState = {
+      type: 'running',
+      bookId: id,
+      opLabel: 'test',
+      currentOpIndex: 0,
+      totalOps: 1,
+      currentChapterIndex: 1,
+      totalChapters: 2,
+      done: 1,
+      total: 2,
+      chapterStartedAt: 0,
+      streamingParagraphs: null,
+    }
+    // Force a re-render so the mock state is picked up.
+    rerender(
+      <SettingsProvider>
+        <MemoryRouter initialEntries={[`/reader/${id}`]}>
+          <Routes>
+            <Route path="/reader/:bookId" element={<Reader />} />
+            <Route path="*" element={<Capture />} />
+          </Routes>
+        </MemoryRouter>
+      </SettingsProvider>,
+    )
+    // Reader should now show the rewritten paragraphs without remount.
+    await waitFor(() => expect(screen.getByText('rewritten-0')).toBeInTheDocument())
+    expect(screen.queryByText('original-0')).not.toBeInTheDocument()
+  })
+
+  it('reloads chapters when state transitions to done', async () => {
+    const id = newBookId()
+    await putBook(makeBook({ id, title: 'Done' }))
+    const chId = newChapterId()
+    await putChapters([
+      {
+        id: chId,
+        bookId: id,
+        index: 0,
+        title: 'Done',
+        paragraphs: ['before'],
+      },
+    ])
+    const { rerender } = renderAt(`/reader/${id}`)
+    await screen.findByRole('heading', { name: 'Done' })
+
+    // Manager completes the job — chapters in IDB reflect the final output.
+    await putChapters([{ id: chId, bookId: id, index: 0, title: 'Done', paragraphs: ['after'] }])
+    transformState = { type: 'done', bookId: id }
+    rerender(
+      <SettingsProvider>
+        <MemoryRouter initialEntries={[`/reader/${id}`]}>
+          <Routes>
+            <Route path="/reader/:bookId" element={<Reader />} />
+            <Route path="*" element={<Capture />} />
+          </Routes>
+        </MemoryRouter>
+      </SettingsProvider>,
+    )
+    await waitFor(() => expect(screen.getByText('after')).toBeInTheDocument())
+    expect(screen.queryByText('before')).not.toBeInTheDocument()
+  })
+
+  it('does not reload when the transform is for a different book', async () => {
+    const id = newBookId()
+    await putBook(makeBook({ id, title: 'Mine' }))
+    await putChapters([
+      {
+        id: newChapterId(),
+        bookId: id,
+        index: 0,
+        title: 'Mine',
+        paragraphs: ['mine-only'],
+      },
+    ])
+    const { rerender } = renderAt(`/reader/${id}`)
+    await screen.findByRole('heading', { name: 'Mine' })
+
+    // A different book's transform completes — shouldn't affect this reader.
+    transformState = { type: 'done', bookId: newBookId() }
+    rerender(
+      <SettingsProvider>
+        <MemoryRouter initialEntries={[`/reader/${id}`]}>
+          <Routes>
+            <Route path="/reader/:bookId" element={<Reader />} />
+            <Route path="*" element={<Capture />} />
+          </Routes>
+        </MemoryRouter>
+      </SettingsProvider>,
+    )
+    // Give the effect a tick in case it tried to run — then assert no change.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(screen.getByText('mine-only')).toBeInTheDocument()
+    // Sanity: chapters in IDB for this book are unchanged anyway.
+    const fresh = await getChaptersByBook(id)
+    expect(fresh[0]?.paragraphs).toEqual(['mine-only'])
   })
 })

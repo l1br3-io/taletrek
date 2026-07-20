@@ -10,8 +10,8 @@ import {
   setPinnedAudioCacheBookId,
 } from '../db/audio-cache'
 import { formatError } from '../format-error'
-import { type PlaybackEngineSetting, resolveMobileEngine } from '../playback/engines'
 import { isMobileDevice } from '../platform'
+import { type PlaybackEngineSetting, resolveMobileEngine } from '../playback/engines'
 import type { ParagraphLocation, ParagraphPreSynthInfo } from '../pre-synth'
 import { preSynthesizeBook } from '../pre-synth'
 import { ttsClient } from '../tts/client'
