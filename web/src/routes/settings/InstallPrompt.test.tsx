@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { _resetForTests } from '../../lib/install-prompt'
 import { InstallPrompt } from './InstallPrompt'
 
 /** A synthetic beforeinstallprompt event with mockable prompt/userChoice. */
@@ -41,6 +42,7 @@ beforeEach(() => {
     value: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
     configurable: true,
   })
+  _resetForTests()
 })
 
 afterEach(() => {
@@ -71,6 +73,7 @@ describe('InstallPrompt', () => {
 
   it('is hidden once installed (standalone display-mode)', () => {
     setStandalone(true)
+    _resetForTests()
     const { container } = render(<InstallPrompt />)
     expect(container).toBeEmptyDOMElement()
   })
@@ -96,5 +99,17 @@ describe('InstallPrompt', () => {
     render(<InstallPrompt />)
     expect(screen.getByText(/Add to Home Screen/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument()
+  })
+
+  it('still shows Install when beforeinstallprompt fired BEFORE mount', () => {
+    // The pre-2026-07 regression: the listener lived in a useEffect, so an
+    // event fired before the component mounted was lost. The module-load
+    // capture in lib/install-prompt.ts fixes this — the captured event is
+    // observed via useSyncExternalStore on first render.
+    act(() => {
+      window.dispatchEvent(bipEvent())
+    })
+    render(<InstallPrompt />)
+    expect(screen.getByRole('button', { name: 'Install' })).toBeInTheDocument()
   })
 })

@@ -227,6 +227,109 @@ describe('Library', () => {
     expect(await screen.findByText('Keep Me')).toBeInTheDocument()
   })
 
+  it('cancels an in-progress synth for the book before deleting', async () => {
+    // Synth job never resolves on its own — cancel must observe the abort
+    // at the next paragraph boundary and finalize.
+    const gates: Array<() => void> = []
+    ttsSynthMock.mockReset()
+    ttsSynthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          gates.push(() =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' }),
+          )
+        }),
+    )
+    const id = newBookId()
+    const active = makeBook({ id, title: 'Synthy', uploading: true })
+    await putBook(active)
+    await putChapters([
+      { id: chapterId('c1'), bookId: id, index: 0, title: 'C0', paragraphs: ['one', 'two'] },
+    ])
+    uploadManager.startJob({
+      book: active,
+      chapters: [
+        { id: chapterId('c1'), bookId: id, index: 0, title: 'C0', paragraphs: ['one', 'two'] },
+      ],
+      voiceId: DEFAULT_SETTINGS.voiceId,
+      cleaning: DEFAULT_SETTINGS.cleaning,
+    })
+    await vi.waitFor(() => expect(uploadManager.isActive()).toBe(true))
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.spyOn(window, 'alert').mockImplementation(() => {})
+    renderAt('/library')
+    await openBookMenu('Synthy')
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Synthy' }))
+
+    // cancelForBook awaits the abort landing — release the gate so the worker
+    // observes it and the manager settles to idle.
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(1))
+    await act(async () => {
+      gates[0]?.()
+    })
+    expect(await screen.findByText(/Your library is empty/i)).toBeInTheDocument()
+    expect(uploadManager.isActive()).toBe(false)
+    // No alert — the synth was for THIS book, so it cancels cleanly.
+    expect(window.alert).not.toHaveBeenCalled()
+  })
+
+  it('refuses the delete when another book is synthesizing', async () => {
+    const gates: Array<() => void> = []
+    ttsSynthMock.mockReset()
+    ttsSynthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          gates.push(() =>
+            res({ audio: new Blob(['x']), synthMs: 1, durationSeconds: 1, cacheKey: 'k' }),
+          )
+        }),
+    )
+    const activeId = newBookId()
+    const active = makeBook({ id: activeId, title: 'Active Job', uploading: true })
+    const target = makeBook({ title: 'Target' })
+    await putBook(active)
+    await putBook(target)
+    await putChapters([
+      { id: chapterId('c1'), bookId: activeId, index: 0, title: 'C0', paragraphs: ['one'] },
+    ])
+    uploadManager.startJob({
+      book: active,
+      chapters: [
+        { id: chapterId('c1'), bookId: activeId, index: 0, title: 'C0', paragraphs: ['one'] },
+      ],
+      voiceId: DEFAULT_SETTINGS.voiceId,
+      cleaning: DEFAULT_SETTINGS.cleaning,
+    })
+    await vi.waitFor(() => expect(uploadManager.isActive()).toBe(true))
+
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    // `vi.spyOn` reuses the wrapper if the method is already spied, so the
+    // call history can carry over from earlier tests in this file. Clear it
+    // so our `not.toHaveBeenCalled` assertion is scoped to THIS test.
+    alertSpy.mockClear()
+    confirmSpy.mockClear()
+    renderAt('/library')
+    await openBookMenu('Target')
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Target' }))
+
+    // Alert surfaces why the delete was refused; both books survive.
+    await vi.waitFor(() => expect(alertSpy).toHaveBeenCalled())
+    expect(alertSpy.mock.calls[0]?.[0]).toMatch(/Active Job/)
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(await screen.findByText('Target')).toBeInTheDocument()
+    expect(await screen.findByText('Active Job')).toBeInTheDocument()
+    expect(uploadManager.isActive()).toBe(true)
+
+    // Cleanup: cancel the active job so the next test starts clean.
+    uploadManager.cancel()
+    await act(async () => {
+      gates[0]?.()
+    })
+    await vi.waitFor(() => expect(uploadManager.isActive()).toBe(false))
+  })
+
   it('renders a progress bar from progressFraction', async () => {
     await putBook(makeBook({ title: 'Halfway', progressFraction: 0.5 }))
     renderAt('/library')
@@ -857,6 +960,11 @@ describe('Library — per-book synthesize', () => {
       gates[0]?.()
     })
     expect(await screen.findByText(/1 \/ 2/)).toBeInTheDocument()
+    // The "keep tab open" hint surfaces while synthesizing (Issue 3). The
+    // exact copy varies by wake-lock support — jsdom has no `navigator.wakeLock`,
+    // so the stronger "your browser can't keep the screen awake" variant
+    // renders; both branches mention synth + pause, so match on those.
+    expect(await screen.findByText(/synth.*pause|pause.*synth/i)).toBeInTheDocument()
     // Release the second synth so the job can finish.
     await act(async () => {
       gates[1]?.()

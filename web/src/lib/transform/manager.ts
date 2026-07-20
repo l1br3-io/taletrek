@@ -24,8 +24,8 @@
 
 import type { Book, BookId, Chapter, PersistedTransformJob, VoiceId } from '../../types'
 import { getAiEngineForDef } from '../ai/client'
-import { isReductive as engineIsReductive } from '../ai/runner'
 import { splitOutput } from '../ai/prompts'
+import { isReductive as engineIsReductive } from '../ai/runner'
 import type { AiSettings, ChunkStreamInfo, TransformDefinition, TransformOp } from '../ai/types'
 import { deleteBookAudio } from '../book-audio'
 import type { CleaningConfig } from '../clean/types'
@@ -45,6 +45,16 @@ import { acquireUploadWakeLock } from '../wake-lock'
 
 // Re-export so callers can import from the manager.
 export type { PersistedTransformJob }
+
+/**
+ * Discriminated result of {@link BookTransformManager.cancelForBook}. Mirrors
+ * `uploadManager.CancelForBookResult`. `'blocked'` is reported when a
+ * transform is running for *another* book.
+ */
+export type CancelForBookResult =
+  | { type: 'cancelled' }
+  | { type: 'no-op' }
+  | { type: 'blocked'; activeBookTitle: string }
 
 // ---------------------------------------------------------------------------
 // State machine
@@ -196,6 +206,23 @@ class BookTransformManager {
   private pauseRequested = false
   private wakeLock: WakeLockHandle | null = null
   private currentContext: RunContext | null = null
+  /**
+   * True while a hide-recovery (pause → resume) is in flight (Issue 4).
+   * Mirrors `uploadManager.isRecovering`. Not yet surfaced in `PlayerBar`'s
+   * generation banner — the recovery is silent for transforms (the user
+   * usually doesn't sit on the reader page while a long transform runs in
+   * the background). The state machine is consistent either way.
+   */
+  private recovering = false
+  /** Timestamp of the most recent `visibilitychange → hidden` while a loop ran. */
+  private hiddenAt: number | null = null
+  /** The installed visibility handler, kept so it can be detached in `finally`. */
+  private visibilityHandler: (() => void) | null = null
+
+  /** True while a hide-recovery (pause → resume) is in flight. */
+  isRecovering(): boolean {
+    return this.recovering
+  }
 
   /**
    * Stream-emit throttle state. We use a one-shot `setTimeout(…, 250ms)`
@@ -221,6 +248,13 @@ class BookTransformManager {
 
   /** Coalesce cadence for streamingParagraphs emits (ms). */
   private static readonly STREAM_EMIT_INTERVAL_MS = 250
+
+  /**
+   * Hide-duration threshold (ms) above which `visibilitychange → visible`
+   * triggers recovery (pause → resume) on the active transform. Mirrors
+   * `uploadManager`'s threshold. See Issue 4 / gotcha #26 (cousin of #18/#24).
+   */
+  private static readonly LOCK_RECOVERY_THRESHOLD_MS = 5000
 
   getState = (): BookTransformState => this.state
 
@@ -452,6 +486,86 @@ class BookTransformManager {
   }
 
   /**
+   * Attach the `visibilitychange` listener that drives lock-phone recovery
+   * (Issue 4 / gotcha #26). Mirrors `uploadManager.attachVisibilityHandler`.
+   * Called at `runLoop` start; detached in its `finally`. Hides longer than
+   * `LOCK_RECOVERY_THRESHOLD_MS` while a transform is running trigger
+   * `recoverFromHide` — a pause → resume round-trip that re-issues the
+   * in-flight `engine.transform` call. Already-committed chapters survive.
+   */
+  private attachVisibilityHandler(): void {
+    if (typeof document === 'undefined' || this.visibilityHandler) return
+    this.hiddenAt = null
+    this.visibilityHandler = () => {
+      if (document.visibilityState === 'hidden') {
+        this.hiddenAt = Date.now()
+      } else if (document.visibilityState === 'visible' && this.hiddenAt !== null) {
+        const hiddenMs = Date.now() - this.hiddenAt
+        this.hiddenAt = null
+        if (hiddenMs > BookTransformManager.LOCK_RECOVERY_THRESHOLD_MS) {
+          void this.recoverFromHide()
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', this.visibilityHandler)
+  }
+
+  private detachVisibilityHandler(): void {
+    if (this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
+      this.visibilityHandler = null
+    }
+    this.hiddenAt = null
+  }
+
+  /**
+   * Recover from a long hide. Mirrors `uploadManager.recoverFromHide`. The
+   * transform equivalent of "respawn the workers" is "re-issue the chapter's
+   * `engine.transform` call" — `pause()` aborts the in-flight request, then
+   * `resume()` reloads chapters from IDB and picks up at
+   * `(currentOpIndex, currentChapterIndex)`. Already-committed chapters
+   * survive; the M8 audio cache fast-forwards for free.
+   *
+   * `currentContext` is captured locally because the runLoop's finally clears
+   * it before this fire-and-forget's microtask runs (same pattern as
+   * `triggerResynth`).
+   */
+  private async recoverFromHide(): Promise<void> {
+    if (this.state.type !== 'running') return
+    const ctx = this.currentContext
+    if (!ctx) return
+    const bookId = ctx.spec.book.id
+    this.recovering = true
+    this.emit()
+    console.log('[taletrek] transform: recovering after long hide (visibilitychange)')
+    try {
+      this.pause()
+      await this.waitForSettled()
+      // Only resume if the book is still paused and we're the active context.
+      // The user may have cancelled during the pause; respect that. Read state
+      // through a method call — TS's control-flow analysis keeps the
+      // early-return `running` narrow on `this.state` across the await, but a
+      // method call returns the declared `BookTransformState` union without
+      // the narrow.
+      const s = this.getState()
+      if (s.type === 'paused' && s.bookId === bookId) {
+        await this.resume(bookId, {
+          ai: ctx.ai,
+          defs: ctx.defs,
+          synthEnabled: ctx.synthEnabled,
+        }).catch((err) => {
+          console.warn('[taletrek] transform: recovery resume failed', err)
+        })
+      }
+    } catch (err) {
+      console.warn('[taletrek] transform: recovery failed', err)
+    } finally {
+      this.recovering = false
+      this.emit()
+    }
+  }
+
+  /**
    * Test-only: synchronously force the manager to idle, abort any in-flight
    * controller, cancel pending rAF, release wake lock. Does NOT clear IDB —
    * tests manage their own DB state via `_clearDBForTests`. Mirrors the
@@ -471,6 +585,8 @@ class BookTransformManager {
     this.pendingStreamChunkInfo = null
     this.wakeLock?.release()
     this.wakeLock = null
+    this.detachVisibilityHandler()
+    this.recovering = false
     this.currentContext = null
     this.state = { type: 'idle' }
     this.emit()
@@ -498,6 +614,68 @@ class BookTransformManager {
 
   private cancelIntent = false
 
+  /**
+   * Upper bound on `cancelForBook`'s wait for the loop to observe the abort.
+   * Same defensive cap as `uploadManager`'s variant — the abort is observed
+   * quickly but a stuck provider call shouldn't block a delete.
+   */
+  private static readonly CANCEL_FOR_BOOK_TIMEOUT_MS = 5000
+
+  /**
+   * Cancel any in-progress transform for a specific book and wait for the
+   * manager to settle. Mirrors `uploadManager.cancelForBook`. Used by
+   * `handleDelete` so the cascade-delete doesn't race the loop's writes.
+   */
+  async cancelForBook(bookId: BookId): Promise<CancelForBookResult> {
+    if (this.state.type === 'idle' || this.state.type === 'done' || this.state.type === 'error') {
+      return { type: 'no-op' }
+    }
+    if (this.state.bookId !== bookId) {
+      // The state carries no title — look it up so the caller can name the
+      // blocker. Best-effort; falls back to a generic message if the book
+      // is gone (e.g. already deleted in another tab — rare).
+      const active = await getBook(this.state.bookId).catch(() => null)
+      return {
+        type: 'blocked',
+        activeBookTitle: active?.title ?? 'another book',
+      }
+    }
+    await this.cancel()
+    await this.waitForSettled()
+    return { type: 'cancelled' }
+  }
+  /**
+   * Resolve once the manager reaches a non-active state. Bounded by
+   * `CANCEL_FOR_BOOK_TIMEOUT_MS` so a stuck provider call can't block a
+   * delete forever. Includes `'paused'` so the recovery path's pause →
+   * resume round-trip can observe the pause landing (mirrors
+   * `uploadManager.waitForSettled`).
+   */
+  private waitForSettled(): Promise<void> {
+    return new Promise((resolve) => {
+      const settled = () =>
+        this.state.type === 'idle' ||
+        this.state.type === 'done' ||
+        this.state.type === 'error' ||
+        this.state.type === 'paused'
+      if (settled()) {
+        resolve()
+        return
+      }
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        unsubscribe()
+        clearTimeout(timer)
+        resolve()
+      }
+      const unsubscribe = this.subscribe(() => {
+        if (settled()) finish()
+      })
+      const timer = setTimeout(finish, BookTransformManager.CANCEL_FOR_BOOK_TIMEOUT_MS)
+    })
+  }
   async retry(
     bookId: BookId,
     deps: { ai: AiSettings; defs: TransformDefinition[]; synthEnabled: boolean },
@@ -583,6 +761,11 @@ class BookTransformManager {
 
     // Acquire wake lock (best-effort, never fatal — ADR-0009).
     this.wakeLock = await acquireUploadWakeLock()
+
+    // Listen for hide → visible transitions longer than the lock threshold so
+    // a phone lock mid-transform triggers recovery (pause → resume). Detached
+    // in the finally below.
+    this.attachVisibilityHandler()
 
     // Working copy of chapters — each op's output feeds the next op.
     let working: Chapter[] = spec.chapters
@@ -785,6 +968,7 @@ class BookTransformManager {
     } finally {
       this.wakeLock?.release()
       this.wakeLock = null
+      this.detachVisibilityHandler()
       this.abortController = null
       this.pauseRequested = false
       this.cancelIntent = false

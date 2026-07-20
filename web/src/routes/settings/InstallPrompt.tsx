@@ -1,25 +1,14 @@
 import { Download } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
+import {
+  type BeforeInstallPromptEvent,
+  getInstallState,
+  isIOS,
+  subscribe,
+  triggerInstallPrompt,
+} from '../../lib/install-prompt'
 
 const DISMISS_KEY = 'tt.install.dismissed'
-
-interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
-}
-
-function isStandalone(): boolean {
-  if (typeof window === 'undefined') return false
-  return (
-    window.matchMedia?.('(display-mode: standalone)').matches === true ||
-    (navigator as { standalone?: boolean }).standalone === true
-  )
-}
-
-function isIOS(): boolean {
-  if (typeof navigator === 'undefined') return false
-  return /iphone|ipad|ipod/i.test(navigator.userAgent)
-}
 
 function readDismissed(): boolean {
   try {
@@ -38,32 +27,17 @@ function writeDismissed() {
 }
 
 /**
- * Install affordance. On Chromium it captures `beforeinstallprompt` and offers
- * a one-tap install; on iOS (which never fires that event) it shows the manual
- * "Share → Add to Home Screen" instructions. Hidden once installed (standalone)
- * or dismissed (sticky via localStorage).
+ * Install affordance. Consumes the module-load `beforeinstallprompt` capture
+ * in `lib/install-prompt.ts` — late subscriptions still see an event that
+ * fired before React mounted (the pre-2026-07 pattern missed early events on
+ * Android and the button never appeared). On Chromium it offers a one-tap
+ * install; on iOS (which never fires that event) it shows the manual
+ * "Share → Add to Home Screen" instructions. Hidden once installed or
+ * dismissed (sticky via localStorage).
  */
 export function InstallPrompt() {
-  const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null)
-  const [installed, setInstalled] = useState<boolean>(() => isStandalone())
+  const { captured, installed } = useSyncExternalStore(subscribe, getInstallState)
   const [dismissed, setDismissed] = useState<boolean>(() => readDismissed())
-
-  useEffect(() => {
-    const onPrompt = (e: Event) => {
-      e.preventDefault()
-      setDeferred(e as BeforeInstallPromptEvent)
-    }
-    const onInstalled = () => {
-      setInstalled(true)
-      setDeferred(null)
-    }
-    window.addEventListener('beforeinstallprompt', onPrompt)
-    window.addEventListener('appinstalled', onInstalled)
-    return () => {
-      window.removeEventListener('beforeinstallprompt', onPrompt)
-      window.removeEventListener('appinstalled', onInstalled)
-    }
-  }, [])
 
   const dismiss = () => {
     setDismissed(true)
@@ -71,16 +45,13 @@ export function InstallPrompt() {
   }
 
   const prompt = async () => {
-    if (!deferred) return
-    await deferred.prompt()
-    await deferred.userChoice
-    setDeferred(null)
+    await triggerInstallPrompt()
   }
 
   if (installed || dismissed) return null
 
-  const ios = isIOS() && !deferred
-  if (!ios && !deferred) return null
+  const ios = isIOS() && !captured
+  if (!ios && !captured) return null
 
   return (
     <section className="flex items-start gap-3 rounded-lg border border-line bg-surface p-4">
@@ -118,3 +89,7 @@ export function InstallPrompt() {
     </section>
   )
 }
+
+// Re-export so existing call sites that imported the type from this module
+// still compile (the canonical home is now `lib/install-prompt`).
+export type { BeforeInstallPromptEvent }

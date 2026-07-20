@@ -408,7 +408,30 @@ export function useLibraryState() {
 
   const handleDelete = useCallback(
     async (id: Book['id']): Promise<void> => {
-      if (!window.confirm('Remove this book from your library?')) return
+      // Cancel any in-progress synth/transform for THIS book before the
+      // cascade-delete races the managers. Without this, a running job keeps
+      // writing to a book that no longer exists — ghost banner, leaked
+      // audio-cache pin, stray IDB errors in the finally path. If another
+      // book's job is active, refuse the delete and surface why.
+      const uploadResult = await uploadManager.cancelForBook(id)
+      if (uploadResult.type === 'blocked') {
+        window.alert(
+          `Can't delete — synthesizing “${uploadResult.activeBookTitle}” right now. Cancel it first.`,
+        )
+        return
+      }
+      const transformResult = await bookTransformManager.cancelForBook(id)
+      if (transformResult.type === 'blocked') {
+        window.alert(
+          `Can't delete — generating “${transformResult.activeBookTitle}” right now. Cancel it first.`,
+        )
+        return
+      }
+      const willCancel = uploadResult.type === 'cancelled' || transformResult.type === 'cancelled'
+      const message = willCancel
+        ? 'Remove this book from your library? Any in-progress synthesis will be cancelled.'
+        : 'Remove this book from your library?'
+      if (!window.confirm(message)) return
       await deleteBookCascade(id)
       await refresh()
     },

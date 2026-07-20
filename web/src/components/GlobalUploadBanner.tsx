@@ -1,8 +1,10 @@
 import { BookOpen, Pause, Play, RotateCcw, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { uploadManager } from '../lib/upload/manager'
 import { useUploadState } from '../lib/upload/useUpload'
+import { canKeepScreenAwake } from '../lib/wake-lock'
 
 function Spinner() {
   return (
@@ -65,6 +67,9 @@ function useSecondTicker(active: boolean): void {
 export function GlobalUploadBanner() {
   const state = useUploadState()
   const navigate = useNavigate()
+  const isMobile = useIsMobile()
+  const recovering = uploadManager.isRecovering()
+  const wakeLockSupported = canKeepScreenAwake()
   // Hook order must be stable across renders — call unconditionally. The
   // ticker is a no-op (no interval scheduled) unless we're actively
   // synthesizing with an ETA sample, so the cost is one closure per render.
@@ -73,6 +78,29 @@ export function GlobalUploadBanner() {
   useSecondTicker(etaMsForTicker !== undefined)
 
   if (state.type === 'idle') return null
+
+  // Recovery (Issue 4): after a long hide (presumed phone lock), the manager
+  // runs pause → resume to respawn workers and fast-forward through the M8
+  // cache. Suppress the pausing/paused/synthesizing flash by rendering a
+  // single stable "Resuming after lock…" banner while `recovering` is set.
+  // The state can be in any of those sub-states during the round-trip.
+  if (recovering && state.type !== 'error' && state.type !== 'done' && 'book' in state) {
+    const fraction =
+      'done' in state && 'total' in state && state.total > 0 ? state.done / state.total : 0
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex flex-col gap-2 border-b border-accent/40 bg-accent-soft px-4 py-3 text-accent sm:px-5"
+      >
+        <div className="flex items-center gap-3">
+          <Spinner />
+          <span className="truncate text-sm">Resuming “{state.book.title}” after lock…</span>
+        </div>
+        <ProgressBar fraction={fraction} />
+      </div>
+    )
+  }
 
   if (state.type === 'error') {
     const isResynth = state.mode === 'resynth'
@@ -271,6 +299,15 @@ export function GlobalUploadBanner() {
         <span className="text-xs text-accent/70" aria-hidden>
           {currentLine}
         </span>
+      )}
+      {state.type === 'synthesizing' && (
+        <p className="text-xs text-accent/60">
+          {!wakeLockSupported
+            ? 'Your browser can’t keep the screen awake — synth pauses on lock and resumes when you return.'
+            : isMobile
+              ? 'Keep this tab open. Closing or locking your phone will pause synthesis.'
+              : 'Keep this tab open. Closing it will pause synthesis.'}
+        </p>
       )}
       <ProgressBar fraction={fraction} />
     </div>

@@ -4,6 +4,11 @@ import { createBrowserRouter, RouterProvider } from 'react-router'
 import { routes } from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { SettingsProvider } from './context/settings'
+// Side-effect import: attaches the `beforeinstallprompt` / `appinstalled`
+// listeners at module load — before React mounts — so the event Chrome fires
+// on first page load is captured even if the user hasn't opened Settings yet
+// (where the install affordance lives). See `lib/install-prompt.ts`.
+import './lib/install-prompt'
 import { isMediaSessionSupported, supportedMediaSessionActions } from './lib/media-session'
 import { requestPersistence } from './lib/storage'
 import {
