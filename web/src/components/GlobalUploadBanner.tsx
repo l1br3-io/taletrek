@@ -1,4 +1,5 @@
 import { BookOpen, Pause, Play, RotateCcw, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { uploadManager } from '../lib/upload/manager'
 import { useUploadState } from '../lib/upload/useUpload'
@@ -25,6 +26,37 @@ function ProgressBar({ fraction }: { fraction: number }) {
 }
 
 /**
+ * Format a synth ETA for the global banner. Returns `null` when no estimate
+ * is available yet (no sample) — callers fall back to "estimating…".
+ */
+function formatEta(ms: number | undefined): string | null {
+  if (ms === undefined || !Number.isFinite(ms) || ms <= 0) return null
+  const sec = Math.round(ms / 1000)
+  if (sec < 30) return '<1 min left'
+  if (sec < 60) return '~1 min left'
+  const min = Math.round(sec / 60)
+  if (min < 60) return `~${min} min left`
+  const hr = Math.floor(min / 60)
+  const rem = min % 60
+  return rem === 0 ? `~${hr} hr left` : `~${hr} hr ${rem} min left`
+}
+
+/**
+ * 1Hz re-render ticker so derived displays (ETA) tick down between
+ * onProgress updates. Without this, "5 min left" would freeze until the
+ * next paragraph completes — every few seconds — and never visibly count
+ * down. No-op when `active` is false (no interval scheduled).
+ */
+function useSecondTicker(active: boolean): void {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (!active) return
+    const id = setInterval(() => setTick((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [active])
+}
+
+/**
  * Global synthesis-job banner — mounted in `Layout` so it survives route
  * changes. Shows progress while the upload manager runs a background synth
  * (upload pre-synth or per-book re-synth), plus an Open action to jump into
@@ -33,6 +65,12 @@ function ProgressBar({ fraction }: { fraction: number }) {
 export function GlobalUploadBanner() {
   const state = useUploadState()
   const navigate = useNavigate()
+  // Hook order must be stable across renders — call unconditionally. The
+  // ticker is a no-op (no interval scheduled) unless we're actively
+  // synthesizing with an ETA sample, so the cost is one closure per render.
+  const etaMsForTicker =
+    state.type === 'synthesizing' && state.etaMs !== undefined ? state.etaMs : undefined
+  useSecondTicker(etaMsForTicker !== undefined)
 
   if (state.type === 'idle') return null
 
@@ -140,6 +178,9 @@ export function GlobalUploadBanner() {
   }
 
   const cancelling = state.type === 'cancelling'
+  const pausing = state.type === 'pausing'
+  const etaMs = state.type === 'synthesizing' || state.type === 'pausing' ? state.etaMs : undefined
+  const etaLabel = formatEta(etaMs)
   const fraction =
     state.type === 'voiceDownload'
       ? state.fraction
@@ -147,9 +188,13 @@ export function GlobalUploadBanner() {
         ? (state.progress ?? 1)
         : state.type === 'cancelling'
           ? 1
-          : state.total > 0
-            ? state.done / state.total
-            : 0
+          : state.type === 'pausing'
+            ? state.total > 0
+              ? state.done / state.total
+              : 0
+            : state.total > 0
+              ? state.done / state.total
+              : 0
 
   // Optional second line: the paragraph currently (or last) being synthesized.
   // Populated via onParagraphStart → JobState.synthesizing.current. Hidden when
@@ -171,14 +216,26 @@ export function GlobalUploadBanner() {
           <span className="truncate text-sm">
             {cancelling
               ? `Cancelling “${state.book.title}”…`
-              : state.type === 'voiceDownload'
-                ? 'Downloading voice…'
-                : state.type === 'encoding'
-                  ? 'Encoding audiobook…'
-                  : state.mode === 'resynth'
-                    ? `Updating audio for “${state.book.title}”… ${state.done} / ${state.total}`
-                    : `Synthesizing “${state.book.title}”… ${state.done} / ${state.total}`}
+              : pausing
+                ? `Pausing “${state.book.title}”… ${state.done} / ${state.total}`
+                : state.type === 'voiceDownload'
+                  ? 'Downloading voice…'
+                  : state.type === 'encoding'
+                    ? 'Encoding audiobook…'
+                    : state.mode === 'resynth'
+                      ? `Updating audio for “${state.book.title}”… ${state.done} / ${state.total}`
+                      : `Synthesizing “${state.book.title}”… ${state.done} / ${state.total}`}
           </span>
+          {etaLabel && (
+            <span className="shrink-0 text-xs text-accent/70" aria-live="polite">
+              {etaLabel}
+            </span>
+          )}
+          {state.type === 'synthesizing' && !etaLabel && state.done > 0 && (
+            <span className="shrink-0 text-xs text-accent/50" aria-hidden>
+              estimating…
+            </span>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <button
@@ -203,10 +260,10 @@ export function GlobalUploadBanner() {
           <button
             type="button"
             onClick={() => uploadManager.cancel()}
-            disabled={cancelling}
+            disabled={cancelling || pausing}
             className="text-xs text-accent/70 transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-accent/70"
           >
-            {cancelling ? 'Cancelling…' : 'Cancel'}
+            {cancelling ? 'Cancelling…' : pausing ? 'Pausing…' : 'Cancel'}
           </button>
         </div>
       </div>

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import { Square } from 'lucide-react'
+import { useEffect, useState } from 'react'
 
 /**
  * Mono eyebrow chip rendered above a streaming paragraph (F8 per-paragraph
@@ -81,7 +81,8 @@ export function Spinner({ className = '' }: { className?: string }) {
  * Live elapsed-seconds counter for the M13 preparing state. Ticks every 1s.
  * Renders `{N}s elapsed` so the user knows the request is still in flight
  * (and can decide whether to keep waiting or Cancel). Resets on `startedAt`
- * change (per-chapter). Used by the GenerationBanner AND the inline chapter
+ * change (per-chapter). Used by the unified bottom PlayerBar (generation
+ * mode — see `GenerationBar` in `PlayerBar.tsx`) AND the inline chapter
  * preparing chip — both render simultaneously (banner may be scrolled out
  * of view); both derive the same elapsed from `performance.now()`.
  *

@@ -477,6 +477,19 @@ describe('ReaderView', () => {
       expect(p?.getAttribute('role')).toBeNull()
     })
 
+    it('disables seek on paragraphs while synthLockdown is active (FFmpeg-during-synth gate)', () => {
+      // Issue #4: mobile FFmpeg users must not be able to click paragraphs
+      // and trigger on-demand synth via the desktop fallback. The lockdown
+      // is enforced at PlayerBar (transport buttons disabled) AND at the
+      // body (no role=button) so the contract is visible.
+      const ch = chapter(['Lockdown paragraph.'])
+      const { container } = render(
+        <ReaderView book={book} chapters={[ch]} onSeekParagraph={() => {}} synthLockdown />,
+      )
+      const p = container.querySelector('.tt-reader-text p')
+      expect(p?.getAttribute('role')).toBeNull()
+    })
+
     it('renders chapters normally when streamingParagraphs is null (between chunks or pre-first-token for non-reductive)', () => {
       const ch = chapter(['Original.'])
       const { container } = render(

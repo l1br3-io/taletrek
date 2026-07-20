@@ -414,7 +414,12 @@ class BookTransformManager {
     bookId: BookId,
     deps: { ai: AiSettings; defs: TransformDefinition[]; synthEnabled: boolean },
   ): Promise<void> {
-    if (this.state.type === 'running' || this.state.type === 'paused') {
+    // Only block on a currently-running loop. `'paused'` is exactly the
+    // state the banner's Resume button is shown in — blocking here would
+    // make every Resume click silently throw (the call site `void`-discards
+    // the promise). Mirrors `uploadManager.resume()` which only checks
+    // `isActive()`.
+    if (this.state.type === 'running') {
       throw new Error('A book transform is already in progress.')
     }
     const book = await getBook(bookId)

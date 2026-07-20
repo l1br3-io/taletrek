@@ -11,9 +11,12 @@ import {
   SkipForward,
   Square,
   Wand2,
+  X,
 } from 'lucide-react'
 import { Menu } from '../../components/Menu'
+import type { BookTransformState } from '../../lib/transform/manager'
 import type { PlaybackStatus } from './players/types'
+import { PreparingElapsedTimer, Spinner } from './StreamingBlock'
 
 interface PlayerBarProps {
   status: PlaybackStatus
@@ -48,6 +51,28 @@ interface PlayerBarProps {
   synthLockdown?: boolean
   /** Status label shown while `synthLockdown` is active (e.g. "Synthesizing… 12/42"). */
   lockdownLabel?: string
+  /**
+   * Whole-book AI generation state (M13 / ADR-0012). When present and not
+   * `done`, the bar swaps its body from playback controls to a single-row
+   * generation status with a full-bleed progress tape at the viewport's
+   * bottom edge. Playback props are ignored in this mode — generation is a
+   * deliberate mode shift, not a parallel one.
+   */
+  generation?: GenerationProps | null
+}
+
+export interface GenerationProps {
+  /**
+   * The transform manager's state. `'idle'` is excluded by the caller
+   * (ReaderPane only builds `generationProps` when `transformForThisBook`
+   * is non-null); `'done'` is excluded because `PlayerBar` returns null
+   * for that case before rendering `GenerationBar`.
+   */
+  state: Exclude<BookTransformState, { type: 'idle' } | { type: 'done' }>
+  totalChapters: number
+  onPause: () => void
+  onResume: () => void
+  onCancel: () => void
 }
 
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2]
@@ -71,7 +96,22 @@ function statusLabel(status: PlaybackStatus, bufferedAhead: number): string {
   }
 }
 
-export function PlayerBar({
+export function PlayerBar(props: PlayerBarProps) {
+  // Generation mode: swap the entire body. The bar stays in the same sticky
+  // bottom slot — playback users already know to look here for transport, and
+  // during generation the same slot becomes the rewrite readout. One bar, not
+  // two; the inline `GenerationBanner` above the reader is gone.
+  if (props.generation) {
+    return <GenerationBar {...props.generation} />
+  }
+  return <PlaybackBar {...props} />
+}
+
+// ---------------------------------------------------------------------------
+// Playback mode (default)
+// ---------------------------------------------------------------------------
+
+function PlaybackBar({
   status,
   playbackRate,
   bufferedAhead = 0,
@@ -277,6 +317,139 @@ export function PlayerBar({
           )}
         </Menu>
       )}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Generation mode (M13 / ADR-0012)
+//
+// Single sticky row at the bottom of the viewport carrying the whole-book
+// rewrite status: opLabel + chapter X/Y + N% + Pause/Resume/Cancel. The
+// full-bleed progress tape runs along the absolute bottom edge of the
+// viewport — the page-scale version of the existing `.tt-streaming` 2px
+// accent motif. During the preparing phase (no tokens yet — provider prefill
+// can be minutes on slow models), the spinner replaces `❯` and an inline
+// elapsed counter replaces the percentage.
+// ---------------------------------------------------------------------------
+
+function GenerationBar({ state, totalChapters, onPause, onResume, onCancel }: GenerationProps) {
+  if (state.type === 'error') {
+    return (
+      <section
+        className="sticky bottom-0 z-30 border-t border-danger/40 bg-danger-soft shadow-lg"
+        aria-label="AI generation failed"
+        data-testid="generation-banner"
+      >
+        <div className="mx-auto flex max-w-3xl items-center gap-2 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.08em] text-danger sm:px-4">
+          <X className="h-3 w-3" aria-hidden />
+          <span className="truncate">{state.message}</span>
+          <span aria-hidden className="mx-1 flex-1 border-b border-dotted border-danger/40" />
+          <button
+            type="button"
+            onClick={onResume}
+            className="inline-flex items-center gap-1 border border-danger px-2 py-0.5 uppercase tracking-[0.08em] hover:bg-danger hover:text-bg"
+          >
+            Retry
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="inline-flex items-center gap-1 border border-danger px-2 py-0.5 hover:bg-danger hover:text-bg"
+            aria-label="Dismiss error"
+          >
+            <X className="h-2.5 w-2.5" aria-hidden />
+          </button>
+        </div>
+        <div className="h-0.5 w-full bg-danger/40" aria-hidden />
+      </section>
+    )
+  }
+
+  const running = state.type === 'running'
+  const done = state.done
+  const total = state.total
+  const opLabel = running ? state.opLabel : 'paused'
+  const chapterIdx = running ? state.currentChapterIndex : undefined
+  const sp = running ? state.streamingParagraphs : null
+  // Intra-chunk fraction: a long single-chunk chapter would otherwise sit
+  // at 0% for the entire stream — looking "stuck" while tokens flow.
+  const intraChunk =
+    sp && sp.chunkInputCount > 0 ? Math.min(1, sp.paragraphs.length / sp.chunkInputCount) : 0
+  const chunkAdjusted = sp ? sp.chunkIndex + intraChunk : 0
+  const chapterFraction = sp ? chunkAdjusted / Math.max(1, sp.chunkTotal) : 0
+  const fraction = total > 0 ? Math.min(1, (done + chapterFraction) / total) : 0
+  const preparing = running && (!sp || sp.paragraphs.length === 0)
+  const chapterStartedAt = running ? state.chapterStartedAt : null
+  const dangerFill = false // reserved for error variant above
+
+  return (
+    <section
+      className="sticky bottom-0 z-30 border-t border-accent/40 bg-accent-soft shadow-lg"
+      aria-label="AI generation in progress"
+      data-testid="generation-banner"
+    >
+      <div className="mx-auto flex max-w-3xl items-center gap-2 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.08em] text-accent sm:px-4">
+        {preparing ? <Spinner className="h-3 w-3" /> : <span aria-hidden>❯</span>}
+        <span className="truncate">{opLabel}</span>
+        <span aria-hidden className="mx-1 flex-1 border-b border-dotted border-accent/40" />
+        {preparing && chapterStartedAt !== null ? (
+          <span
+            className="flex shrink-0 items-center gap-1.5 text-accent/70"
+            data-testid="preparing-status"
+          >
+            <span className="hidden sm:inline">waiting</span>
+            <PreparingElapsedTimer startedAt={chapterStartedAt} />
+          </span>
+        ) : (
+          <span className="shrink-0 tabular-nums">
+            {chapterIdx !== undefined ? `ch ${chapterIdx + 1}/${totalChapters}` : ''}
+            {chapterIdx !== undefined ? ' · ' : ''}
+            {Math.round(fraction * 100)}%
+          </span>
+        )}
+        {running ? (
+          <button
+            type="button"
+            onClick={onPause}
+            className="inline-flex shrink-0 items-center gap-1 border border-accent px-2 py-0.5 hover:bg-accent hover:text-bg"
+            aria-label="Pause generation"
+          >
+            <Pause className="h-2.5 w-2.5 fill-current" aria-hidden />
+            <span className="hidden sm:inline">Pause</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onResume}
+            className="inline-flex shrink-0 items-center gap-1 border border-accent px-2 py-0.5 hover:bg-accent hover:text-bg"
+            aria-label="Resume generation"
+          >
+            <Play className="h-2.5 w-2.5 fill-current" aria-hidden />
+            <span className="hidden sm:inline">Resume</span>
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onCancel}
+          className="inline-flex shrink-0 items-center gap-1 border border-accent px-2 py-0.5 hover:bg-accent hover:text-bg"
+          aria-label="Cancel generation"
+        >
+          <X className="h-2.5 w-2.5" aria-hidden />
+          <span className="hidden sm:inline">Cancel</span>
+        </button>
+      </div>
+      {/* Full-bleed progress tape — the page-scale version of `.tt-streaming`'s
+          2px accent rule. Sits at the absolute bottom edge of the viewport so
+          it reads as "the page is filling up", not "a UI element reporting a
+          number". The only ambient animation at the chrome layer during
+          steady-state streaming; everything else holds still. */}
+      <div className={`h-0.5 w-full ${dangerFill ? 'bg-danger/30' : 'bg-accent/20'}`} aria-hidden>
+        <div
+          className={`h-full transition-[width] duration-300 ease-out ${dangerFill ? 'bg-danger' : 'bg-accent'}`}
+          style={{ width: `${fraction * 100}%` }}
+        />
+      </div>
     </section>
   )
 }

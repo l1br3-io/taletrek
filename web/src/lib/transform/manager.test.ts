@@ -464,6 +464,55 @@ describe('bookTransformManager — resume', () => {
       }),
     ).rejects.toThrow(/No paused transform job/)
   })
+
+  it('resumes from an explicit in-session pause (banner Pause → Resume flow)', async () => {
+    // Regression test: the banner's Resume button was broken because
+    // `resume()` rejected whenever state was 'paused' — the very state the
+    // button is shown in. The void-discard at the call site hid the throw.
+    const b = makeBook()
+    await putBook(b)
+    const chapters = makeChapters(b)
+    await putChapters(chapters)
+    const def = makeDef('cleanup')
+    const op = makeOp('cleanup')
+
+    // Block the first chapter's transform so we can pause mid-stream.
+    let resolveTransform: () => void
+    const blockedEngine: AiTransformEngine = {
+      ...makeFakeEngine(),
+      async transform() {
+        await new Promise<void>((resolve) => {
+          resolveTransform = resolve
+        })
+        return ['transformed']
+      },
+    }
+    getAiEngineForDefMock.mockReturnValue(blockedEngine)
+
+    const startPromise = bookTransformManager.start(
+      { book: b, chapters, ops: [op], voiceId: VOICE, cleaning: CLEANING },
+      { ai: makeAiSettings(), defs: [def], synthEnabled: false },
+    )
+    await new Promise((r) => setTimeout(r, 10))
+    bookTransformManager.pause()
+    resolveTransform!()
+    await startPromise
+
+    expect(bookTransformManager.getState().type).toBe('paused')
+
+    // Now swap in a real engine and resume — must NOT throw.
+    getAiEngineForDefMock.mockReturnValue(makeFakeEngine())
+    await bookTransformManager.resume(b.id, {
+      ai: makeAiSettings(),
+      defs: [def],
+      synthEnabled: false,
+    })
+
+    expect(bookTransformManager.getState().type).toBe('done')
+    const updated = await getBook(b.id)
+    expect(updated?.transformJob).toBeUndefined()
+    expect(updated?.transforming).toBeUndefined()
+  })
 })
 
 describe('bookTransformManager — cancel', () => {

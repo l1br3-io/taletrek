@@ -6,7 +6,12 @@ export interface PreSynthOptions {
   chapters: Chapter[]
   voiceId: VoiceId
   engine: TtsEngine
-  onProgress?: (done: number, total: number, completed?: ParagraphLocation) => void
+  onProgress?: (
+    done: number,
+    total: number,
+    completed?: ParagraphLocation,
+    info?: { synthMs: number; durationSeconds: number },
+  ) => void
   onVoiceDownload?: (fraction: number) => void
   /**
    * Fired before each paragraph's synth attempt. Carries the book-relative
@@ -371,7 +376,10 @@ export async function preSynthesizeBook(opts: PreSynthOptions): Promise<PreSynth
     if (settled.r.synthMs === 0) cached++
     else synthesized++
     done++
-    onProgress?.(done, total, location)
+    onProgress?.(done, total, location, {
+      synthMs: settled.r.synthMs,
+      durationSeconds: settled.r.durationSeconds,
+    })
   }
 
   const cancelled = signal?.aborted === true
