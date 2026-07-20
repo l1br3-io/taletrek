@@ -202,4 +202,130 @@ describe('PlayerBar', () => {
       expect(screen.getByText('Ready')).toBeInTheDocument()
     })
   })
+
+  describe('generation mode (M13 unified bottom bar)', () => {
+    function makeRunningState(overrides?: {
+      done?: number
+      total?: number
+      streamingParagraphs?: object | null
+    }) {
+      return {
+        type: 'running' as const,
+        bookId: 'b1' as never,
+        opLabel: 'cleanup',
+        currentOpIndex: 0,
+        totalOps: 1,
+        currentChapterIndex: 2,
+        totalChapters: 12,
+        done: overrides?.done ?? 1,
+        total: overrides?.total ?? 12,
+        chapterStartedAt: performance.now(),
+        streamingParagraphs:
+          overrides?.streamingParagraphs === undefined
+            ? {
+                chunkIndex: 0,
+                chunkTotal: 2,
+                opLabel: 'cleanup',
+                isReductive: false,
+                chunkStartIndex: 0,
+                chunkInputCount: 5,
+                paragraphs: ['p1', 'p2'],
+                reasoning: '',
+              }
+            : overrides.streamingParagraphs,
+      }
+    }
+
+    function renderGeneration(state: object) {
+      const onPause = vi.fn()
+      const onResume = vi.fn()
+      const onCancel = vi.fn()
+      const result = renderBar({
+        generation: {
+          state: state as never,
+          totalChapters: 12,
+          onPause,
+          onResume,
+          onCancel,
+        },
+      })
+      return { ...result, onPause, onResume, onCancel }
+    }
+
+    it('swaps the body to generation UI and hides playback controls', () => {
+      renderGeneration(makeRunningState())
+      // No playback transport buttons.
+      expect(screen.queryByRole('button', { name: 'Play' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Previous paragraph' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Next paragraph' })).toBeNull()
+      // Generation bar is present.
+      expect(screen.getByTestId('generation-banner')).toBeInTheDocument()
+    })
+
+    it('shows opLabel, chapter X/Y, and percentage while streaming', () => {
+      renderGeneration(makeRunningState({ done: 1, total: 12 }))
+      expect(screen.getByText('cleanup')).toBeInTheDocument()
+      // ch 3/12 (currentChapterIndex=2 → 1-indexed 3) and a percentage.
+      expect(screen.getByText(/ch 3\/12/)).toBeInTheDocument()
+      expect(screen.getByText(/\d+%/)).toBeInTheDocument()
+    })
+
+    it('wires Pause and Cancel buttons', () => {
+      const { onPause, onCancel } = renderGeneration(makeRunningState())
+      fireEvent.click(screen.getByRole('button', { name: 'Pause generation' }))
+      expect(onPause).toHaveBeenCalledOnce()
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel generation' }))
+      expect(onCancel).toHaveBeenCalledOnce()
+    })
+
+    it('shows spinner + elapsed timer during preparing (no tokens yet)', () => {
+      renderGeneration(
+        makeRunningState({
+          streamingParagraphs: { paragraphs: [], chunkInputCount: 5, chunkIndex: 0, chunkTotal: 2 },
+        }),
+      )
+      // The preparing-status region carries the elapsed timer.
+      expect(screen.getByTestId('preparing-status')).toBeInTheDocument()
+      // No percentage visible during preparing — it would show 0% and look frozen.
+      expect(screen.queryByText(/\d+%/)).toBeNull()
+    })
+
+    it('renders the full-bleed progress tape', () => {
+      // null streamingParagraphs → no intra-chunk adjustment → fraction = 6/12 = 50%.
+      renderGeneration(makeRunningState({ done: 6, total: 12, streamingParagraphs: null }))
+      const banner = screen.getByTestId('generation-banner')
+      // The tape is a thin bar at the bottom of the banner section.
+      const tape = banner.querySelector('.h-0\\.5')
+      expect(tape).not.toBeNull()
+      // Fill width reflects fraction.
+      const fill = tape?.firstChild as HTMLElement
+      expect(fill?.style.width).toMatch(/50%/)
+    })
+
+    it('shows Resume button when paused', () => {
+      const { onResume } = renderGeneration({
+        type: 'paused',
+        bookId: 'b1',
+        done: 3,
+        total: 12,
+        currentOpIndex: 0,
+      })
+      expect(screen.getByRole('button', { name: 'Resume generation' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Resume generation' }))
+      expect(onResume).toHaveBeenCalledOnce()
+    })
+
+    it('shows error message + Retry when state is error', () => {
+      const { onResume, onCancel } = renderGeneration({
+        type: 'error',
+        bookId: 'b1',
+        message: 'Provider rate-limited',
+      })
+      expect(screen.getByText(/Provider rate-limited/)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      expect(onResume).toHaveBeenCalledOnce()
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss error' }))
+      expect(onCancel).toHaveBeenCalledOnce()
+    })
+  })
 })

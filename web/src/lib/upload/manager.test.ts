@@ -280,6 +280,97 @@ describe('uploadManager', () => {
     await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
   })
 
+  it('surfaces an ETA once a non-cache-hit synth sample lands', async () => {
+    // ETA plumbing (issue #2): `synthMs > 0` samples accumulate into a
+    // rolling window, and `etaMs = (total - done) * avg / concurrency`.
+    // `synthMs === 0` (cache hit) must NOT contribute — see manager.ts.
+    const book = makeBook()
+    const chapters = makeChapters()
+    const gates: Array<() => void> = []
+    synthMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          gates.push(() =>
+            // 200ms synth wall-clock — non-zero so it counts toward the average.
+            res({ audio: new Blob(['x']), synthMs: 200, durationSeconds: 1, cacheKey: 'k' }),
+          )
+        }),
+    )
+    uploadManager.startJob({
+      book,
+      chapters,
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(1))
+    act(() => gates[0]?.())
+
+    await vi.waitFor(() => {
+      const s = uploadManager.getState()
+      expect(s.type).toBe('synthesizing')
+      if (s.type === 'synthesizing') expect(s.etaMs).toBeDefined()
+    })
+
+    // Verify the math: 1 ¶ done, 3 total, avg=200ms, concurrency=1 (mocked).
+    // → (3 - 1) * 200 / 1 = 400ms remaining.
+    const s = uploadManager.getState()
+    if (s.type === 'synthesizing') {
+      expect(s.etaMs).toBe(400)
+    }
+
+    // Drain remaining gates so the job can finish cleanly.
+    await act(async () => {
+      gates[1]?.()
+    })
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(3))
+    await act(async () => {
+      gates[2]?.()
+    })
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
+  })
+
+  it('excludes cache hits (synthMs === 0) from the ETA average', async () => {
+    // Resume fast-forward path: cache hits must not crash the average
+    // toward zero (which would predict absurdly short remaining times).
+    const book = makeBook()
+    const chapters = makeChapters()
+    const gates: Array<() => void> = []
+    let call = 0
+    synthMock.mockImplementation(() => {
+      call++
+      // First call: real synth (100ms). Subsequent: cache hits (0ms).
+      const synthMs = call === 1 ? 100 : 0
+      return new Promise((res) => {
+        gates.push(() =>
+          res({ audio: new Blob(['x']), synthMs, durationSeconds: 1, cacheKey: 'k' }),
+        )
+      })
+    })
+    uploadManager.startJob({
+      book,
+      chapters,
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(1))
+    act(() => gates[0]?.())
+
+    // After the first real synth lands, ETA should be based on 100ms only
+    // (the cache-hit contributions are dropped before averaging).
+    // (3 - 1) * 100 / 1 = 200ms — cache hits from ¶s 2/3 must not pull it down.
+    await vi.waitFor(() => {
+      const s = uploadManager.getState()
+      expect(s.type).toBe('synthesizing')
+      if (s.type === 'synthesizing') expect(s.etaMs).toBe(200)
+    })
+
+    // Drain.
+    await act(async () => gates[1]?.())
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(3))
+    await act(async () => gates[2]?.())
+    await vi.waitFor(() => expect(uploadManager.getState().type).toBe('done'))
+  })
+
   it('cancel aborts and returns to idle', async () => {
     const book = makeBook()
     // Gate synth so the job stays in-flight on the first paragraph.
@@ -336,6 +427,37 @@ describe('uploadManager', () => {
     expect(uploadManager.isActive()).toBe(false)
     expect(() => uploadManager.cancel()).not.toThrow()
     expect(uploadManager.getState().type).toBe('idle')
+  })
+
+  it('pause transitions to pausing immediately for UX feedback', async () => {
+    // Mirror of the "cancel transitions to cancelling" test above. Without
+    // the synchronous flip, the banner would keep showing "Synthesizing…"
+    // for up to several seconds while the in-flight Piper inference
+    // finishes — looking frozen to the user (issue #5).
+    const book = makeBook('Pausing')
+    await putBook(book)
+    // Never-resolving synth keeps the job in-flight so we can observe the
+    // synchronous transition before finalizeAfterAbort runs.
+    synthMock.mockReturnValue(new Promise(() => {}))
+    uploadManager.startJob({
+      book,
+      chapters: makeChapters(),
+      voiceId: voiceId('en_US-hfc_female-medium'),
+      cleaning: idleCleaning,
+    })
+    await vi.waitFor(() => expect(synthMock).toHaveBeenCalled())
+    // Synchronously after pause(), state must be `pausing` — no awaiting.
+    uploadManager.pause()
+    const state = uploadManager.getState()
+    expect(state.type).toBe('pausing')
+    if (state.type === 'pausing') {
+      expect(state.book.id).toBe(book.id)
+      expect(state.mode).toBe('initial')
+    }
+    // A pausing job is still active — startJob must reject a second one.
+    expect(uploadManager.isActive()).toBe(true)
+    // The pause button is hidden once pauseRequested is true.
+    expect(uploadManager.canPause()).toBe(false)
   })
 
   it('pause persists the resumable spec and transitions to paused (ADR-0010)', async () => {

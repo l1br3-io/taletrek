@@ -148,6 +148,10 @@ export function useLibraryState() {
         navigate(`/reader/${book.id}`)
         return
       }
+      // Guard against concurrent jobs (issue #3). The singleton also throws,
+      // but that error propagates uncaught from this callback — a silent
+      // skip here matches `handleResynthesize`'s pattern below.
+      if (uploadManager.isActive()) return
       uploadManager.startJob({
         book,
         chapters,

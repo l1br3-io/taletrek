@@ -21,7 +21,7 @@ import { PreparingElapsedTimer, Spinner, StreamChip, StreamingCursor } from './S
  * While `streamingParagraphs === null` (preparing — waiting for the first
  * token from the provider, which can take minutes on slow / free-tier
  * models), the active chapter shows an inline "preparing" chip at the top
- * so the user sees feedback even if they scroll past the GenerationBanner.
+ * so the user sees feedback even if they scroll past the bottom bar.
  *
  * `null` = no generation in progress — reader renders as before.
  */
@@ -91,6 +91,13 @@ interface ReaderViewProps {
   onStopStream?: () => void
   /** Whole-book generation state (M13). */
   generation?: GenerationMode | null
+  /**
+   * Mobile FFmpeg lockdown (M11 / issue #4): when true, paragraph clicks
+   * must NOT seek — the m4a isn't ready and the player's `seekToParagraph`
+   * would synthesize on demand via the desktop fallback. PlayerBar already
+   * disables its transport buttons; this extends the lockdown to the body.
+   */
+  synthLockdown?: boolean
 }
 
 interface ParagraphItem {
@@ -207,6 +214,7 @@ export function ReaderView({
   stream,
   onStopStream,
   generation,
+  synthLockdown,
 }: ReaderViewProps) {
   const multi = chapters.length > 1
   return (
@@ -268,7 +276,8 @@ export function ReaderView({
                   begin arriving, the chip disappears and in-place streaming
                   takes over.
 
-                  The GenerationBanner at the top of the reader shows the
+                  The unified bottom PlayerBar (which swaps to generation
+                  mode — see `GenerationBar` in `PlayerBar.tsx`) shows the
                   same info, but the user may have scrolled past it; this
                   chip stays anchored to the chapter so the "preparing"
                   state is always visible alongside the about-to-be-
@@ -333,7 +342,7 @@ export function ReaderView({
                 const anyStreaming = f8Streaming || m13Streaming
                 // Streaming wins over active/pulsing for the duration of the rewrite.
                 const active = !anyStreaming && item.id === currentParagraphId
-                const seekable = !anyStreaming && !!onSeekParagraph && !generation
+                const seekable = !anyStreaming && !!onSeekParagraph && !generation && !synthLockdown
                 const pulsing = !anyStreaming && item.id === pulseParagraphId
                 const isBuffered = bufferedParagraphIds?.has(item.id) ?? false
                 const seekProps = seekable

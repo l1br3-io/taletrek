@@ -43,9 +43,25 @@ export type JobState =
        * mirrored onto `book.uploadJob` to survive tab eviction.
        */
       current?: ParagraphLocation
+      /**
+       * Estimated wall-clock ms remaining for the synth phase, based on a
+       * rolling window of recent per-¶ synth durations (excluding cache
+       * hits) divided by the pool's concurrency. `undefined` until enough
+       * samples have accumulated; the UI shows "estimating…" until then.
+       * Does NOT include the encode phase — that's a separate signal.
+       */
+      etaMs?: number
     }
   | { type: 'encoding'; book: Book; progress?: number; mode: JobMode }
   | { type: 'cancelling'; book: Book; mode: JobMode }
+  | {
+      type: 'pausing'
+      book: Book
+      done: number
+      total: number
+      mode: JobMode
+      etaMs?: number
+    }
   | { type: 'paused'; book: Book; done: number; total: number; mode: JobMode }
   | { type: 'done'; book: Book; mode: JobMode }
   | { type: 'error'; book: Book; message: string; mode: JobMode; retryable?: boolean }
@@ -96,6 +112,13 @@ const MOBILE_AAC_BYTES_PER_SECOND = MOBILE_AAC_BITRATE / 8
  * 200 MB @ 64kbps ≈ 7 hours of speech.
  */
 const MAX_MOBILE_M4A_BYTES = 200 * 1024 * 1024
+/**
+ * Rolling-window size for ETA extrapolation. ~20 paragraphs balances
+ * stability (a single long paragraph doesn't skew the average much) with
+ * responsiveness (a voice-model change reflects in the estimate within
+ * ~20 ¶s). Excludes cache hits (`synthMs === 0`).
+ */
+const ETA_SAMPLE_WINDOW = 20
 
 async function clearUploadingFlag(bookId: BookId): Promise<void> {
   return enqueueBookWrite(bookId, async () => {
@@ -221,6 +244,12 @@ class UploadManager {
   /** Last-reported synth progress, captured so pause-from-any-state has done/total. */
   private lastSynthDone = 0
   private lastSynthTotal = 0
+  /**
+   * Rolling window of recent per-paragraph synth durations (wall-clock ms,
+   * excluding cache hits) for ETA extrapolation. Capped at
+   * {@link ETA_SAMPLE_WINDOW}. Reset in `runJob`.
+   */
+  private recentSynthMs: number[] = []
 
   getState = (): JobState => this.state
 
@@ -236,7 +265,8 @@ class UploadManager {
       this.state.type === 'voiceDownload' ||
       this.state.type === 'synthesizing' ||
       this.state.type === 'encoding' ||
-      this.state.type === 'cancelling'
+      this.state.type === 'cancelling' ||
+      this.state.type === 'pausing'
     )
   }
 
@@ -276,13 +306,46 @@ class UploadManager {
    */
   pause(): void {
     if (!this.isActive() || this.pauseRequested || !this.abortController) return
-    const { book } = this.state as { book: Book }
+    const { book, mode } = this.state as { book: Book; mode: JobMode }
+    // Capture progress at pause-request time so the "Pausing…" banner can
+    // keep showing the last done/total (mirrors `'cancelling'`'s pattern at
+    // line 266). Without this synchronous flip, the banner would keep
+    // showing the spinner + "Synthesizing…" for up to several seconds while
+    // the in-flight Piper inference finishes — looking frozen to the user.
+    //
+    // Bind `this.state` to a local so TS can narrow the union (mutable class
+    // property access doesn't narrow on subsequent reads).
+    const s = this.state
+    const isActiveSynthState = s.type === 'synthesizing' || s.type === 'pausing'
+    const done = isActiveSynthState ? s.done : 0
+    const total = isActiveSynthState ? s.total : 0
+    const etaMs = isActiveSynthState ? s.etaMs : undefined
     console.log('[taletrek] upload: pause requested', {
       title: book.title,
       stage: this.state.type,
     })
     this.pauseRequested = true
+    // Flip to `pausing` immediately so the UI can reflect the request before
+    // the in-flight async work observes the abort and resolves. The pause→
+    // paused transition happens in `finalizeAfterAbort` once the abort lands.
+    this.setState({ type: 'pausing', book, done, total, mode, etaMs })
     this.abortController.abort()
+  }
+  /**
+   * Estimate ms remaining for the synth phase from the rolling duration
+   * window. Returns `undefined` until at least one non-cache-hit sample
+   * exists — the UI shows "estimating…" until then. Divides by the pool's
+   * concurrency because N paragraphs synthesize in parallel under
+   * `PoolEngine` (mobile=2, desktop=min(hc,8)).
+   */
+  private computeEtaMs(done: number, total: number): number | undefined {
+    if (this.recentSynthMs.length === 0 || done >= total) return undefined
+    const concurrency = getPreSynthPool().concurrency
+    const effectiveConcurrency = Math.max(1, concurrency)
+    const sum = this.recentSynthMs.reduce((a, b) => a + b, 0)
+    const avg = sum / this.recentSynthMs.length
+    const remaining = Math.max(0, total - done)
+    return Math.round((remaining * avg) / effectiveConcurrency)
   }
 
   /** Whether the current job can be paused (for UI affordances). */
@@ -355,6 +418,7 @@ class UploadManager {
     this.pauseRequested = false
     this.lastSynthDone = 0
     this.lastSynthTotal = 0
+    this.recentSynthMs = []
     this.state = { type: 'idle' }
   }
 
@@ -388,6 +452,7 @@ class UploadManager {
     // 'synthesizing' before the caller can call startJob again.
     this.lastSynthDone = 0
     this.lastSynthTotal = refs.length
+    this.recentSynthMs = []
     this.setState({
       type: 'synthesizing',
       book,
@@ -461,14 +526,25 @@ class UploadManager {
             synthesizedParagraphIds: this.collectSynthesizedIds(refs, this.lastSynthDone),
             mode,
             current: location,
+            etaMs: this.computeEtaMs(this.lastSynthDone, flatTotal),
           })
         },
-        onProgress: (done, total, completed) => {
+        onProgress: (done, total, completed, info) => {
           // Capture progress even during an in-flight abort so `pause` can
           // persist the correct `done` (the abort guard below prevents setState
           // from clobbering the cancelling/paused transition).
           this.lastSynthDone = done
           this.lastSynthTotal = total
+          // Update the rolling synth-duration window for ETA. Skip cache hits
+          // (`synthMs === 0`) — they'd crash the average toward zero and
+          // over-credit resume fast-forward.
+          if (info && info.synthMs > 0) {
+            this.recentSynthMs.push(info.synthMs)
+            if (this.recentSynthMs.length > ETA_SAMPLE_WINDOW) {
+              this.recentSynthMs.shift()
+            }
+          }
+          const etaMs = this.computeEtaMs(done, total)
           if (signal?.aborted) return
           // `completed` is the paragraph that just finished — out-of-order
           // under concurrency > 1, so don't infer it from onParagraphStart.
@@ -480,6 +556,7 @@ class UploadManager {
             synthesizedParagraphIds: this.collectSynthesizedIds(refs, done),
             mode,
             current: completed,
+            etaMs,
           })
           // Single per-¶ write: bumps `done` AND records the just-completed
           // paragraph's location so a tab eviction leaves a resumable spec
@@ -616,6 +693,20 @@ class UploadManager {
       // `finalizeAfterAbort` at the explicit abort sites, not here.)
       if (this.state.type === 'cancelling') {
         this.setState({ type: 'idle' })
+      }
+      // Same safety net for `'pausing'`: if `finalizeAfterAbort` threw
+      // before it could transition to `'paused'` (e.g. IDB write failed),
+      // surface the pause anyway so the user sees Resume rather than a
+      // perpetual "Pausing…" spinner. The book's `uploading` flag is still
+      // set in IDB — the boot-sweep handles the persistent side.
+      if (this.state.type === 'pausing') {
+        this.setState({
+          type: 'paused',
+          book: this.state.book,
+          done: this.state.done,
+          total: this.state.total,
+          mode: this.state.mode,
+        })
       }
       this.pauseRequested = false
     }

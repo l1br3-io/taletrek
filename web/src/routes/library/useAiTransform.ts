@@ -203,6 +203,12 @@ export function useAiTransform({
         if (synthMode && synthMode !== 'off' && voiceId && cleaning) {
           void (async () => {
             try {
+              // Guard against concurrent jobs (issue #3). Without this the
+              // singleton throws "already running" and the catch below
+              // silently eats it — leaving the user with no audio update
+              // and no banner. The cache purge is also skipped so a future
+              // manual resynth can run cleanly.
+              if (uploadManager.isActive()) return
               const keys = await getAudioCacheKeysByBook(book.id)
               if (keys.length > 0) await deleteAudioCacheKeys(keys)
               await deleteBookAudio(book.id)
@@ -214,8 +220,10 @@ export function useAiTransform({
                 cleaning,
                 mode: 'resynth',
               })
-            } catch {
-              // Silent — banner is the primary error surface.
+            } catch (err) {
+              // Surface rather than swallow — the prior silent catch hid
+              // singleton-throws (and any cache/IDB error) with no banner.
+              console.error('[taletrek] post-transform resynth failed', err)
             }
           })()
         }
