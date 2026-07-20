@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { voiceId } from '../../types'
-import type { TtsRequest, TtsResponse } from './protocol'
 import { PoolEngine } from './pool'
+import type { TtsRequest, TtsResponse } from './protocol'
 import type { TtsEngine, Voice } from './types'
 
 const VOICE = voiceId('en_US-hfc_female-medium')

@@ -6,7 +6,10 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { SettingsProvider } from './context/settings'
 import { isMediaSessionSupported, supportedMediaSessionActions } from './lib/media-session'
 import { requestPersistence } from './lib/storage'
-import { reconcileInterruptedUploads } from './lib/upload/boot-sweep'
+import {
+  reconcileInterruptedTransforms,
+  reconcileInterruptedUploads,
+} from './lib/upload/boot-sweep'
 import './styles/index.css'
 
 const router = createBrowserRouter(routes)
@@ -21,15 +24,21 @@ if (!root) throw new Error('#root not found')
 //   1. Ask the browser to exempt our storage from eviction (granted/denied
 //      silently based on engagement).
 //   2. Reconcile interrupted uploads from a previous session (ADR-0009):
-//      clear stranded `uploading` flags or cascade-delete books whose synth
-//      was killed mid-flight. Silent — logs only.
+//      clear stranded `uploading` flags or convert interrupted initial-mode
+//      jobs to paused. Silent — logs only.
+//   3. Reconcile interrupted whole-book AI transforms (M13 / ADR-0012):
+//      clear stranded `transforming` flags; if `transformJob` is present the
+//      book surfaces as Paused in the library. Silent — logs only.
 //
-// Both are best-effort; failures degrade gracefully and never block render.
+// All best-effort; failures degrade gracefully and never block render.
 void (async () => {
   const granted = await requestPersistence()
   if (!granted) console.info('[taletrek] storage persistence not granted; cache may be evicted')
   await reconcileInterruptedUploads().catch((error) => {
-    console.info('[taletrek] boot-sweep failed:', error)
+    console.info('[taletrek] boot-sweep (uploads) failed:', error)
+  })
+  await reconcileInterruptedTransforms().catch((error) => {
+    console.info('[taletrek] boot-sweep (transforms) failed:', error)
   })
 
   // Feature-detect the Media Session API (no playback until M2/M3).

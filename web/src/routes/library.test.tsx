@@ -4,12 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Layout } from '../components/Layout'
 import { DEFAULT_AI_SETTINGS, DEFAULT_SETTINGS, SettingsProvider } from '../context/settings'
 import { _resetAiEngineForTests } from '../lib/ai/client'
+import { clearAllKeys } from '../lib/ai/keyring'
 import { type AiSettings, type AiTransformEngine, transformDefId } from '../lib/ai/types'
 import {
   _clearDBForTests,
   _resetDBForTests,
   getAudioCacheKeysByBook,
-  getChaptersByBook,
   getSetting,
   putAudioCacheEntry,
   putBook,
@@ -18,6 +18,7 @@ import {
   setSetting,
 } from '../lib/db'
 import { parseInWorker } from '../lib/parse/client'
+import { bookTransformManager } from '../lib/transform/manager'
 import { uploadManager } from '../lib/upload/manager'
 import type { Book } from '../types'
 import { chapterId, newBookId } from '../types'
@@ -42,8 +43,12 @@ const stubEngine: AiTransformEngine = {
   proposePronunciationHints: vi.fn(async () => []),
   detectOutline: vi.fn(async () => []),
 }
+// Controllable so individual tests can simulate "no provider configured" by
+// returning null — exercises the `aiUsable = ai.enabled && online && engine`
+// gate in useLibraryState (post-upload modal skipped when engine is null).
+const getAiEngineMock = vi.fn<(...args: unknown[]) => AiTransformEngine | null>(() => stubEngine)
 vi.mock('../lib/ai/client', () => ({
-  getAiEngine: () => stubEngine,
+  getAiEngine: (...args: unknown[]) => getAiEngineMock(...args),
   getAiEngineForDef: () => stubEngine,
   _resetAiEngineForTests: () => {},
 }))
@@ -149,6 +154,7 @@ beforeEach(async () => {
   ingestMock.mockReset()
   _resetAiEngineForTests()
   uploadManager._resetForTests()
+  bookTransformManager._resetForTests()
   ttsIsStoredMock.mockReset()
   ttsDownloadMock.mockReset()
   ttsSynthMock.mockReset()
@@ -260,6 +266,9 @@ describe('Library — AI upload flow (M6)', () => {
       },
       chapters: [{ id: 'c1', bookId: 'b1', index: 0, title: 'C0', paragraphs: ['hello world'] }],
     })
+    getAiEngineMock.mockReset()
+    getAiEngineMock.mockReturnValue(stubEngine)
+    clearAllKeys()
   })
 
   it('with AI disabled (default), upload goes straight to the reader — no modal', async () => {
@@ -270,21 +279,146 @@ describe('Library — AI upload flow (M6)', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('shows the process modal after upload when AI is enabled', async () => {
-    await seedAiSettings({})
+  it('shows the transform modal after upload when AI is enabled and at least one transform is configured', async () => {
+    await seedAiSettings({
+      transformDefs: [
+        {
+          id: transformDefId('cleanup'),
+          label: 'Clean up',
+          hint: 'Remove clutter',
+          desc: 'Clean up OCR artifacts.',
+          systemPrompt: 'Clean up: {{text}}',
+          params: [],
+        },
+      ],
+    })
     await renderReady('/library')
     await pickFile(FILE)
-    expect(await screen.findByRole('dialog', { name: /prepare book/i })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: /transform book/i })).toBeInTheDocument()
   })
 
-  it('process modal Skip proceeds to the reader unprocessed', async () => {
+  it('with AI enabled but no transforms configured, upload goes straight to the reader', async () => {
+    // aiUsable + zero transformDefs → the modal would only offer Skip, so we
+    // skip it. The user can still configure transforms in Settings → AI and
+    // launch manually from the book's menu.
     await seedAiSettings({})
     const { findByTestId } = await renderReady('/library')
     await pickFile(FILE)
-    await screen.findByRole('dialog', { name: /prepare book/i })
+    const capture = await findByTestId('capture')
+    expect(capture.textContent).toMatch(/\/reader\//)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('with AI enabled + provider configured but API key not loaded, upload goes straight to the reader', async () => {
+    // Engine is resolvable (baseUrl + model present) but the keyring is empty
+    // — the engine's `requireKey()` would throw on first request. Skipping
+    // the modal matches the offline / no-provider paths. The ambient chip
+    // names the reason so the user knows the fix (re-enter the key).
+    await seedAiSettings({
+      cloud: {
+        providers: [
+          {
+            id: 'p1',
+            presetId: 'custom',
+            baseUrl: 'https://api.example.com/v1',
+            model: 'gpt-4o',
+          },
+        ],
+        activeProviderId: 'p1',
+      },
+      transformDefs: [
+        {
+          id: transformDefId('cleanup'),
+          label: 'Clean up',
+          hint: 'Remove clutter',
+          desc: 'Clean up OCR artifacts.',
+          systemPrompt: 'Clean up: {{text}}',
+          params: [],
+        },
+      ],
+    })
+    // Note: no setApiKey('p1', …) — keyring stays empty (clearAllKeys ran in
+    // beforeEach), so getApiKey('p1') returns undefined → aiUsable is false.
+    const { findByTestId } = await renderReady('/library')
+    // Ambient chip surfaces the specific reason while still on /library.
+    expect(await screen.findByText(/active provider's api key isn't loaded/i)).toBeInTheDocument()
+    await pickFile(FILE)
+    const capture = await findByTestId('capture')
+    expect(capture.textContent).toMatch(/\/reader\//)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('with AI enabled but no provider configured, upload goes straight to the reader', async () => {
+    // engine === null simulates "no active provider" — even though ai.enabled
+    // is true, the modal would be a Generate-click trap (manager.start throws
+    // "AI is not enabled"). Skipping it matches the disabled-AI path.
+    getAiEngineMock.mockReturnValue(null)
+    await seedAiSettings({})
+    const { findByTestId } = await renderReady('/library')
+    await pickFile(FILE)
+    const capture = await findByTestId('capture')
+    expect(capture.textContent).toMatch(/\/reader\//)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('with AI enabled + provider configured but offline, upload goes straight to the reader', async () => {
+    await seedAiSettings({})
+    const wasOnline = navigator.onLine
+    Object.defineProperty(navigator, 'onLine', { value: false, configurable: true })
+    window.dispatchEvent(new Event('offline'))
+    try {
+      const { findByTestId } = await renderReady('/library')
+      await pickFile(FILE)
+      const capture = await findByTestId('capture')
+      expect(capture.textContent).toMatch(/\/reader\//)
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    } finally {
+      Object.defineProperty(navigator, 'onLine', { value: wasOnline, configurable: true })
+      window.dispatchEvent(new Event('online'))
+    }
+  })
+
+  it('process modal Skip proceeds to the reader unprocessed', async () => {
+    await seedAiSettings({
+      transformDefs: [
+        {
+          id: transformDefId('cleanup'),
+          label: 'Clean up',
+          hint: 'Remove clutter',
+          desc: 'Clean up OCR artifacts.',
+          systemPrompt: 'Clean up: {{text}}',
+          params: [],
+        },
+      ],
+    })
+    const { findByTestId } = await renderReady('/library')
+    await pickFile(FILE)
+    await screen.findByRole('dialog', { name: /transform book/i })
     fireEvent.click(screen.getByRole('button', { name: /^skip/i }))
     const capture = await findByTestId('capture')
     expect(capture.textContent).toMatch(/\/reader\//)
+  })
+
+  it('shows the ambient AI status chip when AI is enabled but no provider is configured', async () => {
+    getAiEngineMock.mockReturnValue(null)
+    await seedAiSettings({})
+    await putBook(makeBook({ title: 'Any Book' }))
+    await renderReady('/library')
+    expect(await screen.findByText(/AI is on but no provider is set/i)).toBeInTheDocument()
+  })
+
+  it('does not show the AI status chip when AI is usable', async () => {
+    await seedAiSettings({})
+    await putBook(makeBook({ title: 'Any Book' }))
+    await renderReady('/library')
+    expect(screen.queryByText(/AI is on but no provider is set/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/you're offline/i)).not.toBeInTheDocument()
+  })
+
+  it('does not show the AI status chip when AI is disabled (user opted out, nothing to surface)', async () => {
+    await putBook(makeBook({ title: 'Any Book' }))
+    await renderReady('/library')
+    expect(screen.queryByText(/AI is on but no provider is set/i)).not.toBeInTheDocument()
   })
 })
 
@@ -301,9 +435,12 @@ describe('Library — Reprocess (M6 T7)', () => {
   beforeEach(() => {
     ingestMock.mockReset()
     vi.mocked(parseInWorker).mockReset()
+    getAiEngineMock.mockReset()
+    getAiEngineMock.mockReturnValue(stubEngine)
+    clearAllKeys()
   })
 
-  it('reprocesses a book: re-parses original, transforms, writes chapters, stays in library', async () => {
+  it('reprocesses a book: re-parses original, kicks the streaming transform manager, navigates', async () => {
     await seedAiSettings({
       backend: 'cloud',
       transformDefs: [
@@ -339,33 +476,73 @@ describe('Library — Reprocess (M6 T7)', () => {
     ])
     await putBookFile({ bookId: id, blob, name: 'book.txt', type: 'text/plain', size: blob.size })
 
+    // Stub the manager so the test doesn't actually try to call a provider.
+    const startSpy = vi.spyOn(bookTransformManager, 'start').mockResolvedValue(undefined)
+
     await renderReady('/library')
 
     await openBookMenu('Already Processed')
-    const reprocessBtn = await screen.findByRole('button', { name: /Edit Already Processed/i })
+    const reprocessBtn = await screen.findByRole('button', { name: /Transform Already Processed/i })
     fireEvent.click(reprocessBtn)
 
-    const dialog = await screen.findByRole('dialog', { name: /prepare book/i })
+    const dialog = await screen.findByRole('dialog', { name: /transform book/i })
     // initialOps pre-fills from Book.processing — the modal's useEffect seeds it
     // one tick after open, so wait for the checkbox to settle.
     await waitFor(() => {
       expect(within(dialog).getByRole('checkbox', { name: /clean up/i })).toBeChecked()
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /process book/i }))
-    await screen.findByText(/Transform applied/i)
+    fireEvent.click(within(dialog).getByRole('button', { name: /generate/i }))
 
-    const stored = await getChaptersByBook(id)
-    expect(stored[0]?.paragraphs).toEqual(['[done] fresh-a', '[done] fresh-b'])
+    // Manager was kicked with the persisted op.
+    await waitFor(() => expect(startSpy).toHaveBeenCalledTimes(1))
+    const spec = startSpy.mock.calls[0]?.[0]
+    expect(spec?.book.id).toBe(id)
+    expect(spec?.ops).toHaveLength(1)
+    expect(spec?.ops[0]?.defId).toBe(transformDefId('cleanup'))
 
-    expect(screen.queryByTestId('capture')).not.toBeInTheDocument()
+    // Navigation to the reader happened (manager runs there).
+    await waitFor(() => {
+      expect(screen.getByTestId('capture')).toHaveTextContent(`/reader/${id}`)
+    })
+
+    startSpy.mockRestore()
   })
 
-  it('hides the Reprocess action when AI is disabled', async () => {
+  it('hides the Transform action when AI is disabled', async () => {
     await putBook(makeBook({ title: 'No AI' }))
     await renderReady('/library')
     await openBookMenu('No AI')
-    expect(screen.queryByRole('button', { name: /Edit No AI/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Transform No AI/i })).not.toBeInTheDocument()
+  })
+
+  it('flags the Transform action as unusable when AI is enabled but no provider is configured', async () => {
+    // Item stays visible (the user opted in to AI) but gains an amber dot and
+    // an "(AI not ready)" aria-label. Clicking opens an explanatory sheet that
+    // offers a deep-link to Settings → AI — replacing the old silent-hide.
+    getAiEngineMock.mockReturnValue(null)
+    await seedAiSettings({})
+    await putBook(makeBook({ title: 'No Provider' }))
+    await renderReady('/library')
+    await openBookMenu('No Provider')
+    const btn = screen.getByRole('button', { name: /Transform No Provider \(AI not ready\)/i })
+    expect(btn).toBeInTheDocument()
+    // Amber dot indicator
+    expect(btn.querySelector('.bg-amber-500')).toBeInTheDocument()
+  })
+
+  it('opens the explanatory sheet (not the modal) when Transform clicked with AI unusable', async () => {
+    getAiEngineMock.mockReturnValue(null)
+    await seedAiSettings({})
+    await putBook(makeBook({ title: 'No Provider' }))
+    await renderReady('/library')
+    await openBookMenu('No Provider')
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Transform No Provider \(AI not ready\)/i }),
+    )
+    const dialog = await screen.findByRole('dialog', { name: /transform needs a provider/i })
+    expect(dialog).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: /open ai settings/i })).toBeInTheDocument()
   })
 })
 
@@ -381,6 +558,9 @@ describe('Library — Pronunciation hints (M6 T8)', () => {
   beforeEach(() => {
     ingestMock.mockReset()
     vi.mocked(parseInWorker).mockReset()
+    getAiEngineMock.mockReset()
+    getAiEngineMock.mockReturnValue(stubEngine)
+    clearAllKeys()
   })
 
   it('scans hints, accepts a candidate, and merges into the pronunciation dictionary', async () => {
@@ -438,6 +618,35 @@ describe('Library — Pronunciation hints (M6 T8)', () => {
       screen.queryByRole('button', { name: /Review pronunciation for No Hints/i }),
     ).not.toBeInTheDocument()
   })
+
+  it('flags the Hints action as unusable when AI is enabled but no provider is configured', async () => {
+    getAiEngineMock.mockReturnValue(null)
+    await seedAiSettings({})
+    await putBook(makeBook({ title: 'No Provider Hints' }))
+    await renderReady('/library')
+    await openBookMenu('No Provider Hints')
+    const btn = screen.getByRole('button', {
+      name: /Review pronunciation for No Provider Hints \(AI not ready\)/i,
+    })
+    expect(btn).toBeInTheDocument()
+    expect(btn.querySelector('.bg-amber-500')).toBeInTheDocument()
+  })
+
+  it('opens the explanatory sheet when Hints clicked with AI unusable', async () => {
+    getAiEngineMock.mockReturnValue(null)
+    await seedAiSettings({})
+    await putBook(makeBook({ title: 'No Provider Hints' }))
+    await renderReady('/library')
+    await openBookMenu('No Provider Hints')
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: /Review pronunciation for No Provider Hints \(AI not ready\)/i,
+      }),
+    )
+    expect(
+      await screen.findByRole('dialog', { name: /pronunciation review needs a provider/i }),
+    ).toBeInTheDocument()
+  })
 })
 
 describe('Library — Outline detection', () => {
@@ -452,6 +661,7 @@ describe('Library — Outline detection', () => {
   beforeEach(() => {
     ingestMock.mockReset()
     vi.mocked(parseInWorker).mockReset()
+    clearAllKeys()
   })
 
   it('shows the Outline button for non-EPUB books', async () => {

@@ -133,6 +133,7 @@ describe('ReaderView', () => {
             opLabel: 'Simplify',
             streamingText: 'Second paragraph, simplified so far',
           }}
+          onStopStream={() => {}}
         />,
       )
       // The chip is present with the op label and a Stop button.
@@ -212,6 +213,300 @@ describe('ReaderView', () => {
       expect(p?.getAttribute('aria-live')).toBe('off')
       // Status region is present and announces the op start.
       expect(screen.getByTestId('stream-status')).toHaveTextContent('Simplify started')
+    })
+  })
+
+  describe('M13 whole-book generation mode', () => {
+    it('renders in-place streaming paragraphs (preserve mode): new text in streamed slots, old text dimmed beyond', () => {
+      // Chapter has 3 paragraphs. Streaming has produced 2 so far (the
+      // second is in-progress). chunkInputCount=3 means the chunk covers
+      // the whole chapter. Preserve mode (non-reductive) keeps the slot
+      // count stable.
+      const ch1 = chapter(['Committed one.'])
+      const ch2 = chapter(['Original A.', 'Original B.', 'Original C.'])
+      const { container } = render(
+        <ReaderView
+          book={book}
+          chapters={[ch1, ch2]}
+          generation={{
+            activeChapterIndex: 1,
+            chapterStartedAt: 0,
+            opLabel: 'cleanup',
+            running: true,
+            streamingParagraphs: {
+              opLabel: 'cleanup',
+              isReductive: false,
+              chunkStartIndex: 0,
+              chunkInputCount: 3,
+              chunkIndex: 0,
+              chunkTotal: 1,
+              paragraphs: ['Cleaned A.', 'Cleaned B (in progress'],
+              reasoning: '',
+            },
+          }}
+        />,
+      )
+      // Status region announces generation.
+      expect(screen.getByTestId('stream-status')).toHaveTextContent('cleanup started')
+      const sections = container.querySelectorAll('section')
+      expect(sections).toHaveLength(2)
+      // Chapter 1 (before active) renders normally.
+      expect(sections[0]?.getAttribute('data-pending')).toBeNull()
+      // Active chapter: 3 paragraph slots total.
+      const activeParas = sections[1]?.querySelectorAll('.tt-reader-text p')
+      expect(activeParas).toHaveLength(3)
+      // Slot 0: cleaned text, no cursor.
+      expect(activeParas?.[0]).toHaveTextContent('Cleaned A.')
+      expect(activeParas?.[0]?.getAttribute('data-streaming')).toBeNull()
+      expect(activeParas?.[0]?.getAttribute('data-dimmed')).toBeNull()
+      // Slot 1: in-progress streaming text + cursor.
+      expect(activeParas?.[1]).toHaveTextContent('Cleaned B (in progress')
+      expect(activeParas?.[1]?.getAttribute('data-streaming')).toBe('true')
+      expect(activeParas?.[1]?.textContent).toContain('█')
+      // Slot 2: old text, dimmed (not yet streamed).
+      expect(activeParas?.[2]).toHaveTextContent('Original C.')
+      expect(activeParas?.[2]?.getAttribute('data-dimmed')).toBe('true')
+      expect(activeParas?.[2]?.getAttribute('data-streaming')).toBeNull()
+    })
+
+    it('renders in-place streaming paragraphs (replace mode): old paragraphs vanish, new grow with cursor on last', () => {
+      // Reductive op (summarize). Chapter has 3 paragraphs; summarize stream
+      // has produced 2 new ones so far. Old paragraphs should NOT render.
+      const ch = chapter(['Old paragraph one.', 'Old paragraph two.', 'Old paragraph three.'])
+      const { container } = render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          generation={{
+            activeChapterIndex: 0,
+            chapterStartedAt: 0,
+            opLabel: 'summarize',
+            running: true,
+            streamingParagraphs: {
+              opLabel: 'summarize',
+              isReductive: true,
+              chunkStartIndex: 0,
+              chunkInputCount: 3,
+              chunkIndex: 0,
+              chunkTotal: 1,
+              paragraphs: ['Summary paragraph one.', 'Summary paragraph two (in progress'],
+              reasoning: '',
+            },
+          }}
+        />,
+      )
+      const paras = container.querySelectorAll('.tt-reader-text p')
+      // Only the streaming paragraphs render — original 3 are hidden.
+      expect(paras).toHaveLength(2)
+      expect(paras[0]).toHaveTextContent('Summary paragraph one.')
+      expect(paras[0]?.getAttribute('data-streaming')).toBeNull()
+      expect(paras[1]).toHaveTextContent('Summary paragraph two (in progress')
+      expect(paras[1]?.getAttribute('data-streaming')).toBe('true')
+      expect(paras[1]?.textContent).toContain('█')
+      // None of the old text leaks through.
+      expect(container.textContent).not.toContain('Old paragraph one')
+    })
+
+    it('replace mode shows a placeholder before the first token arrives', () => {
+      const ch = chapter(['Old paragraph.'])
+      render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          generation={{
+            activeChapterIndex: 0,
+            chapterStartedAt: 0,
+            opLabel: 'summarize',
+            running: true,
+            streamingParagraphs: {
+              opLabel: 'summarize',
+              isReductive: true,
+              chunkStartIndex: 0,
+              chunkInputCount: 1,
+              chunkIndex: 0,
+              chunkTotal: 1,
+              paragraphs: [],
+              reasoning: '',
+            },
+          }}
+        />,
+      )
+      // Placeholder paragraph is present with streaming cursor — old text hidden.
+      const paras = screen.getAllByTestId('stream-status', { exact: false })
+      expect(paras.length).toBeGreaterThan(0)
+      const streamingP = document.querySelector('.tt-reader-text p[data-streaming="true"]')
+      expect(streamingP).not.toBeNull()
+    })
+
+    it('applies a "pending" wash (opacity) to chapters after the active one', () => {
+      const ch1 = chapter(['Active.'])
+      const ch2 = chapter(['Pending.'])
+      const { container } = render(
+        <ReaderView
+          book={book}
+          chapters={[ch1, ch2]}
+          generation={{
+            activeChapterIndex: 0,
+            chapterStartedAt: 0,
+            opLabel: 'cleanup',
+            running: true,
+            streamingParagraphs: null,
+          }}
+        />,
+      )
+      const sections = container.querySelectorAll('section')
+      expect(sections[0]?.getAttribute('data-pending')).toBeNull()
+      expect(sections[1]?.getAttribute('data-pending')).toBe('true')
+    })
+
+    it('shows the inline preparing chip when active chapter has no streamingParagraphs yet (provider latency feedback)', () => {
+      // Reproduces the 2026-07-20 regression: z.ai glm-4.7 took 268s for the
+      // first token. During that gap, the active chapter must visibly
+      // communicate "preparing" — otherwise the user assumes the app is
+      // hung and cancels.
+      const ch = chapter(['Original paragraph one.', 'Original paragraph two.'])
+      const { container } = render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          generation={{
+            activeChapterIndex: 0,
+            chapterStartedAt: 0,
+            opLabel: 'TAE',
+            running: true,
+            streamingParagraphs: null,
+          }}
+        />,
+      )
+      const chip = screen.getByTestId('chapter-preparing-chip')
+      expect(chip).toHaveTextContent('TAE')
+      expect(chip).toHaveTextContent('preparing chapter')
+      // Elapsed timer is present (testid on the inner span).
+      expect(chip.querySelector('[data-testid="preparing-elapsed"]')).not.toBeNull()
+      // Old paragraphs still render (visible, not streaming, not dimmed).
+      const paras = container.querySelectorAll('.tt-reader-text p')
+      expect(paras).toHaveLength(2)
+      expect(paras[0]).toHaveTextContent('Original paragraph one.')
+      expect(paras[0]?.getAttribute('data-streaming')).toBeNull()
+      expect(paras[0]?.getAttribute('data-dimmed')).toBeNull()
+    })
+
+    it('hides the preparing chip once streamingParagraphs becomes non-null (tokens flowing)', () => {
+      const ch = chapter(['Original.'])
+      render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          generation={{
+            activeChapterIndex: 0,
+            chapterStartedAt: 0,
+            opLabel: 'cleanup',
+            running: true,
+            streamingParagraphs: {
+              opLabel: 'cleanup',
+              isReductive: false,
+              chunkStartIndex: 0,
+              chunkInputCount: 1,
+              chunkIndex: 0,
+              chunkTotal: 1,
+              paragraphs: ['Cleaned.'],
+              reasoning: '',
+            },
+          }}
+        />,
+      )
+      // Once streaming has begun, the preparing chip is gone.
+      expect(screen.queryByTestId('chapter-preparing-chip')).toBeNull()
+    })
+
+    it('shows live reasoning snippet in the preparing chip (reasoning-model support)', () => {
+      // Reproduces the 2026-07-20 finding: glm-5.2 (reasoning model) takes
+      // 30s+ to emit visible content, but streams `reasoning_content` tokens
+      // during the wait. Without surfacing those, the user stares at an
+      // opaque "preparing chapter" with no feedback.
+      const ch = chapter(['Original paragraph one.', 'Original paragraph two.'])
+      render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          generation={{
+            activeChapterIndex: 0,
+            chapterStartedAt: 0,
+            opLabel: 'TAE',
+            running: true,
+            streamingParagraphs: {
+              opLabel: 'TAE',
+              isReductive: false,
+              chunkStartIndex: 0,
+              chunkInputCount: 2,
+              chunkIndex: 0,
+              chunkTotal: 1,
+              paragraphs: [], // No content yet — still preparing
+              reasoning:
+                'Let me analyze the tone of these paragraphs. I see formal language, so I should preserve register while cleaning up…',
+            },
+          }}
+        />,
+      )
+      const chip = screen.getByTestId('chapter-preparing-chip')
+      // Chip is still in "thinking" mode (not "preparing chapter").
+      expect(chip).toHaveTextContent('thinking')
+      // Reasoning snippet is rendered (most recent slice).
+      const reasoning = screen.getByTestId('preparing-reasoning')
+      expect(reasoning.textContent).toContain('analyze the tone')
+    })
+
+    it('disables seek (no role=button) on paragraphs while generation is active', () => {
+      const ch = chapter(['One.'])
+      const { container } = render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          onSeekParagraph={() => {}}
+          generation={{
+            activeChapterIndex: 0,
+            chapterStartedAt: 0,
+            opLabel: 'cleanup',
+            running: true,
+            streamingParagraphs: null,
+          }}
+        />,
+      )
+      const p = container.querySelector('.tt-reader-text p')
+      // Even with onSeekParagraph provided, generation disables seek.
+      expect(p?.getAttribute('role')).toBeNull()
+    })
+
+    it('renders chapters normally when streamingParagraphs is null (between chunks or pre-first-token for non-reductive)', () => {
+      const ch = chapter(['Original.'])
+      const { container } = render(
+        <ReaderView
+          book={book}
+          chapters={[ch]}
+          generation={{
+            activeChapterIndex: 0,
+            chapterStartedAt: 0,
+            opLabel: 'cleanup',
+            running: true,
+            streamingParagraphs: null,
+          }}
+        />,
+      )
+      // No streaming paragraphs → existing chapter text renders normally.
+      const p = container.querySelector('.tt-reader-text p')
+      expect(p).toHaveTextContent('Original.')
+      expect(p?.getAttribute('data-streaming')).toBeNull()
+    })
+
+    it('renders normally when generation is null', () => {
+      const ch = chapter(['Hello.'])
+      const { container } = render(
+        <ReaderView book={book} chapters={[ch]} onSeekParagraph={() => {}} />,
+      )
+      const p = container.querySelector('.tt-reader-text p')
+      expect(p?.getAttribute('role')).toBe('button')
+      // No streaming visual.
+      expect(container.querySelector('[data-streaming="true"]')).toBeNull()
     })
   })
 })

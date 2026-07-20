@@ -1,5 +1,7 @@
 import { X } from 'lucide-react'
 import { uploadManager } from '../../lib/upload/manager'
+import { AiStatusChip } from './AiStatusChip'
+import { FeatureUnavailableSheet } from './FeatureUnavailableSheet'
 import { LibraryList } from './LibraryList'
 import { OutlineSheet } from './OutlineSheet'
 import { PronunciationReview } from './PronunciationReview'
@@ -12,6 +14,10 @@ export function Library() {
     ai,
     online,
     engine,
+    aiUsable,
+    aiUnusableReason,
+    unavailableFeature,
+    onUnavailableFeatureClose,
     transform,
     outline,
     hints,
@@ -22,10 +28,10 @@ export function Library() {
     uploadBusy,
     runInitialOps,
     handleSelect,
-    onRunProcess,
     onRunCancel,
+    onRunGenerate,
     handleRename,
-    handleEdit,
+    handleTransform,
     outlineBookId,
     outlineFormat,
     handleOutline,
@@ -41,6 +47,16 @@ export function Library() {
     synthesizeOnUpload,
     navigate,
   } = useLibraryState()
+
+  // AI menu items are visible whenever AI is enabled — even if not usable right
+  // now. Clicking an unusable item opens the explanatory sheet (the handler
+  // inside `useLibraryState` re-routes via `aiUnusableReason`). `BookCard`
+  // shows an amber dot next to flagged items so the state is legible at a
+  // glance rather than discoverable only by clicking. `aiUnusableReason`
+  // flows down so the tooltip can name the specific blocker.
+  const aiMenuItems = ai.enabled
+    ? { onTransform: handleTransform, onPronunciation: handlePronunciation }
+    : {}
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -123,17 +139,23 @@ export function Library() {
 
       {list.type === 'loading' && <p className="text-muted">Loading…</p>}
       {list.type === 'ready' && (
-        <LibraryList
-          books={list.books}
-          onOpen={(id) => navigate(`/reader/${id}`)}
-          onDelete={handleDelete}
-          onEdit={ai.enabled ? handleEdit : undefined}
-          onPronunciation={ai.enabled && online ? handlePronunciation : undefined}
-          onOutline={handleOutline}
-          onResynthesize={synthesizeOnUpload !== 'off' ? handleResynthesize : undefined}
-          onResume={(id) => void uploadManager.resume(id)}
-          onRename={handleRename}
-        />
+        <>
+          {aiUnusableReason && (
+            <AiStatusChip reason={aiUnusableReason} onOpenSettings={() => navigate('/settings')} />
+          )}
+          <LibraryList
+            books={list.books}
+            onOpen={(id) => navigate(`/reader/${id}`)}
+            onDelete={handleDelete}
+            {...aiMenuItems}
+            onOutline={handleOutline}
+            onResynthesize={synthesizeOnUpload !== 'off' ? handleResynthesize : undefined}
+            onResume={(id) => void uploadManager.resume(id)}
+            onRename={handleRename}
+            aiUsable={aiUsable}
+            aiUnusableReason={aiUnusableReason}
+          />
+        </>
       )}
 
       {/* Process modal: always shown after upload when AI is enabled (opt-in skip).
@@ -144,7 +166,7 @@ export function Library() {
         state={transform.state}
         defs={ai.transformDefs}
         initialOps={runInitialOps}
-        onProcess={onRunProcess}
+        onGenerate={onRunGenerate}
         onCancel={onRunCancel}
         online={online}
       />
@@ -168,6 +190,23 @@ export function Library() {
         onAccept={onHintsAccept}
         onClose={onHintsClose}
       />
+
+      {/* Explanatory sheet shown when the user clicks an AI menu item while AI
+          is enabled but not usable. Tells them what's missing and offers a
+          deep-link to Settings → AI. Suppress the Settings button when the
+          reason is `offline` (reconnecting is the fix, not a config change). */}
+      {unavailableFeature && aiUnusableReason && (
+        <FeatureUnavailableSheet
+          open
+          feature={unavailableFeature.feature}
+          reason={aiUnusableReason}
+          onClose={onUnavailableFeatureClose}
+          onOpenSettings={() => {
+            onUnavailableFeatureClose()
+            navigate('/settings')
+          }}
+        />
+      )}
     </div>
   )
 }

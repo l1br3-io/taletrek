@@ -1,6 +1,16 @@
-import { AudioLines, List, MoreVertical, Pencil, Play, SpellCheck, Trash2 } from 'lucide-react'
+import {
+  AudioLines,
+  List,
+  MoreVertical,
+  Pencil,
+  Play,
+  SpellCheck,
+  Trash2,
+  Wand2,
+} from 'lucide-react'
 import { Menu } from '../../components/Menu'
 import type { Book, BookId } from '../../types'
+import type { AiUnusableReason } from './AiStatusChip'
 
 const DAY = 86_400_000
 
@@ -24,8 +34,8 @@ interface BookCardProps {
   onDelete: (id: BookId) => void
   /** When provided, shows a "Rename" action on the card. */
   onRename?: (id: BookId) => void
-  /** When provided, shows an "Edit" action on the card. */
-  onEdit?: (id: BookId) => void
+  /** When provided (AI enabled), shows a "Transform" action on the card. */
+  onTransform?: (id: BookId) => void
   /** When provided (AI enabled), shows a "Hints" action on the card. */
   onPronunciation?: (id: BookId) => void
   /** When provided, shows a "Re-process outline" action (hidden for EPUB — already has TOC). */
@@ -34,6 +44,18 @@ interface BookCardProps {
   onResynthesize?: (id: BookId) => void
   /** When provided, resumes a paused synthesis job for the book (ADR-0010 / M11). */
   onResume?: (id: BookId) => void
+  /**
+   * When `false`, AI menu items (Transform / Pronunciation) render with an amber
+   * dot to flag "enabled but not usable right now" — click still fires the
+   * handler, which opens an explanatory sheet. See `FeatureUnavailableSheet`.
+   */
+  aiUsable?: boolean
+  /**
+   * Specific reason AI is enabled-but-not-usable right now. Drives the
+   * `title` tooltip on flagged AI items so the user knows the fix before
+   * they click. `null` when AI is fully usable OR fully disabled.
+   */
+  aiUnusableReason?: AiUnusableReason | null
 }
 
 export function BookCard({
@@ -41,14 +63,28 @@ export function BookCard({
   onOpen,
   onDelete,
   onRename,
-  onEdit,
+  onTransform,
   onPronunciation,
   onOutline,
   onResynthesize,
   onResume,
+  aiUsable = true,
+  aiUnusableReason = null,
 }: BookCardProps) {
   const pct = Math.round((book.progressFraction ?? 0) * 100)
   const showOutline = onOutline && book.format !== 'epub'
+  const aiFlagged = !aiUsable && (onTransform || onPronunciation)
+  const aiFlaggedTitle = aiFlagged
+    ? aiUnusableReason === 'offline'
+      ? 'AI is offline — reconnect to use'
+      : aiUnusableReason === 'no-provider'
+        ? 'No AI provider — add one in Settings → AI'
+        : aiUnusableReason === 'no-key'
+          ? "Provider's API key missing — re-enter in Settings → AI"
+          : aiUnusableReason === 'misconfigured'
+            ? 'AI provider not responding — check Settings → AI'
+            : 'AI is enabled but not usable right now'
+    : undefined
 
   const actionsMenu = (
     <Menu
@@ -119,17 +155,21 @@ export function BookCard({
               <Pencil className="h-4 w-4" /> Rename
             </button>
           )}
-          {onEdit && (
+          {onTransform && (
             <button
               type="button"
               onClick={() => {
-                onEdit(book.id)
+                onTransform(book.id)
                 close()
               }}
               className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
-              aria-label={`Edit ${book.title}`}
+              aria-label={`Transform ${book.title}${aiFlagged ? ' (AI not ready)' : ''}`}
+              title={aiFlaggedTitle}
             >
-              <Pencil className="h-4 w-4" /> Edit
+              <Wand2 className="h-4 w-4" /> Transform
+              {aiFlagged && (
+                <span className="ml-auto h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+              )}
             </button>
           )}
           {onPronunciation && (
@@ -140,9 +180,15 @@ export function BookCard({
                 close()
               }}
               className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
-              aria-label={`Review pronunciation for ${book.title}`}
+              aria-label={`Review pronunciation for ${book.title}${
+                aiFlagged ? ' (AI not ready)' : ''
+              }`}
+              title={aiFlaggedTitle}
             >
               <SpellCheck className="h-4 w-4" /> Hints
+              {aiFlagged && (
+                <span className="ml-auto h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+              )}
             </button>
           )}
           <div className="my-1 border-t border-line" />

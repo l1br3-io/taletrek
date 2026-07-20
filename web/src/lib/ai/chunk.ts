@@ -30,6 +30,29 @@ export function sample(input: string[], maxParagraphs = 50): Chunk {
 const OUTPUT_RESERVE = 1024
 const TOKENS_PER_CHAR = 0.25
 
+/**
+ * UX-driven cap on per-chunk input size. Even when the model's context
+ * window could fit more, we keep chunks small enough that prefill latency
+ * stays tolerable. Without this cap, a 128K-context model receiving a
+ * 12K-token chapter produces ONE chunk, and the user waits the model's
+ * full prefill time (glm-4.7 on z.ai free tier measured 268s on
+ * 2026-07-20) before any token streams. With the cap, the chapter splits
+ * into multiple smaller chunks; each chunk's prefill is faster, and the
+ * first chunk streams within seconds.
+ *
+ * Trade-off: smaller chunks = more LLM calls (slightly more cost on paid
+ * tiers, no cost on free) but dramatically better UX. 2000 tokens ≈
+ * 8KB of text ≈ 30 typical fiction paragraphs — enough for the model
+ * to see local style/tone while keeping prefill under ~30s on most
+ * models. If a reductive op (summarize) quality regresses, promote
+ * this to a `TransformDefinition.chunkBudgetTokens` field so op types
+ * can opt into a larger budget.
+ */
+const UX_MAX_CHUNK_TOKENS = 2000
+
+/** Exposed for tests/asserts so callers can verify the UX cap is in effect. */
+export const CHUNK_UX_CAP_TOKENS = UX_MAX_CHUNK_TOKENS
+
 /** Rough token count for a string using the char/4 heuristic. */
 export function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length * TOKENS_PER_CHAR))
@@ -40,13 +63,17 @@ export function estimateTokens(text: string): number {
  * (after accounting for the system prompt and a safe output reserve). Every
  * chunk starts and ends at a paragraph boundary. A single paragraph that
  * exceeds the budget alone goes into its own chunk (the model may truncate).
+ *
+ * Per-chunk size is `min(contextBudget, UX_MAX_CHUNK_TOKENS)` — the UX cap
+ * keeps prefill latency tolerable regardless of the model's context window.
  */
 export function chunksForParagraphs(
   paragraphs: string[],
   contextLimit: number,
   systemPromptTokens: number,
 ): Chunk[] {
-  const budget = Math.max(512, contextLimit - systemPromptTokens - OUTPUT_RESERVE)
+  const contextBudget = contextLimit - systemPromptTokens - OUTPUT_RESERVE
+  const budget = Math.max(512, Math.min(contextBudget, UX_MAX_CHUNK_TOKENS))
   const chunks: Chunk[] = []
   let current: string[] = []
   let currentTokens = 0

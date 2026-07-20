@@ -4,6 +4,7 @@ import { runHints, runOutlineDetection, runTransform } from '../runner'
 import type {
   AiOutlineChapter,
   AiTransformEngine,
+  ChunkStreamInfo,
   PronunciationCandidate,
   TransformDefinition,
   TransformOp,
@@ -34,6 +35,13 @@ interface CompleteOptions {
   signal?: AbortSignal
   /** Live per-token callback: receives accumulated text + the new delta. */
   onDelta?: (textSoFar: string, delta: string) => void
+  /**
+   * Live per-token callback for reasoning/thinking tokens (reasoning models
+   * only — glm-5.2, DeepSeek-R1, OpenRouter-wrapped o1). Mirrors `onDelta`:
+   * receives accumulated reasoning text + the new reasoning delta. Empty for
+   * non-reasoning models; the callback simply doesn't fire.
+   */
+  onReasoning?: (reasoningSoFar: string, delta: string) => void
 }
 
 /**
@@ -60,6 +68,7 @@ export class CloudLlmEngine implements AiTransformEngine {
     onProgress?: (fraction: number) => void,
     signal?: AbortSignal,
     onDelta?: (textSoFar: string, delta: string) => void,
+    onChunkStreamed?: (info: ChunkStreamInfo) => void,
   ): Promise<string[]> {
     this.requireKey()
     return runTransform(
@@ -71,6 +80,7 @@ export class CloudLlmEngine implements AiTransformEngine {
       onProgress,
       signal,
       onDelta,
+      onChunkStreamed,
     )
   }
 
@@ -118,6 +128,14 @@ export class CloudLlmEngine implements AiTransformEngine {
       stream_options: { include_usage: true },
       ...(opts.json ? { response_format: { type: 'json_object' } } : {}),
     }
+    // Diagnostic: surface the request URL + model in DevTools so a hang/error
+    // can be correlated with the provider's own dashboard. `console.info`
+    // avoids noise in production consoles (filtered by default in most setups)
+    // while remaining visible during debugging. The key never appears here.
+    console.log(`[taletrek] AI request → ${this.config.model} @ ${url}`)
+    const requestStartedAt = performance.now()
+    let firstByteAt: number | null = null
+    let chunkCount = 0
     const res = await fetch(url, {
       method: 'POST',
       headers: {
@@ -130,19 +148,46 @@ export class CloudLlmEngine implements AiTransformEngine {
     })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
+      console.warn(`[taletrek] AI ${res.status} response from ${url}: ${text.slice(0, 200)}`)
       throw new CloudError(res.status, `${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
     }
     if (!res.body) {
+      console.warn(`[taletrek] AI ${res.status} returned no body from ${url}`)
       throw new CloudError(res.status, 'Empty response body from provider.')
     }
     let acc = ''
-    await consumeSse(
-      res.body,
-      (delta) => {
-        acc += delta
-        opts.onDelta?.(acc, delta)
-      },
-      opts.signal,
+    let reasoningAcc = ''
+    let reasoningChunkCount = 0
+    try {
+      await consumeSse(
+        res.body,
+        (delta) => {
+          if (firstByteAt === null) firstByteAt = performance.now()
+          chunkCount++
+          acc += delta
+          opts.onDelta?.(acc, delta)
+        },
+        opts.signal,
+        opts.onReasoning
+          ? (delta) => {
+              reasoningChunkCount++
+              reasoningAcc += delta
+              opts.onReasoning?.(reasoningAcc, delta)
+            }
+          : undefined,
+      )
+    } catch (e) {
+      const elapsed = Math.round(performance.now() - requestStartedAt)
+      console.warn(
+        `[taletrek] AI SSE failed after ${elapsed}ms (${chunkCount} chunks, ${acc.length} bytes, ${reasoningChunkCount} reasoning chunks, ${reasoningAcc.length} reasoning bytes):`,
+        e,
+      )
+      throw e
+    }
+    const elapsed = Math.round(performance.now() - requestStartedAt)
+    const ttfb = firstByteAt !== null ? Math.round(firstByteAt - requestStartedAt) : -1
+    console.log(
+      `[taletrek] AI ← ${acc.length} bytes in ${elapsed}ms (ttfb ${ttfb}ms, ${chunkCount} chunks${reasoningChunkCount > 0 ? `, ${reasoningChunkCount} reasoning chunks (${reasoningAcc.length} bytes)` : ''})`,
     )
     return acc.trim()
   }

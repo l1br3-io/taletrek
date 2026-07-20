@@ -129,6 +129,47 @@ export interface PronunciationCandidate {
 // Engine contract
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-chunk streaming signal for whole-book generation UI (M13). Fires on
+ * every token batch within a chunk (`isFinal: false`) and once at chunk
+ * completion (`isFinal: true`). The chunk is the atomic streaming unit —
+ * callers don't try to identify paragraph boundaries mid-chunk (that would
+ * require live paragraph-ID mutation, risky for audio cache + bookmarks).
+ *
+ * `textSoFar` resets at each chunk boundary (matches `onDelta`'s contract).
+ */
+export interface ChunkStreamInfo {
+  /** Index of the chunk within the current `runTransform` call (0-based). */
+  chunkIndex: number
+  /** Total chunks in this `runTransform` call. */
+  chunkTotal: number
+  /** Index into the original `input[]` array where this chunk starts. */
+  chunkStartInputIndex: number
+  /**
+   * Number of input paragraphs in this chunk (`chunk.end - chunk.start`).
+   * Used by whole-book UI to compute an intra-chunk progress fraction even
+   * when the chunk's token stream hasn't completed yet.
+   */
+  chunkInputCount: number
+  /** Cumulative streamed text for this chunk (resets at chunk boundary). */
+  textSoFar: string
+  /**
+   * Cumulative reasoning/thinking text for this chunk (resets at chunk
+   * boundary). Empty for non-reasoning models. Reasoning models (glm-5.2,
+   * DeepSeek-R1, OpenAI o1 via OpenRouter) emit thinking tokens in a
+   * separate field before producing visible output; surfacing them in the
+   * UI gives the user visible progress during the (potentially long)
+   * pre-token gap.
+   */
+  reasoningSoFar: string
+  /** Just-arrived delta (empty when `isFinal: true`). */
+  delta: string
+  /** True when the chunk has completed and `splitOutput` has run. */
+  isFinal: boolean
+  /** When `isFinal`, the final split-output paragraphs for this chunk. */
+  finalParagraphs?: string[]
+}
+
 /** Contract the cloud backend implements. */
 export interface AiTransformEngine {
   /** True when the backend can serve a request now (key set). */
@@ -144,6 +185,12 @@ export interface AiTransformEngine {
    * streaming UI; the engine still resolves with the final reassembled array.
    * Per-chunk: `textSoFar` resets at the start of each chunk's `complete` call.
    *
+   * `onChunkStreamed` (optional, M13) is the chunk-aware equivalent: fires on
+   * every token batch with chunk context (`chunkIndex`, `chunkTotal`,
+   * `chunkStartInputIndex`) plus once at chunk completion with `isFinal: true`
+   * and the final `splitOutput` paragraphs. Use this for whole-book generation
+   * UI where the chunk is the atomic streaming unit.
+   *
    * Abort: honours `signal` directly (AbortController on `fetch`).
    */
   transform(
@@ -153,6 +200,7 @@ export interface AiTransformEngine {
     onProgress?: (fraction: number) => void,
     signal?: AbortSignal,
     onDelta?: (textSoFar: string, delta: string) => void,
+    onChunkStreamed?: (info: ChunkStreamInfo) => void,
   ): Promise<string[]>
   /**
    * Scan a sample (first chapter) for pronunciation candidates. Does not mutate

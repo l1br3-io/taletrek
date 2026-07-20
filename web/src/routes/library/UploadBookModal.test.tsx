@@ -61,24 +61,24 @@ const simplifyDefId = transformDefId('simplify')
 function renderModal(
   overrides: {
     state?: TransformState
-    onProcess?: (ops: TransformOp[]) => void
+    onGenerate?: (ops: TransformOp[]) => void
     defs?: TransformDefinition[]
     online?: boolean
   } = {},
 ) {
-  const onProcess = overrides.onProcess ?? vi.fn()
+  const onGenerate = overrides.onGenerate ?? vi.fn()
   const onCancel = vi.fn()
   render(
     <UploadBookModal
       open
       state={overrides.state ?? { type: 'idle' }}
       onCancel={onCancel}
-      onProcess={onProcess}
+      onGenerate={onGenerate}
       defs={overrides.defs ?? makeDefs()}
       online={overrides.online ?? true}
     />,
   )
-  return { onProcess, onCancel }
+  return { onGenerate, onCancel }
 }
 
 describe('UploadBookModal', () => {
@@ -106,9 +106,9 @@ describe('UploadBookModal', () => {
     expect(screen.getByLabelText(/summarize to fraction/i)).toBeInTheDocument()
   })
 
-  it('Process is disabled until an op is selected, then fires onProcess with the built ops', () => {
-    const { onProcess } = renderModal()
-    const processBtn = screen.getByRole('button', { name: /process book/i })
+  it('Process is disabled until an op is selected, then fires onGenerate with the built ops', () => {
+    const { onGenerate } = renderModal()
+    const processBtn = screen.getByRole('button', { name: /generate/i })
     expect(processBtn).toBeDisabled()
 
     fireEvent.click(screen.getByLabelText(/translate/i))
@@ -116,18 +116,18 @@ describe('UploadBookModal', () => {
     fireEvent.change(screen.getByLabelText(/target language code/i), { target: { value: 'fr' } })
     fireEvent.click(processBtn)
 
-    expect(onProcess).toHaveBeenCalledWith([
+    expect(onGenerate).toHaveBeenCalledWith([
       { defId: translateDefId, params: { target: 'fr' } },
     ] as never)
   })
 
   it('emits ops in canonical order (cleanup → translate → summarize → simplify)', () => {
-    const { onProcess } = renderModal()
+    const { onGenerate } = renderModal()
     fireEvent.click(screen.getByLabelText(/simplify/i))
     fireEvent.click(screen.getByLabelText(/clean up/i))
     fireEvent.click(screen.getByLabelText(/translate/i))
-    fireEvent.click(screen.getByRole('button', { name: /process book/i }))
-    const calls = (onProcess as unknown as { mock: { calls: Array<[TransformOp[]]> } }).mock.calls
+    fireEvent.click(screen.getByRole('button', { name: /generate/i }))
+    const calls = (onGenerate as unknown as { mock: { calls: Array<[TransformOp[]]> } }).mock.calls
     const ops = calls[0]?.[0]
     expect(ops?.map((o: TransformOp) => o.defId)).toEqual([
       cleanupDefId,
@@ -147,7 +147,7 @@ describe('UploadBookModal', () => {
     expect(screen.getByText(/Translate \(1\/2\)/)).toBeInTheDocument()
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50')
     // Process button hidden while running; Cancel remains
-    expect(screen.queryByRole('button', { name: /process book/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /generate/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /cancel transform/i })).toBeInTheDocument()
   })
 
@@ -156,12 +156,12 @@ describe('UploadBookModal', () => {
       state: { type: 'done', message: 'Transform applied — resumed at start of chapter 1.' },
     })
     expect(screen.getByText(/resumed at start of chapter 1/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /process book/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /generate/i })).not.toBeInTheDocument()
   })
 
   it('renders the error message (and allows retry)', () => {
     renderModal({ state: { type: 'error', message: 'No API key set.' } })
     expect(screen.getByText(/no api key set/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /process book/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /generate/i })).toBeInTheDocument()
   })
 })

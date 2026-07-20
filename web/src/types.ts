@@ -1,4 +1,4 @@
-import type { AppliedProcessing } from './lib/ai/types'
+import type { AppliedProcessing, TransformOp } from './lib/ai/types'
 import type { CleaningConfig } from './lib/clean/types'
 
 export type BookId = string & { readonly __brand: 'BookId' }
@@ -41,6 +41,18 @@ export interface Book {
    * true interruptions stay sweep-governed.
    */
   uploadJob?: PersistedUploadJob
+  /**
+   * True while a whole-book AI streaming transform (M13 / ADR-0012) is running.
+   * Library badges it; reader blocks Play while set.
+   */
+  transforming?: boolean
+  /**
+   * A whole-book AI transform job, persisted on the book record (M13 /
+   * ADR-0012). When present, the book is resumable from the library. Mirrors
+   * `uploadJob`: `transforming` is `false` while paused, so the boot sweep's
+   * transform pass ignores explicit pauses; true interruptions stay governed.
+   */
+  transformJob?: PersistedTransformJob
 }
 
 /**
@@ -73,6 +85,35 @@ export interface PersistedUploadJob {
   lastParagraphInChapter?: number
   /** Total non-empty paragraphs in the chapter containing the last attempt. */
   lastChapterTotal?: number
+}
+
+/**
+ * A paused whole-book AI transform's resumable spec (M13 / ADR-0012). Resume
+ * reloads chapters from IDB and re-runs this spec from `(currentOpIndex,
+ * currentChapterIndex)`; already-committed chapters survive any interruption
+ * (the M8 audio cache is content-addressed, so cached paragraphs fast-forward
+ * for free).
+ *
+ * Granularity is **chapter-level** (the unit at which `engine.transform`
+ * commits and `putChapters` writes). Within-chapter state is never persisted —
+ * chunks only commit at their boundary, so an interrupted chunk has no partial
+ * state to reconcile.
+ */
+export interface PersistedTransformJob {
+  /** Ordered list of transform ops to apply (each feeds the next). */
+  ops: TransformOp[]
+  voiceId: VoiceId
+  cleaning: CleaningConfig
+  /** Outer-loop index (which op to resume from). */
+  currentOpIndex: number
+  /** Inner-loop index (which chapter to resume from, within the working set). */
+  currentChapterIndex: number
+  /** Chapter-units completed across all ops (for UI progress). */
+  done: number
+  /** Total chapter-units across all ops (for UI progress). */
+  total: number
+  /** Date.now() at pause time. */
+  pausedAt: number
 }
 
 export interface Chapter {

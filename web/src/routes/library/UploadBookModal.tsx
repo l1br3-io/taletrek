@@ -8,7 +8,12 @@ interface UploadBookModalProps {
   open: boolean
   state: TransformState
   onCancel: () => void
-  onProcess: (ops: TransformOp[]) => void
+  /**
+   * Stream-apply the selected ops via `bookTransformManager` and navigate to
+   * the reader to watch the generation (M13 / ADR-0012). The reader
+   * subscribes to the manager on mount and shows the streaming block visual.
+   */
+  onGenerate: (ops: TransformOp[]) => void
   /** Available transform definitions (from Settings → AI → Transform options). */
   defs: TransformDefinition[]
   /** Pre-fill selection + params (e.g. from `Book.processing` for Reprocess). */
@@ -20,17 +25,17 @@ interface UploadBookModalProps {
 /**
  * Presentational modal shown after upload (and on reprocess). Owns only the
  * selection + param form state; the transform `state` (idle/running/done/error)
- * and the transform pipeline are the caller's. On Process, builds the ordered
- * {@link TransformOp} list (user-selected order) and hands it to `onProcess`.
+ * and the transform pipeline are the caller's. On Generate, builds the ordered
+ * {@link TransformOp} list (user-selected order) and hands it to `onGenerate`.
  *
  * When no transforms are defined, shows a friendly empty-state pointing to
- * Settings. The rename field is removed in M6.2 Phase 3.
+ * Settings.
  */
 export function UploadBookModal({
   open,
   state,
   onCancel,
-  onProcess,
+  onGenerate,
   defs,
   initialOps,
   online,
@@ -88,12 +93,11 @@ export function UploadBookModal({
       <div className="w-full max-w-md space-y-4 rounded-xl border border-line bg-surface p-5">
         <header className="space-y-1">
           <h2 id="upload-book-title" className="text-lg font-semibold">
-            Prepare book
+            Transform book
           </h2>
           <p className="text-xs text-muted">
-            Optionally name the book, detect chapters, and apply text transforms before TTS. Your
-            original file is kept — you can always re-process to revert. Skip to go straight to the
-            reader.
+            Pick AI transforms to apply before playback. Your original file is kept — re-run anytime
+            to revert. Skip to go straight to the reader.
           </p>
         </header>
 
@@ -278,12 +282,13 @@ export function UploadBookModal({
           {state.type !== 'done' && state.type !== 'running' && (
             <button
               type="button"
-              onClick={() => onProcess(builtOps)}
+              onClick={() => onGenerate(builtOps)}
               disabled={!anySelected || !online}
-              aria-label="Process book"
-              className="rounded-md border border-accent bg-accent-soft px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent hover:text-surface disabled:opacity-50"
+              aria-label="Generate — stream the AI rewrite live into the reader"
+              className="rounded-md border border-accent bg-accent px-3 py-1.5 text-sm font-medium text-bg transition-colors hover:bg-accent-strong disabled:opacity-50"
+              title="Stream the rewrite into the reader — pause/resume/abort anytime."
             >
-              Process
+              Generate
             </button>
           )}
         </div>

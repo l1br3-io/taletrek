@@ -37,12 +37,13 @@ import { getAllBooks, putBook } from '../db'
 export interface SweepReport {
   clearedFlags: number
   convertedToPaused: number
+  transformedToPaused: number
 }
 
 export async function reconcileInterruptedUploads(): Promise<SweepReport> {
   const books = await getAllBooks()
   const stuck = books.filter((b) => b.uploading === true)
-  if (stuck.length === 0) return { clearedFlags: 0, convertedToPaused: 0 }
+  if (stuck.length === 0) return { clearedFlags: 0, convertedToPaused: 0, transformedToPaused: 0 }
 
   let clearedFlags = 0
   let convertedToPaused = 0
@@ -76,5 +77,52 @@ export async function reconcileInterruptedUploads(): Promise<SweepReport> {
   if (clearedFlags || convertedToPaused) {
     console.info('[taletrek] boot-sweep:', { clearedFlags, convertedToPaused })
   }
-  return { clearedFlags, convertedToPaused }
+  return { clearedFlags, convertedToPaused, transformedToPaused: 0 }
+}
+
+/**
+ * Boot-time reconciliation for interrupted whole-book AI transforms (M13 /
+ * ADR-0012). Mirrors {@link reconcileInterruptedUploads}'s recovery rule:
+ *
+ * A book with `transforming === true` on app boot means the previous session's
+ * `bookTransformManager.runLoop` never reached `clearTransformingFlag` — most
+ * likely because the tab was closed or evicted mid-chunk.
+ *
+ * Recovery rule (mirrors ADR-0009 revised rule, never cascade-deletes):
+ * - If `book.transformJob` exists: **convert to paused** (delete `transforming`,
+ *   keep `transformJob`). Already-committed chapters survive; resume is
+ *   user-initiated from the library.
+ * - Legacy edge (no `transformJob`, from pre-M13 code): just clear
+ *   `transforming` and leave the book alone.
+ *
+ * **Explicit pauses are invisible to this sweep** — pause sets
+ * `transforming = false` (gotcha #24 parallel), so only true interruptions
+ * (tab close, crash, OS kill) are reconciled here. Never auto-resume.
+ */
+export async function reconcileInterruptedTransforms(): Promise<
+  Pick<SweepReport, 'transformedToPaused'>
+> {
+  const books = await getAllBooks()
+  const stuck = books.filter((b) => b.transforming === true)
+  if (stuck.length === 0) return { transformedToPaused: 0 }
+
+  let transformedToPaused = 0
+
+  await Promise.all(
+    stuck.map(async (book) => {
+      delete book.transforming
+      book.updatedAt = Date.now()
+      await putBook(book).catch((error) => {
+        console.info('[taletrek] boot-sweep: could not transform-clear', book.id, error)
+      })
+      // If transformJob exists, the book surfaces as Paused in the library and
+      // user can Resume. If not (legacy edge), the book is just a normal card.
+      transformedToPaused += 1
+    }),
+  )
+
+  if (transformedToPaused > 0) {
+    console.info('[taletrek] boot-sweep: transforms converted to paused:', transformedToPaused)
+  }
+  return { transformedToPaused }
 }
