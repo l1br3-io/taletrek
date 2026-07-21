@@ -73,6 +73,22 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
+/*
+ * iOS Safari auto-zooms to a focused form control whose computed font-size
+ * is < 16px, and never zooms back out — the user has to pinch-zoom manually
+ * after every field tap. Force 16px on mobile only (≤639px, matches
+ * Tailwind's `sm:` breakpoint). Desktop design is untouched at ≥640px.
+ */
+@layer base {
+  @media (max-width: 639.98px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+}
+
 body {
   margin: 0;
   background-color: var(--color-bg);
