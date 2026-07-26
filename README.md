@@ -8,7 +8,7 @@ See [`docs/VISION.md`](docs/VISION.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md) 
 
 ## Status
 
-Greenfield, in development. Current milestone: **M0 — Foundation** (see [`docs/prds/M0-foundation.md`](docs/prds/M0-foundation.md)).
+In active development. Current phase: **M11 — Pluggable Playback Engines, Pausable Synthesis** (see [`SPEC.md`](SPEC.md) · [`tasks/plan.md`](tasks/plan.md) · [`CHANGELOG.md`](CHANGELOG.md)).
 
 ## License
 

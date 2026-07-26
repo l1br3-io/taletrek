@@ -2,29 +2,18 @@
 
 > Free, open-source **reading companion** by **l1br3**: turn any ebook (PDF/EPUB/MOBI/TXT) into an audiobook with on-device neural TTS (Piper, WASM). Ships as an installable, offline-first PWA. No backend, no cloud, MIT-licensed.
 
-## Status
+## Current phase
 
-| Milestone | State | Doc |
-| --------- | ----- | ---- |
-| M0 — Foundation | ✅ **Done** (commit `e9bdd61`) | [`docs/prds/M0-foundation.md`](docs/prds/M0-foundation.md) |
-| Piper spike | ✅ Done (thesis proven in-browser) | [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) |
-| M1 — Upload & Read | ✅ **Done** (PDF/EPUB/MOBI/TXT slice; commit `71a642b`) | [`docs/prds/M1-upload-read.md`](docs/prds/M1-upload-read.md) |
-| M2 — Speak | ✅ **Done** (Piper TTS, per-paragraph read-along, voice picker, speed) | [`docs/prds/M2-speak.md`](docs/prds/M2-speak.md) |
-| M3 — Jog Mode | ✅ **Done** (pre-rendered chunks, `<audio>`, Media Session) | [`docs/prds/M3-jog.md`](docs/prds/M3-jog.md) |
-| M4 — Clean Reading | ✅ **Done** (filters + pronunciation dictionary; commit `d57a8bf`) | [`docs/prds/M4-clean-reading.md`](docs/prds/M4-clean-reading.md) |
-| M5 — Library & Offline | ✅ **Done** (library, resume, offline voice mgmt, PWA polish; commit `4115f00`) | [`docs/prds/M5-library-offline.md`](docs/prds/M5-library-offline.md) |
-| M6 — AI Transforms | ✅ **Done** (cloud-only after ADR-0005; cleanup/translate/summarize/simplify, per-paragraph transforms, importable key/config) | [`docs/prds/M6-ai-transforms.md`](docs/prds/M6-ai-transforms.md) · [`docs/adr/0005-remove-in-browser-llm-backend.md`](docs/adr/0005-remove-in-browser-llm-backend.md) · [`tasks/todo.md`](tasks/todo.md) |
-| M6.1 — Biometric Key Caching | ✅ **Done** (opt-in WebAuthn PRF tier on top of M6's in-memory default; auto-falls-back where unsupported. ADR-0007 augments ADR-0004.) | [`docs/adr/0007-biometric-key-caching.md`](docs/adr/0007-biometric-key-caching.md) · [`tasks/plan-m6.1-biometric-keys.md`](tasks/plan-m6.1-biometric-keys.md) |
-| M7 — Reader UX & Mobile | ✅ **Done** (responsive layout + nav drawer, chapter outline, minimized playback menu, go-to-current + FAB, auto-scroll on first Play) | [`docs/prds/M7-reader-ux-mobile.md`](docs/prds/M7-reader-ux-mobile.md) |
-| M8 — Audio Cache | ✅ **Done** (on-device audio cache, LRU-bounded ~500 MB, per-book clear, Settings indicator + Clear button) | [`docs/prds/M8-audio-cache.md`](docs/prds/M8-audio-cache.md) |
-| M8.1 — iOS Huge-Book Upload Resilience | ✅ **Done** (mobile encode cap + upload resilience; verified 2026-07-18) | [`tasks/plan-m8.1-ios-upload-resilience.md`](tasks/plan-m8.1-ios-upload-resilience.md) |
-| M9 — Mobile Streaming Playback | ⏸ **Deferred** per ADR-0010 — superseded for the common case by M11. Design + dormant scaffolding stay as the fallback path. | [`docs/prds/M9-mobile-streaming.md`](docs/prds/M9-mobile-streaming.md) · [`docs/adr/0006-mobile-mse-streaming.md`](docs/adr/0006-mobile-mse-streaming.md) · [`docs/adr/0010-playback-engine-architecture.md`](docs/adr/0010-playback-engine-architecture.md) |
-| M10 — PDF Structure Extraction | ✅ **Done** (pdfjs outline → chapters at upload; AI-only fallback; heuristic detector deleted. ADR-0008.) | [`docs/adr/0008-pdf-structure-extraction.md`](docs/adr/0008-pdf-structure-extraction.md) |
-| M11 — Pluggable Playback Engines, Pausable Synthesis | 🚧 **In progress** (native engine default + FFmpeg fallback; pausable synthesis; mobile synth lockdown. ADR-0010 supersedes ADR-0006.) | [`tasks/plan-m11-playback-engines.md`](tasks/plan-m11-playback-engines.md) · [`docs/adr/0010-playback-engine-architecture.md`](docs/adr/0010-playback-engine-architecture.md) · [`docs/spikes/web-audio-mobile.md`](docs/spikes/web-audio-mobile.md) |
-| M12 — Parallel Synthesis | ✅ **Done** (bounded multi-worker pool for pre-synth; verified 2026-07-19 on iPhone + desktop. ADR-0011.) | [`docs/adr/0011-parallel-synthesis-pool.md`](docs/adr/0011-parallel-synthesis-pool.md) · [`docs/spikes/phonemize-module-reuse.md`](docs/spikes/phonemize-module-reuse.md) |
-| M13 — Whole-Book Streaming AI Transform | 🚧 **In progress** (in-place streaming transforms; pause/resume/cancel; playback blocked while running. ADR-0012.) | [`tasks/plan-m13-whole-book-streaming-transform.md`](tasks/plan-m13-whole-book-streaming-transform.md) · [`docs/adr/0012-whole-book-streaming-transform.md`](docs/adr/0012-whole-book-streaming-transform.md) |
+**M11 — Pluggable Playback Engines, Pausable Synthesis, Mobile Synth Lockdown** (🚧 in progress).
 
-**Read first:** [`docs/VISION.md`](docs/VISION.md) (the why) → [`docs/ROADMAP.md`](docs/ROADMAP.md) (milestones) → [`docs/prds/M0-foundation.md`](docs/prds/M0-foundation.md) (what shipped, patterns, conventions).
+- Spec: [`SPEC.md`](SPEC.md) · Plan: [`tasks/plan.md`](tasks/plan.md) · Checklist: [`tasks/todo.md`](tasks/todo.md)
+- Decisions: [`docs/adr/0010-playback-engine-architecture.md`](docs/adr/0010-playback-engine-architecture.md) · Spike gate: [`docs/spikes/web-audio-mobile.md`](docs/spikes/web-audio-mobile.md)
+- Parallel phase (M13 — named-phase deviation): [`spec/m13-whole-book-streaming-transform.md`](spec/m13-whole-book-streaming-transform.md) + [`tasks/plan-m13-whole-book-streaming-transform.md`](tasks/plan-m13-whole-book-streaming-transform.md)
+- Ship history: [`CHANGELOG.md`](CHANGELOG.md) · Direction + lifecycle: [`docs/ROADMAP.md`](docs/ROADMAP.md)
+
+Live status (checkpoints, per-task state) lives in `tasks/todo.md` + the "Resuming" section of `tasks/plan.md` — not here.
+
+**Read first:** [`docs/VISION.md`](docs/VISION.md) (the why) → [`docs/ROADMAP.md`](docs/ROADMAP.md) (direction + the DEFINE→SHIP lifecycle) → [`SPEC.md`](SPEC.md) (current phase requirements). For established patterns, read a relevant archived phase spec under [`tasks/archive/`](tasks/archive/).
 
 ## Commands
 
@@ -47,7 +36,9 @@ Workspace: pnpm, `web/` (the app) + `spike/piper/` + `spike/web-audio/` (throwaw
 ## Layout
 
 ```
-docs/          VISION, ROADMAP, prds/, spikes/, adr/
+docs/          VISION, ROADMAP, spikes/, adr/, gotchas.md
+tasks/         plan.md + todo.md (current phase), plan-m13-*.md (parallel phase), archive/<date>-<slug>/
+spec/          named-phase specs (deviation only — e.g. m13-*.md); canonical spec is root SPEC.md
 web/           the PWA — Vite 8 + React 19 + TS + RR8 + Tailwind v4 + Biome
   src/
     routes/      landing, reader, settings, not-found (+ tests)
@@ -57,15 +48,14 @@ web/           the PWA — Vite 8 + React 19 + TS + RR8 + Tailwind v4 + Biome
     lib/         db.ts (idb), storage.ts (persist), media-session.ts,
                  crypto/ (aes.ts, prf.ts — ADR-0007 biometric key caching)
 spike/piper/   throwaway Piper TTS validation app
-.opencode/     harness config (agents, rules, skills, tech) — versioned
 ```
 
-## Conventions (from `.opencode/tech/{typescript,react}/`)
+## Conventions
 
 - **Strict TS**, branded IDs, interfaces-before-impl
 - **Container/presentational split**; Context for low-frequency state only (settings/theme) — never playback
 - **Variant types** for async states: `{ type: 'loading' } | { type: 'ready'; data }`
-- IndexedDB via `idb`; OPFS for large blobs (models, audio) lands in M2/M5
+- IndexedDB via `idb`; OPFS for large blobs (models, audio)
 - Tests co-located (`*.test.tsx`), Vitest + Testing Library + fake-indexeddb
 - No comments unless asked; Biome handles format/import-order
 - **Icons: [`lucide-react`](https://lucide.dev) (tree-shaken ESM, `stroke="currentColor"`).** Import each icon by name (`import { Play } from 'lucide-react'`) — never import the whole lib. Decorative icons are auto-`aria-hidden`; the button's `aria-label`/visible text is the accessible name. Size via Tailwind: `h-4 w-4` inline with `text-sm`, `h-5 w-5` standalone/FAB; color flows from the button's `text-*` token (never hard-coded). The `❯~` brand mark in `Nav.tsx` stays as ASCII (not an icon).
@@ -105,10 +95,10 @@ Full detail lives in [`docs/gotchas.md`](docs/gotchas.md) — **read the relevan
 
 Open opencode in this repo and say, e.g.:
 
-> "Continue with M1 — Upload & Read. Read `docs/ROADMAP.md` and `docs/prds/M0-foundation.md` for established patterns, then plan M1 following the spec-driven workflow. The Piper integration is M2, not M1."
+> "Continue the current phase. Read `docs/ROADMAP.md` for direction + the DEFINE→SHIP lifecycle, then pick up `tasks/plan.md` + `tasks/todo.md`. For established patterns, read a relevant archived spec under `tasks/archive/<date>-<slug>/SPEC.md`. M13 runs in parallel — see `spec/m13-*.md`."
 
-The agent auto-loads this file + `.opencode/rules/tech.md`. The **Status table above** links each milestone to its PRD, ADR, and task plan — start there for the relevant docs. For TTS work, also read [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) (M2 recommendations: pin ORT 1.18.0, mirror wasm locally, single-threaded default, Web Worker, pre-download model to OPFS).
+For TTS work, also read [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) (M2 recommendations: pin ORT 1.18.0, mirror wasm locally, single-threaded default, Web Worker, pre-download model to OPFS).
 
 ## Non-goals (launch scope)
 
-Cloud TTS/sync/store, accounts, multi-user, native app stores, DRM circumvention. See `docs/VISION.md`.
+Cloud TTS/sync/store, accounts, multi-user, native app stores, DRM circumvention. See [`docs/VISION.md`](docs/VISION.md).
