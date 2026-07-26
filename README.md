@@ -8,8 +8,8 @@ See [`docs/VISION.md`](docs/VISION.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md) 
 
 ## Status
 
-In active development. Current phase: **M11 — Pluggable Playback Engines, Pausable Synthesis** (see [`SPEC.md`](SPEC.md) · [`tasks/plan.md`](tasks/plan.md) · [`CHANGELOG.md`](CHANGELOG.md)).
+In active development; between phases. Last shipped: **M11 — Pluggable Playback Engines, Pausable Synthesis** (2026-07-19); next phase starts at `/spec` (see [`CHANGELOG.md`](CHANGELOG.md) · [`docs/ROADMAP.md`](docs/ROADMAP.md)). Shipped specs live under [`docs/specs/`](docs/specs/).
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE). TTS engine + voice models are also MIT via `@mintplex-labs/piper-tts-web` — see [`docs/adr/0002-mit-piper-pipeline.md`](docs/adr/0002-mit-piper-pipeline.md).
+MIT. See [`LICENSE`](LICENSE). TTS engine + voice models are also MIT via `@mintplex-labs/piper-tts-web` — see [`docs/adrs/0002-mit-piper-pipeline.md`](docs/adrs/0002-mit-piper-pipeline.md).
