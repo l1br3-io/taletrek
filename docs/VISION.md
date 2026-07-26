@@ -39,19 +39,7 @@ TaleTrek solves this by running a neural TTS engine (Piper) entirely in the brow
 
 ## Goals
 
-| Goal | Target |
-|------|--------|
-| Listen to any ebook hands-free, phone locked | Audio survives screen lock, background, and app closure on iOS and Android |
-| Read every common ebook format | PDF, EPUB, MOBI, and TXT supported at launch |
-| Clean audio — only the story | Links, images, footnotes, page numbers, and headers automatically skipped |
-| Choose your voice | Multiple Piper TTS voices available, switchable at runtime |
-| Works fully offline | After first load, no internet connection required — books, TTS, and playback all run on-device |
-| Zero cost to the user | $0 — no app purchase, no subscription, no cloud fees |
-| No app store needed | Installable PWA — works from a URL on iOS and Android |
-| Read comfortably on any screen | Responsive from phone to desktop — reader controls, chapter outline, and navigation adapt to a small screen |
-| Refine any paragraph on the fly | Per-paragraph transforms (AI or deterministic) fix OCR noise, change casing, or translate just the line you're on |
-| Fast from upload to audio | First audio plays within seconds of selecting a book |
-| Open source | MIT-licensed, forkable, community-driven |
+The launch read-aloud core — upload any ebook format, clean the audio stream, speak it on-device, play it background-safe on any screen, fully offline, for free — has shipped. Ship history lives in [`CHANGELOG.md`](../CHANGELOG.md); the current phase and forward direction live in [`ROADMAP.md`](./ROADMAP.md). This vision no longer tracks feature checkboxes — it states the *why* that the rest of the planning hierarchy decomposes.
 
 ### Non-goals (explicitly out of scope)
 
@@ -88,20 +76,6 @@ TaleTrek solves this by running a neural TTS engine (Piper) entirely in the brow
 
 ## Where this fits
 
-This vision is the top of the planning hierarchy. Direction and milestones live in [`ROADMAP.md`](./ROADMAP.md).
-
-```text
-VISION   "What problem does this project solve?"     VISION.md  (this)
-  │
-ROADMAP  "What directions / milestones?"              ROADMAP.md
-  │
-PRDs     "Detailed requirements per area"            docs/prds/   (forthcoming)
-  │
-EPICS    "Trackable feature groups"
-  │
-ISSUES   "Specific, actionable work items"
-  │
-PRs      "Implementation against issues"
-  │
-RELEASES "Ship it, tag it, communicate it"
-```
+This vision is the top of the planning hierarchy — the *why*. Direction,
+milestones, and the delivery lifecycle (DEFINE → PLAN → BUILD → VERIFY →
+REVIEW → SHIP) live in [`ROADMAP.md`](./ROADMAP.md).
