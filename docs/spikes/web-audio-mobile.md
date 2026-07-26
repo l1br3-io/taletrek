@@ -2,7 +2,7 @@
 
 > **Status:** Desktop mechanics verified (2026-07-18). Real-iPhone + Android checklist pending — **required gate** before `useWebAudioPlayer` ships as the default mobile engine.
 > **Track:** B (de-risking). Gates M11 / ADR-0010.
-> **Companion:** [`../adr/0010-playback-engine-architecture.md`](../adr/0010-playback-engine-architecture.md), [`../adr/0006-mobile-mse-streaming.md`](../adr/0006-mobile-mse-streaming.md).
+> **Companion:** [`../adrs/0010-playback-engine-architecture.md`](../adrs/0010-playback-engine-architecture.md), [`../adrs/0006-mobile-mse-streaming.md`](../adrs/0006-mobile-mse-streaming.md).
 
 ## Goal
 

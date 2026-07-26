@@ -2,18 +2,15 @@
 
 > Free, open-source **reading companion** by **l1br3**: turn any ebook (PDF/EPUB/MOBI/TXT) into an audiobook with on-device neural TTS (Piper, WASM). Ships as an installable, offline-first PWA. No backend, no cloud, MIT-licensed.
 
-## Current phase
+## Current effort
 
-**M11 — Pluggable Playback Engines, Pausable Synthesis, Mobile Synth Lockdown** (🚧 in progress).
+**None active (between phases).** The last effort — M11 (Pluggable Playback Engines, Pausable Synthesis) — shipped 2026-07-19; its spec lives at [`docs/specs/playback-engines-pausable-synth/spec.md`](docs/specs/playback-engines-pausable-synth/spec.md). The next effort starts fresh at `/spec`, which creates `docs/specs/<effort-slug>/spec.md`.
 
-- Spec: [`SPEC.md`](SPEC.md) · Plan: [`tasks/plan.md`](tasks/plan.md) · Checklist: [`tasks/todo.md`](tasks/todo.md)
-- Decisions: [`docs/adr/0010-playback-engine-architecture.md`](docs/adr/0010-playback-engine-architecture.md) · Spike gate: [`docs/spikes/web-audio-mobile.md`](docs/spikes/web-audio-mobile.md)
-- Parallel phase (M13 — named-phase deviation): [`spec/m13-whole-book-streaming-transform.md`](spec/m13-whole-book-streaming-transform.md) + [`tasks/plan-m13-whole-book-streaming-transform.md`](tasks/plan-m13-whole-book-streaming-transform.md)
+Live status always lives in the current effort's `spec.md` frontmatter (`status:`) + `todo.md` — **not here**.
+
 - Ship history: [`CHANGELOG.md`](CHANGELOG.md) · Direction + lifecycle: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 
-Live status (checkpoints, per-task state) lives in `tasks/todo.md` + the "Resuming" section of `tasks/plan.md` — not here.
-
-**Read first:** [`docs/VISION.md`](docs/VISION.md) (the why) → [`docs/ROADMAP.md`](docs/ROADMAP.md) (direction + the DEFINE→SHIP lifecycle) → [`SPEC.md`](SPEC.md) (current phase requirements). For established patterns, read a relevant archived phase spec under [`tasks/archive/`](tasks/archive/).
+**Read first:** [`docs/VISION.md`](docs/VISION.md) (the why) → [`docs/ROADMAP.md`](docs/ROADMAP.md) (direction + the DEFINE→SHIP lifecycle) → the current effort's `docs/specs/<slug>/spec.md` (when one is active). For established patterns, read a relevant shipped spec under [`docs/specs/`](docs/specs/).
 
 ## Commands
 
@@ -36,18 +33,23 @@ Workspace: pnpm, `web/` (the app) + `spike/piper/` + `spike/web-audio/` (throwaw
 ## Layout
 
 ```
-docs/          VISION, ROADMAP, spikes/, adr/, gotchas.md
-tasks/         plan.md + todo.md (current phase), plan-m13-*.md (parallel phase), archive/<date>-<slug>/
-spec/          named-phase specs (deviation only — e.g. m13-*.md); canonical spec is root SPEC.md
-web/           the PWA — Vite 8 + React 19 + TS + RR8 + Tailwind v4 + Biome
+docs/
+  VISION.md       narrative "why" (frozen)
+  ROADMAP.md      themes + milestones + DEFINE→SHIP lifecycle
+  specs/          one dir per effort: <slug>/{spec.md, plan.md, todo.md, tasks/00N-*.md}
+                  spec.md frontmatter carries lifecycle: status draft|active|shipped|abandoned
+  adrs/           immutable decisions (supersede via a new ADR only)
+  gotchas.md      runtime gotchas (G1…)
+  spikes/         de-risking notes (piper-wasm, web-audio-mobile, …)
+web/              the PWA — Vite 8 + React 19 + TS + RR8 + Tailwind v4 + Biome
   src/
-    routes/      landing, reader, settings, not-found (+ tests)
-    components/  Layout, Nav (presentational)
-    context/     settings.tsx (SettingsProvider — low-freq Context)
-    hooks/       useSetting
-    lib/         db.ts (idb), storage.ts (persist), media-session.ts,
-                 crypto/ (aes.ts, prf.ts — ADR-0007 biometric key caching)
-spike/piper/   throwaway Piper TTS validation app
+    routes/         landing, reader, settings, not-found (+ tests)
+    components/     Layout, Nav (presentational)
+    context/        settings.tsx (SettingsProvider — low-freq Context)
+    hooks/          useSetting
+    lib/            db.ts (idb), storage.ts (persist), media-session.ts,
+                    crypto/ (aes.ts, prf.ts — ADR-0007 biometric key caching)
+spike/piper/       throwaway Piper TTS validation app
 ```
 
 ## Conventions
@@ -95,7 +97,7 @@ Full detail lives in [`docs/gotchas.md`](docs/gotchas.md) — **read the relevan
 
 Open opencode in this repo and say, e.g.:
 
-> "Continue the current phase. Read `docs/ROADMAP.md` for direction + the DEFINE→SHIP lifecycle, then pick up `tasks/plan.md` + `tasks/todo.md`. For established patterns, read a relevant archived spec under `tasks/archive/<date>-<slug>/SPEC.md`. M13 runs in parallel — see `spec/m13-*.md`."
+> "We're between phases — M11 shipped. Read `docs/ROADMAP.md` for direction + the DEFINE→SHIP lifecycle, then start the next effort at `/spec` (it creates `docs/specs/<slug>/spec.md` + `plan.md` + `todo.md`). For established patterns, read a relevant shipped spec under `docs/specs/<slug>/spec.md`."
 
 For TTS work, also read [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) (M2 recommendations: pin ORT 1.18.0, mirror wasm locally, single-threaded default, Web Worker, pre-download model to OPFS).
 
