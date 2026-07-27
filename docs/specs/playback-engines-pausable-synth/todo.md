@@ -1,9 +1,8 @@
 # M11 — Pluggable Playback Engines · Task checklist
 
 > Archived record. Task detail + dependencies live in [`plan.md`](./plan.md);
-> spec in [`SPEC.md`](./SPEC.md); decisions in
-> [`../../../docs/adrs/0010-playback-engine-architecture.md`](../../../docs/adrs/0010-playback-engine-architecture.md);
-> spike gate in [`../../../docs/spikes/web-audio-mobile.md`](../../../docs/spikes/web-audio-mobile.md).
+> spec in [`SPEC.md`](./spec.md); decisions in
+> [`../../adrs/0010-playback-engine-architecture.md`](../../adrs/0010-playback-engine-architecture.md).
 > Checkpoints gate phases: A spike → B engine scaffolding → C Web Audio plays → D pausable → E lockdown → F shipped.
 
 ## Shipped
@@ -22,7 +21,7 @@ G22–G24 written as established facts — and by the author's verification.
 - T4 (`useParagraphAudioQueue` extraction) was descoped per the plan's own note — `useWebAudioPlayer` owns its lookahead.
 
 ## Phase 0 — Spike (gate)
-- [x] T1 — Web Audio spike page + real-device checklist (`spike/web-audio/`, `docs/spikes/web-audio-mobile.md`)
+- [x] T1 — Web Audio spike page + real-device checklist (`spike/web-audio/`)
 
 Checkpoint A — Spike passes on real iPhone + Chrome Android · ✅
 

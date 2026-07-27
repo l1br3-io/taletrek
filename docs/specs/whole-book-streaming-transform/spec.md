@@ -6,7 +6,6 @@ shipped: 2026-07-20
 
 # SPEC — M13: Whole-Book Streaming AI Transform
 
-> **Status:** ✅ Shipped · 2026-07-20.
 > Archived plan: [`plan.md`](./plan.md) ·
 > Decisions: [`docs/adrs/0012-whole-book-streaming-transform.md`](../../../docs/adrs/0012-whole-book-streaming-transform.md) ·
 > Resume precedent: [`docs/adrs/0009-upload-wake-lock-and-boot-sweep.md`](../../../docs/adrs/0009-upload-wake-lock-and-boot-sweep.md) ·

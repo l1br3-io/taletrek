@@ -6,8 +6,7 @@ shipped: 2026-07-11
 
 # PRD: M0 — Foundation
 
-> **Status:** Ready to implement.
-> **Companions:** [`../../VISION.md`](../VISION.md), [`../../ROADMAP.md`](../ROADMAP.md), [`../spikes/piper-wasm.md`](../spikes/piper-wasm.md), [`../adrs/0001-piper-gpl-licensing.md`](../adrs/0001-piper-gpl-licensing.md).
+> **Companions:** [`../../VISION.md`](../../VISION.md), [`../../ROADMAP.md`](../../ROADMAP.md), [`../../adrs/0001-piper-gpl-licensing.md`](../../adrs/0001-piper-gpl-licensing.md).
 
 ## Objective
 
@@ -50,9 +49,8 @@ pnpm test:watch           # vitest
 ```
 taletrek/
 ├── docs/
-│   ├── VISION.md  ROADMAP.md
-│   ├── prds/M0-foundation.md
-│   ├── spikes/piper-wasm.md
+│   ├── VISION.md  ROADMAP.md  CHANGELOG.md  gotchas.md
+│   ├── specs/<slug>/            # one dir per effort: spec.md, plan.md, todo.md
 │   └── adrs/0001-piper-gpl-licensing.md
 ├── web/
 │   ├── public/

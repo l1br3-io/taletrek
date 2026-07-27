@@ -2,7 +2,7 @@
 
 - **Status:** Superseded by [ADR-0002](./0002-mit-piper-pipeline.md) (kept for history)
 - **Date:** 2026-07-11
-- **Companions:** [`../../VISION.md`](../../VISION.md), [`../spikes/piper-wasm.md`](../spikes/piper-wasm.md)
+- **Companions:** [`../VISION.md`](../VISION.md)
 
 ## Context
 
@@ -24,7 +24,7 @@ TaleTrek bundles Piper (compiled to WASM) into the distributed PWA. This looks l
 - TaleTrek's distributed PWA includes a GPL-3.0 component. Downstream forks inherit GPL obligations for the engine portion.
 - The vision document's "MIT-licensed" claim must be **nuanced** before launch to "MIT app with GPL-3.0 Piper engine." (Tracked doc update.)
 - A `THIRD_PARTY_NOTICES.md` and clear LICENSE disclosure are required pre-launch.
-- **Revisit if** an MIT-licensed neural TTS of comparable quality and browser viability emerges — the architecture isolates the engine behind a contract (`docs/prds/M0-foundation.md` keeps TTS out of M0), making a future swap feasible.
+- **Revisit if** an MIT-licensed neural TTS of comparable quality and browser viability emerges — the architecture isolates the engine behind a contract ([`../specs/foundation/spec.md`](../specs/foundation/spec.md) keeps TTS out of M0), making a future swap feasible.
 
 ## Alternatives considered
 

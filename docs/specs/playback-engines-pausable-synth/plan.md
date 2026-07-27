@@ -1,7 +1,7 @@
 # Plan: M11 — Pluggable Playback Engines, Pausable Synthesis, Mobile Synth Lockdown
 
 > **Status:** ✅ Shipped · 2026-07-19 (archived).
-> Spec: [`SPEC.md`](./SPEC.md) · Decisions: [`docs/adrs/0010-playback-engine-architecture.md`](../../../docs/adrs/0010-playback-engine-architecture.md) · Spike gate: [`docs/spikes/web-audio-mobile.md`](../../../docs/spikes/web-audio-mobile.md) · Checklist: [`todo.md`](./todo.md).
+> Spec: [`SPEC.md`](./spec.md) · Decisions: [`docs/adrs/0010-playback-engine-architecture.md`](../../adrs/0010-playback-engine-architecture.md) · Checklist: [`todo.md`](./todo.md).
 
 ## Problem
 
@@ -121,7 +121,7 @@ In `ReaderPane` (already subscribes to `useUploadState`): coarse-pointer **and**
 
 ## Phase 0 — Spike (gate)
 
-`docs/spikes/web-audio-mobile.md` + a throwaway spike page under `spike/web-audio/` (pattern after `spike/piper/`). Verify on a **real iPhone** and **Chrome Android** (gotcha #5: desktop MCP can't test lock):
+A throwaway spike page under `spike/web-audio/` (pattern after `spike/piper/`). Verify on a **real iPhone** and **Chrome Android** (gotcha #5: desktop MCP can't test lock):
 
 1. iOS lock: `AudioContext.state` transitions (`suspended` / `'interrupted'`); `ctx.resume()` from a tap reliably continues mid-paragraph.
 2. iOS tab-hidden-screen-on (jog mode — user in another app, screen on): does the context keep running? If it suspends, same accepted tap-play (documented).
@@ -161,7 +161,7 @@ In `ReaderPane` (already subscribes to `useUploadState`): coarse-pointer **and**
 
 | # | Task | Acceptance | Verify | Files |
 | --- | --- | --- | --- | --- |
-| T1 | Web Audio spike page + real-device checklist | Spike runs on desktop; checklist documents the 5 behaviours above | manual on real iPhone + Android; desktop MCP smoke | `spike/web-audio/**`, `docs/spikes/web-audio-mobile.md` |
+| T1 | Web Audio spike page + real-device checklist | Spike runs on desktop; checklist documents the 5 behaviours above | manual on real iPhone + Android; desktop MCP smoke | `spike/web-audio/**` |
 | T2 | ADR-0010 + ROADMAP + AGENTS status | ADR written; ROADMAP gets M11 + M9-deferred note; AGENTS status table updated | docs review | `docs/adrs/0010-*.md`, `docs/ROADMAP.md`, `AGENTS.md` |
 | T3 | Engine registry + settings + Advanced UI | `resolveMobileEngine` matrix passes; settings key migrates; Advanced group renders with support badges | unit test (resolution matrix) + settings test | `lib/playback/engines.ts`, `context/settings.tsx`, `routes/settings/SettingsPage.tsx`, `*.test.ts(x)` |
 | T4 | Extract `useParagraphAudioQueue` | Desktop player behaviour unchanged; queue module unit-tested | existing `useDesktopPlayer`/`useParagraphPlayer` tests green | `players/useParagraphAudioQueue.ts`, `useDesktopPlayer.ts` |

@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-17
-- **Companion:** [`0004-api-key-threat-model.md`](./0004-api-key-threat-model.md) (augmented, not superseded), [`../prds/M6-ai-transforms.md`](../prds/M6-ai-transforms.md)
+- **Companion:** [`0004-api-key-threat-model.md`](./0004-api-key-threat-model.md) (augmented, not superseded), [`../specs/ai-transforms/spec.md`](../specs/ai-transforms/spec.md)
 
 ## Context
 

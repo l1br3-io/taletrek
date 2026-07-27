@@ -7,8 +7,7 @@ started: 2026-07-16
 
 > **Abandoned** — deferred per [ADR-0010](../../adrs/0010-playback-engine-architecture.md); superseded for the common case by M11 ([`docs/specs/playback-engines-pausable-synth/`](../playback-engines-pausable-synth/spec.md)). Dormant scaffolding retained as the fallback path.
 
-> **Status:** Planned — documentation complete, implementation not started.
-> **Companions:** [`../VISION.md`](../VISION.md), [`../ROADMAP.md`](../ROADMAP.md), [`M3-jog.md`](M3-jog.md), [`M8-audio-cache.md`](M8-audio-cache.md), [`../adrs/0006-mobile-mse-streaming.md`](../adrs/0006-mobile-mse-streaming.md).
+> **Companions:** [`../../VISION.md`](../../VISION.md), [`../../ROADMAP.md`](../../ROADMAP.md), [`../jog-mode/spec.md`](../jog-mode/spec.md), [`../audio-cache/spec.md`](../audio-cache/spec.md), [`../../adrs/0006-mobile-mse-streaming.md`](../../adrs/0006-mobile-mse-streaming.md).
 
 ## Objective
 
@@ -289,7 +288,7 @@ offsets[i] = offsets[i-1] + durations[i-1]
 
 | # | Task | Acceptance | Verify | Files |
 | --- | --- | --- | --- | --- |
-| T1 | Write ADR-0006 + PRD M9 | ADR + PRD written. ROADMAP + AGENTS.md updated. | docs review | `docs/adrs/0006-*.md`, `docs/prds/M9-*.md`, `docs/ROADMAP.md`, `AGENTS.md` |
+| T1 | Write ADR-0006 + spec | ADR + spec written. ROADMAP + AGENTS.md updated. | docs review | `docs/adrs/0006-*.md`, `docs/specs/mobile-streaming-deferred/spec.md`, `docs/ROADMAP.md`, `AGENTS.md` |
 | T2 | Spike: FFmpeg WASM + MSE | (a) FFmpeg WASM loads in worker. (b) Encodes test WAV → valid fMP4 with AAC+H.264. (c) `MediaSource` + `SourceBuffer` on `<video>` plays fMP4. (d) `timestampOffset` sequences two segments correctly. | tests + Chrome DevTools MCP: zero console errors, audio plays, `sourceBuffer.buffered` shows expected ranges | `web/src/lib/audio/ffmpeg.ts` (initial), test file |
 | T3 | FFmpeg WASM wrapper + encode worker | `initFfmpeg()` with OPFS loading + progress. `encodeWavToFmp4(wav): Promise<{fmp4, duration}>`. Worker protocol: receives `{wav}`, returns `{fmp4, duration}`. Lazy-loads core from OPFS/CDN. | unit test (mock worker round-trip) | `web/src/lib/audio/ffmpeg.ts`, `encode-worker.ts`, `.test.ts` |
 | T4 | fMP4 segment IDB cache | `audioSegments` store in `taletrek` DB v4. `getSegment(key)`, `putSegment(key, blob, duration)`, `deleteBookSegments(bookId)`. LRU eviction reusing M8 pattern. | unit test (fake-indexeddb) | `web/src/lib/audio-segment-cache.ts`, `.test.ts`, `web/src/lib/db.ts` |

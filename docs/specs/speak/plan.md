@@ -1,6 +1,6 @@
 # M2 — Speak · Plan
 
-> Per-task detail for [`todo.md`](./todo.md). Spec: [`docs/prds/M2-speak.md`](../docs/prds/M2-speak.md).
+> Per-task detail for [`todo.md`](./todo.md). Spec: [`./spec.md`](./spec.md).
 > Ordering: T1 → T2 → T3 → T4 → (T5 ∥ T6) → T7.
 
 ## Resuming
@@ -54,7 +54,7 @@ throwaway smoke route, and the `ended`-handler `playing`-status guard.
 - **Verify:** `lib/tts/client.test.ts` (mocked worker); manual dev-server synth.
 - **Files:** `web/src/workers/tts.worker.ts`, `web/src/lib/tts/{client,protocol}.ts`, `web/src/lib/tts/client.test.ts`.
 
-Checkpoint A — Engine + worker proven (synthesize WAV from worker, offline-ready) · ☐
+Checkpoint A — Engine + worker proven (synthesize WAV from worker, offline-ready) · ✅
 
 ### T4 — `useParagraphPlayer` hook
 - **Detail:** The chunk-queue predecessor to M3's pre-rendering. Flattens the book's chapters into a paragraph list with stable IDs; keeps a pointer; on `play` synthesizes the current paragraph via the worker client, creates a Blob URL, sets it on a single `<audio>` element, and plays. On `ended`, advances the pointer and synthesizes the next. Exposes `play`/`pause`/`stop`/`next`/`prev`/`seekToParagraph`, `currentParagraphId`, and a status variant `{ idle | loading | playing | paused | ended | error }`. **Revokes the prior Blob URL on every advance and on unmount.** Audio-element interaction is abstracted behind an injectable boundary so unit tests don't need a real `<audio>`.
@@ -63,7 +63,7 @@ Checkpoint A — Engine + worker proven (synthesize WAV from worker, offline-rea
 - **Verify:** `hooks/useParagraphPlayer.test.ts` (stubbed synth fn + fake audio boundary).
 - **Files:** `web/src/hooks/useParagraphPlayer.ts`, `web/src/hooks/useParagraphPlayer.test.ts`.
 
-Checkpoint B — Playback engine works (play a book, auto-advance through paragraphs) · ☐
+Checkpoint B — Playback engine works (play a book, auto-advance through paragraphs) · ✅
 
 ### T5 — Reader read-along UI
 - **Detail:** Wire `useParagraphPlayer` into the `/reader` container; the container owns playback state (variant types). `ReaderView` gains a `currentParagraphId` prop to highlight the spoken paragraph and an `onSeekParagraph(id)` callback for tap-to-seek — stays presentational. New `PlayerBar` (presentational): play/pause, prev/next, and the speed control (read from settings). Show a "loading voice…" / synthesizing state for cold first-synth (~4.3s) and brief inter-paragraph synth (~1s warm).
@@ -79,7 +79,7 @@ Checkpoint B — Playback engine works (play a book, auto-advance through paragr
 - **Verify:** `routes/settings.test.tsx` (extended), `components/VoicePicker.test.tsx`.
 - **Files:** `web/src/context/settings.tsx`, `web/src/routes/settings.tsx`, `web/src/components/VoicePicker.tsx`, tests.
 
-Checkpoint C — Full slice: upload → read → play → read-along, voice + speed wired · ☐
+Checkpoint C — Full slice: upload → read → play → read-along, voice + speed wired · ✅
 
 ### T7 — End-to-end + browser verify
 - **Detail:** Upload a book → play → auto-advances through a chapter with the highlight following; tap a paragraph → seeks; download a second voice → switch → voice changes; adjust speed → applies live; reload → voice + speed persist; go offline after the model is cached → playback still works. Zero console errors; zero cdnjs network requests.
@@ -88,7 +88,7 @@ Checkpoint C — Full slice: upload → read → play → read-along, voice + sp
 - **Verify:** full `pnpm verify` green; MCP browser run.
 - **Files:** wiring + minor fixes across the slice.
 
-Checkpoint D — Speak slice shipped & `pnpm verify` green · ☐
+Checkpoint D — Speak slice shipped & `pnpm verify` green · ✅
 
 ---
 

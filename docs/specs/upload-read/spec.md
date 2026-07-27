@@ -6,8 +6,7 @@ shipped: 2026-07-11
 
 # PRD: M1 — Upload & Read
 
-> **Status:** Ready to implement.
-> **Companions:** [`../../VISION.md`](../VISION.md), [`../../ROADMAP.md`](../ROADMAP.md), [`M0-foundation.md`](M0-foundation.md), [`../spikes/piper-wasm.md`](../spikes/piper-wasm.md).
+> **Companions:** [`../../VISION.md`](../../VISION.md), [`../../ROADMAP.md`](../../ROADMAP.md), [`../foundation/spec.md`](../foundation/spec.md).
 
 ## Objective
 
@@ -204,7 +203,7 @@ Follows `.opencode/tech/typescript/patterns.md` + `react/patterns.md` and the M0
 | T5  | Parse Worker + client         | worker wraps dispatcher; client promise wrapper; error path                                 | client test (mocked worker)                        | `workers/parse.worker.ts`, `lib/parse/client.ts`, test                   |
 | T6  | Reader UI (container + views) | loader; upload state machine; `UploadButton` + `ReaderView`; landing CTA; replaces placeholder | component tests for all 4 states                   | `routes/{reader,landing}.tsx`, `components/{UploadButton,ReaderView}.tsx`, tests |
 | T7  | End-to-end + browser verify   | upload→parse→persist→render for all 3 formats; reload persists; offline; 0 console errors   | MCP run, `pnpm verify`                             | (wiring + minor fixes)                                                 |
-| T8  | MOBI spike (deferred)         | decision: minimal self-written parser or punt; add `'mobi'` format if viable                | spike doc + parser tests if built                  | `docs/spikes/mobi.md`, maybe `lib/parse/mobi.ts`                         |
+| T8  | MOBI parser (deferred)        | minimal self-written KF7 parser, ships as `'mobi'` format                                | parser tests                                        | `lib/parse/mobi.ts`                                                      |
 
 **Ordering:** T1 → T2 → (T3 ∥ T4) → T5 → T6 → T7; T8 independent after T2's contract exists.
 

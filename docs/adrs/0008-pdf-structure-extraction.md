@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (revised 2026-07-18 — supersedes the original 3-tier M10 design)
 - **Date:** 2026-07-18
-- **Companion:** [`../prds/M10-pdf-structure.md`](../prds/M10-pdf-structure.md), [`0002-mit-piper-pipeline.md`](./0002-mit-piper-pipeline.md) (licensing)
+- **Companion:** [`../specs/pdf-structure/spec.md`](../specs/pdf-structure/spec.md), [`0002-mit-piper-pipeline.md`](./0002-mit-piper-pipeline.md) (licensing)
 
 ## Context
 

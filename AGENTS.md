@@ -40,7 +40,6 @@ docs/
                   spec.md frontmatter carries lifecycle: status draft|active|shipped|abandoned
   adrs/           immutable decisions (supersede via a new ADR only)
   gotchas.md      runtime gotchas (G1…)
-  spikes/         de-risking notes (piper-wasm, web-audio-mobile, …)
 web/              the PWA — Vite 8 + React 19 + TS + RR8 + Tailwind v4 + Biome
   src/
     routes/         landing, reader, settings, not-found (+ tests)
@@ -98,8 +97,6 @@ Full detail lives in [`docs/gotchas.md`](docs/gotchas.md) — **read the relevan
 Open opencode in this repo and say, e.g.:
 
 > "We're between phases — M11 shipped. Read `docs/ROADMAP.md` for direction + the DEFINE→SHIP lifecycle, then start the next effort at `/spec` (it creates `docs/specs/<slug>/spec.md` + `plan.md` + `todo.md`). For established patterns, read a relevant shipped spec under `docs/specs/<slug>/spec.md`."
-
-For TTS work, also read [`docs/spikes/piper-wasm.md`](docs/spikes/piper-wasm.md) (M2 recommendations: pin ORT 1.18.0, mirror wasm locally, single-threaded default, Web Worker, pre-download model to OPFS).
 
 ## Non-goals (launch scope)
 

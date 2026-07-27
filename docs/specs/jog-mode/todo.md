@@ -1,7 +1,7 @@
 # M3 — Jog Mode · Task checklist
 
 > Source of truth for `/status` and `/build`. Task detail + dependencies live in
-> [`plan.md`](./plan.md); spec in [`docs/prds/M3-jog.md`](../docs/prds/M3-jog.md).
+> [`plan.md`](./plan.md); spec in [`./spec.md`](./spec.md).
 > Checkpoints gate phases: A pre-render → B media session → C background + UX → D milestone verified.
 
 ## Phase 1 — Pre-render engine

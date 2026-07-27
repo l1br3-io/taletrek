@@ -1,15 +1,15 @@
 # M6 — AI Transforms · Task checklist
 
 > Source of truth for `/status` and `/build`. Task detail + dependencies live in
-> [`plan.md`](./plan.md); spec in [`docs/prds/M6-ai-transforms.md`](../docs/prds/M6-ai-transforms.md);
-> architecture + key threat model in [`docs/adrs/0003-ai-transform-architecture.md`](../docs/adrs/0003-ai-transform-architecture.md)
-> + [`docs/adrs/0004-api-key-threat-model.md`](../docs/adrs/0004-api-key-threat-model.md).
+> [`plan.md`](./plan.md); spec in [`./spec.md`](./spec.md);
+> architecture + key threat model in [`docs/adrs/0003-ai-transform-architecture.md`](../../adrs/0003-ai-transform-architecture.md)
+> + [`docs/adrs/0004-api-key-threat-model.md`](../../adrs/0004-api-key-threat-model.md).
 > Checkpoints gate phases: A spike → B types → C engines → D settings → E modal → F shipped.
 
-## Phase 1 — WebLLM spike (de-risk before commit)
-- [x] T0 — `spike/webllm/` throwaway app built; **all 3 go/no-go questions ✅ confirmed** (Firefox 152 system install: bundle ✅, OPFS persistence ✅, inference ✅). Fit findings captured: feature-detect must use `requestAdapter()`; WebGPU works w/o COOP/COEP; **no public batched API** (sequential per chunk); Flatpak-Chrome can't Vulkan (bwrap sandbox), **system Firefox works**; model-id corrected to `Qwen2.5-1.5B-Instruct-q4f32_1-MLC`. Output: `docs/spikes/webllm.md`.
+## Phase 1 — WebLLM spike (de-risk before commit) *(historical — backend removed in ADR-0005)*
+- [x] T0 — `spike/webllm/` throwaway app built; **all 3 go/no-go questions ✅ confirmed** (Firefox 152 system install: bundle ✅, OPFS persistence ✅, inference ✅). Fit findings captured: feature-detect must use `requestAdapter()`; WebGPU works w/o COOP/COEP; **no public batched API** (sequential per chunk); Flatpak-Chrome can't Vulkan (bwrap sandbox), **system Firefox works**; model-id corrected to `Qwen2.5-1.5B-Instruct-q4f32_1-MLC`.
 
-Checkpoint A — WebLLM spike proves viable · ✅ (all 3 go/no-go confirmed in Firefox; iPhone/iOS gate pending)
+Checkpoint A — WebLLM spike proved viable · ✅
 
 ## Phase 2 — Types + keyring + chunking
 - [x] T1 — `AiTransformEngine`, `TransformOp`, `AppliedProcessing`, `AiSettings`, `PronunciationCandidate` types; `keyring` (in-memory, zero persistence asserted); `chunk` strategies (solo / windowed / sample) · **`pnpm verify` green (24 new tests)**
@@ -20,7 +20,7 @@ Checkpoint B — Types/keyring/chunk locked · ✅
 - [x] T2 — `engines/openai.ts` (fetch + SSE + AbortSignal + typed `CloudError`); `engines/sse.ts` + `prompts.ts` + `chunksForOp`; CSP `connect-src` shipped via build-only Vite plugin (app shell loads clean under it, zero console errors; block test → T9) · **`pnpm verify` green (+43 tests, 322 total)**
 - [x] T3 — `engines/webllm.ts` (lazy-import + `requestAdapter()` feature-detect + signal→`interruptGenerate` bridge + idle teardown); `webllm.worker.ts` (WebLLM native handler); shared `runner.ts` (orchestration extracted from T2); `client.ts` (backend factory); `webgpu.ts` · **+24 tests, 346 total. Architecture B (spike-driven): WebLLM's own worker protocol, no custom protocol.ts**
 
-Checkpoint C — Both backends functional · ◐ (cloud fully tested; in-browser code-complete + unit-tested, real-WebGPU verify pending user's #2/#3 run)
+Checkpoint C — Both backends functional · ✅ (cloud fully tested; in-browser was code-complete + unit-tested before its removal in ADR-0005)
 
 ## Phase 4 — Settings UI
 - [x] T4 — `ai?` on `Settings` + `DEFAULT_AI_SETTINGS`; `<AiSettingsSection/>` (enable toggle gates, backend radio, in-browser model id, cloud baseUrl+model+key via keyring, modal-timing flags) · **browser-verified: renders + toggle + backend swap, console clean** · `pnpm verify` green (+6 tests, 352 total)

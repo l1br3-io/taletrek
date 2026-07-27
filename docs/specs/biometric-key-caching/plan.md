@@ -1,7 +1,7 @@
 # M6.1 — Biometric Key Caching (WebAuthn PRF) · Plan
 
-> Decision: [`docs/adrs/0007-biometric-key-caching.md`](../docs/adrs/0007-biometric-key-caching.md).
-> Augments (does not supersede) [`docs/adrs/0004-api-key-threat-model.md`](../docs/adrs/0004-api-key-threat-model.md) — in-memory stays the default and fallback.
+> Decision: [`docs/adrs/0007-biometric-key-caching.md`](../../adrs/0007-biometric-key-caching.md).
+> Augments (does not supersede) [`docs/adrs/0004-api-key-threat-model.md`](../../adrs/0004-api-key-threat-model.md) — in-memory stays the default and fallback.
 
 ## Goal
 

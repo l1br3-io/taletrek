@@ -6,8 +6,7 @@ shipped: 2026-07-13
 
 # PRD: M8 — Audio Cache
 
-> **Status:** Ready to implement.
-> **Companions:** [`../VISION.md`](../VISION.md), [`../ROADMAP.md`](../ROADMAP.md), [`M3-jog.md`](M3-jog.md), [`M5-library-offline.md`](M5-library-offline.md), [`../spikes/piper-wasm.md`](../spikes/piper-wasm.md).
+> **Companions:** [`../../VISION.md`](../../VISION.md), [`../../ROADMAP.md`](../../ROADMAP.md), [`../jog-mode/spec.md`](../jog-mode/spec.md), [`../library-offline/spec.md`](../library-offline/spec.md).
 
 ## Objective
 

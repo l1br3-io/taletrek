@@ -1,6 +1,6 @@
 # M3 — Jog Mode · Plan
 
-> Per-task detail for [`todo.md`](./todo.md). Spec: [`docs/prds/M3-jog.md`](../docs/prds/M3-jog.md).
+> Per-task detail for [`todo.md`](./todo.md). Spec: [`./spec.md`](./spec.md).
 > Ordering: T1 → T2 → T3 → (T4 ∥ T5) → T6.
 
 ## Resuming
@@ -70,7 +70,7 @@ buffering-ahead indicator; `playsinline` + iOS meta tags for background readines
   back-pressure + chapter skip.
 - **Files:** `web/src/hooks/useParagraphPlayer.ts`, `useParagraphPlayer.test.ts`.
 
-Checkpoint A — Pre-render proven (gapless playback through a chapter) · ☐
+Checkpoint A — Pre-render proven (gapless playback through a chapter) · ✅
 
 ### T2 — Media Session module
 - **Detail:** Extend `lib/media-session.ts` (currently a capability probe) with
@@ -112,7 +112,7 @@ Checkpoint A — Pre-render proven (gapless playback through a chapter) · ☐
   or inject a fake; assert metadata + handler dispatch.
 - **Files:** `web/src/routes/reader.tsx`, `reader.test.tsx`.
 
-Checkpoint B — Media Session wired (metadata + lock-screen handlers active) · ☐
+Checkpoint B — Media Session wired (metadata + lock-screen handlers active) · ✅
 
 ### T4 — Background-audio readiness
 - **Detail:** Add `playsinline` + `preload="auto"` to the audio element in
@@ -145,7 +145,7 @@ Checkpoint B — Media Session wired (metadata + lock-screen handlers active) ·
 - **Verify:** `components/PlayerBar.test.tsx` (extended).
 - **Files:** `web/src/components/PlayerBar.tsx`, `PlayerBar.test.tsx`, `routes/reader.tsx`.
 
-Checkpoint C — Background-ready + UX complete · ☐
+Checkpoint C — Background-ready + UX complete · ✅
 
 ### T6 — End-to-end + browser verify
 - **Detail:** Upload a book → play → gapless through a chapter with the queue
@@ -161,7 +161,7 @@ Checkpoint C — Background-ready + UX complete · ☐
 - **Verify:** full `pnpm verify` green; MCP browser run.
 - **Files:** wiring + minor fixes across the slice.
 
-Checkpoint D — Jog slice shipped & `pnpm verify` green · ☐
+Checkpoint D — Jog slice shipped & `pnpm verify` green · ✅
 
 ---
 

@@ -1,10 +1,10 @@
 # Plan: M13 — Whole-Book Streaming AI Transform
 
 > **Status:** ✅ Shipped · 2026-07-20 (archived).
-> Spec: [`SPEC.md`](./SPEC.md) ·
-> Decisions: [`docs/adrs/0012-whole-book-streaming-transform.md`](../../../docs/adrs/0012-whole-book-streaming-transform.md) ·
-> Resume precedent: [`docs/adrs/0009-upload-wake-lock-and-boot-sweep.md`](../../../docs/adrs/0009-upload-wake-lock-and-boot-sweep.md) ·
-> Synth pause/resume precedent: [`docs/adrs/0010-playback-engine-architecture.md`](../../../docs/adrs/0010-playback-engine-architecture.md).
+> Spec: [`SPEC.md`](./spec.md) ·
+> Decisions: [`docs/adrs/0012-whole-book-streaming-transform.md`](../../adrs/0012-whole-book-streaming-transform.md) ·
+> Resume precedent: [`docs/adrs/0009-upload-wake-lock-and-boot-sweep.md`](../../adrs/0009-upload-wake-lock-and-boot-sweep.md) ·
+> Synth pause/resume precedent: [`docs/adrs/0010-playback-engine-architecture.md`](../../adrs/0010-playback-engine-architecture.md).
 >
 > **Implementation note:** the build diverged from this plan — the transform
 > driver landed at `web/src/lib/transform/manager.ts` (not the planned
@@ -13,7 +13,7 @@
 > original intent; the archived SPEC is the requirements layer.
 
 > The Problem / Decisions / Architecture / State-machine sections live in
-> [`SPEC.md`](./SPEC.md); this file holds the build plan only.
+> [`SPEC.md`](./spec.md); this file holds the build plan only.
 
 ## Phases
 

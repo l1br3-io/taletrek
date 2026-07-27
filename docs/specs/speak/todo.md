@@ -1,7 +1,7 @@
 # M2 — Speak · Task checklist
 
 > Source of truth for `/status` and `/build`. Task detail + dependencies live in
-> [`plan.md`](./plan.md); spec in [`docs/prds/M2-speak.md`](../docs/prds/M2-speak.md).
+> [`plan.md`](./plan.md); spec in [`./spec.md`](./spec.md).
 > Checkpoints gate phases: A engine+worker → B playback engine → C read-along UI → D milestone verified.
 
 ## Phase 1 — Engine + worker

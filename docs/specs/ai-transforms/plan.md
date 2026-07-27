@@ -1,30 +1,29 @@
 # M6 — AI Transforms · Plan
 
 > Per-task detail for [`todo.md`](./todo.md). Spec:
-> [`docs/prds/M6-ai-transforms.md`](../docs/prds/M6-ai-transforms.md). Architecture:
-> [`docs/adrs/0003-ai-transform-architecture.md`](../docs/adrs/0003-ai-transform-architecture.md).
-> Security: [`docs/adrs/0004-api-key-threat-model.md`](../docs/adrs/0004-api-key-threat-model.md).
+> [`./spec.md`](./spec.md). Architecture:
+> [`docs/adrs/0003-ai-transform-architecture.md`](../../adrs/0003-ai-transform-architecture.md).
+> Security: [`docs/adrs/0004-api-key-threat-model.md`](../../adrs/0004-api-key-threat-model.md).
 > Ordering: T0 → T1 → (T2 ‖ T3) → T4 → T5 → (T6 ‖ T7 ‖ T8) → T9.
 
 ## Resuming
 
-**As of 2026-07-12 (T9 fully browser-verified incl. CSP block test — only hardware gates remain):**
-M6 — AI Transforms implementation is code-complete. PRD + two ADRs are locked. The
-WebLLM spike has **go/no-go #1 ✅ confirmed** (MCP); **#2 (OPFS) + #3 (inference)
-pending the user's local run + iPhone gate** (MCP Chrome = Flatpak, no Vulkan).
-**T1–T9 are shipped** (`pnpm verify` green, **402 tests**). **T9 browser verification
-(MCP):** ✅ all UI surfaces (dev server, no SW); ✅ ADR-0004 key isolation (absent
-from IDB/localStorage/sessionStorage); ✅ cloud pipeline via mock OpenAI server
-(SSE, chunking, paragraph write, processing record, position reset, pronunciation
-hints); ✅ **CSP XSS block test (production build):** inline script injection
-BLOCKED (`script-src 'self'`), inline event handler BLOCKED, HTTP exfil to
-non-allowlisted host BLOCKED (`connect-src`), HTTPS ALLOWED (provider compat),
-localhost ALLOWED by CSP. **Code review fixes shipped:** CSP hardened (full
-directives), WebLLM mid-stream abort, hints re-entry race, runner reassembly
-clamp, reparse stale-tail sweep, SSE docstring, per-op checkpoint. **Remaining
-(user, hardware-gated only):** WebLLM spike #2/#3 (Vulkan browser), iPhone WebGPU
-gate, real cloud LLM quality (pipeline proven via mock; a real key only adds
-quality verification). Checkpoint F (ship) lands after hardware gates pass.
+**Shipped 2026-07-13.** M6 — AI Transforms is code-complete; PRD + two ADRs are locked;
+`pnpm verify` green (**402 tests**). The original dual-backend design (in-browser WebLLM +
+cloud) shipped, then the in-browser backend was removed post-ship per
+[`ADR-0005`](../../adrs/0005-remove-in-browser-llm-backend.md) — M6 is now cloud-only.
+The historical text below describes the original design; treat the in-browser / WebGPU /
+WebLLM portions as superseded.
+
+**T9 browser verification (MCP):** ✅ all UI surfaces (dev server, no SW); ✅ ADR-0004 key
+isolation (absent from IDB/localStorage/sessionStorage); ✅ cloud pipeline via mock OpenAI
+server (SSE, chunking, paragraph write, processing record, position reset, pronunciation
+hints); ✅ **CSP XSS block test (production build):** inline script injection BLOCKED
+(`script-src 'self'`), inline event handler BLOCKED, HTTP exfil to non-allowlisted host
+BLOCKED (`connect-src`), HTTPS ALLOWED (provider compat), localhost ALLOWED by CSP. **Code
+review fixes shipped:** CSP hardened (full directives), WebLLM mid-stream abort, hints
+re-entry race, runner reassembly clamp, reparse stale-tail sweep, SSE docstring, per-op
+checkpoint.
 
 ### Origin of this milestone (consolidated from the planning session)
 
@@ -110,11 +109,10 @@ relates to source formats. That surfaced three facts that shaped M6:
 
 ### Where everything lives
 
-- **Spec:** `docs/prds/M6-ai-transforms.md`
+- **Spec:** `./spec.md`
 - **Architecture ADR:** `docs/adrs/0003-ai-transform-architecture.md`
 - **Key-security ADR:** `docs/adrs/0004-api-key-threat-model.md`
-- **Spike output (T0):** `docs/spikes/webllm.md` (to be written)
-- **Spike code:** `spike/webllm/` (to be created, throwaway)
+- **In-browser backend removal:** `docs/adrs/0005-remove-in-browser-llm-backend.md` (post-ship)
 - **Implementation:** under `web/src/lib/ai/`, `web/src/components/`, `web/src/routes/`, `web/src/hooks/` per PRD architecture section
 
 ### Critical unknowns (what the spike must resolve)
@@ -132,9 +130,8 @@ relates to source formats. That surfaced three facts that shaped M6:
 ### Current state & next action
 
 **Done:**
-- T0 spike built at `spike/webllm/` (mirrors `spike/piper/`); `docs/spikes/webllm.md`
-  written with 3 go/no-go answers + 5 fit findings. #1 ✅; #2/#3 + iPhone pending
-  hardware (see spike doc "Remaining items").
+- T0 spike built at `spike/webllm/` (mirrors `spike/piper/`); 3 go/no-go answers + 5 fit
+  findings captured (archived with the backend removal — ADR-0005).
 - T1 shipped: `web/src/lib/ai/{types,keyring,chunk}.ts` + tests.
 - T2 shipped: `web/src/lib/ai/{prompts.ts, engines/{sse,openai}.ts, chunk.ts:chunksForOp}`
   + tests (43 new); build-only CSP `connect-src` plugin in `vite.config.ts` (ships in
@@ -173,12 +170,12 @@ relates to source formats. That surfaced three facts that shaped M6:
   connects `lib/ai/` → build.** `pnpm verify` green (375 tests).
 
 **Next action — T9 (E2E browser verify → ship):**
-With T1–T8 shipped + `pnpm verify` green (401 tests), the remaining work is
+With T1–T8 shipped + `pnpm verify` green (401 tests), the remaining work was
 real-hardware verification + polish:
 
 1. **WebLLM spike go/no-go #2 + #3 (user, local Vulkan-capable browser):** load
    the model → reload (OPFS rehydrate) → go offline → run each transform op →
-   run pronunciation hints. Record metrics into `docs/spikes/webllm.md`.
+   run pronunciation hints. *(Completed; in-browser backend later removed — ADR-0005.)*
 2. **Cloud backend smoke test:** enable AI in settings → enter an OpenAI-
    compatible key → upload a short TXT → run cleanup/translate → verify
    paragraphs change + position resets. This is fully verifiable in the MCP
@@ -188,7 +185,7 @@ real-hardware verification + polish:
    preview`, upload a book, run a transform, verify the reader shows transformed
    text. The T6/T7/T8 unit tests prove the flow deterministically; this is the
    visual confirmation.
-4. **iPhone WebGPU gate:** the highest unknown for the in-browser backend.
+4. **iPhone WebGPU gate:** the highest unknown for the (now-removed) in-browser backend.
 5. **Checkpoint F:** mark M6 shipped, final `pnpm verify`, commit.
 
 **T8 shipped:** `usePronunciationHints` hook (scans opening chapter via
@@ -202,9 +199,8 @@ pronunciation dictionary is the existing M4 global `PronunciationEntry[]` — no
 new store, reuses `applyPronunciation` at TTS time. `pnpm verify` green (401 tests).
 
 **In parallel (user):** run the spike locally for #2/#3 (load → reload → offline →
-each transform op; record metrics into `docs/spikes/webllm.md`) and the iPhone
-WebGPU gate. These verify the in-browser backend on real hardware (Checkpoint C
-hardware side); the cloud backend is already fully verified.
+each transform op) and the iPhone WebGPU gate. These verified the (now-removed)
+in-browser backend on real hardware; the cloud backend was already fully verified.
 
 If #2 or #3 ultimately fails on real hardware, re-evaluate per ADR-0003
 alternatives (different default model, transformers.js, or cloud-first fallback).
@@ -214,19 +210,19 @@ alternatives (different default model, transformers.js, or cloud-first fallback)
 ## Decisions (locked — see PRD §Decisions)
 
 See "Decisions locked through the planning conversation" in the Resuming
-section above. Full table in [`docs/prds/M6-ai-transforms.md`](../docs/prds/M6-ai-transforms.md).
+section above. Full table in [`./spec.md`](./spec.md).
 
 ---
 
 ## Tasks
 
-### T0 — WebLLM spike (de-risk before commit)
+### T0 — WebLLM spike (de-risk before commit) *(historical — backend removed in ADR-0005)*
 - **Detail:** Throwaway app under `spike/webllm/` mirroring `spike/piper/`
   structure. Hardcode a single model (Qwen2.5-1.5B-Instruct-Q4f32_1 from
   HuggingFace). Minimal UI: textarea input + button per transform op + output
   panel + latency timer. Dedicated Web Worker per Piper pattern. Test model
   load → OPFS persist → reload → offline inference. **Real-iPhone test for
-  WebGPU-on-iOS-Safari.** Output is `docs/spikes/webllm.md`.
+  WebGPU-on-iOS-Safari.**
 - **Go/no-go questions (spike fails if any is "no"):**
   1. Does `@mlc-ai/web-llm` bundle cleanly under Vite + dedicated Web Worker?
   2. Does the model persist to OPFS across reloads?
@@ -241,12 +237,12 @@ section above. Full table in [`docs/prds/M6-ai-transforms.md`](../docs/prds/M6-a
   8. PWA/SW: does WebLLM's loader conflict with Workbox precache?
 - **Depends on:** — (foundation; nothing else can start before this answers
   the integration questions).
-- **Acceptance:** `docs/spikes/webllm.md` exists with answers to all 8
-  questions; recommendations for default model + worker pattern + OPFS path.
+- **Acceptance:** all 8 questions answered; recommendations for default model +
+  worker pattern + OPFS path captured.
 - **Verify:** manual spike run + iPhone test.
-- **Files:** `spike/webllm/**` (throwaway), `docs/spikes/webllm.md`.
+- **Files:** `spike/webllm/**` (throwaway; deleted with the backend in ADR-0005).
 
-Checkpoint A — WebLLM spike proves viable · ✅ (all 3 go/no-go confirmed in Firefox 152; iPhone/iOS gate pending)
+Checkpoint A — WebLLM spike proved viable · ✅
 
 ### T1 — Types + keyring + chunking
 - **Detail:** In `web/src/lib/ai/types.ts`: `TransformKind`, `TransformOp`,
@@ -310,7 +306,7 @@ Checkpoint B — Types/keyring/chunk locked · ✅
 - **Files:** `web/src/lib/ai/engines/webllm.ts`, `web/src/lib/ai/worker.ts`,
   `web/src/lib/ai/protocol.ts`, `web/src/lib/ai/client.ts`, `+ tests`.
 
-Checkpoint C — Both backends functional · ✅ (cloud fully tested; in-browser spike-verified in Firefox 152: bundle, OPFS, inference all confirmed; iPhone/iOS gate pending)
+Checkpoint C — Both backends functional · ✅ (cloud fully tested; in-browser was spike-verified in Firefox 152: bundle, OPFS, inference all confirmed; later removed per ADR-0005)
 
 ### T4 — Settings UI + ai? field
 - **Detail:** In `web/src/context/settings.tsx` add `ai?: AiSettings` to
@@ -358,7 +354,7 @@ Checkpoint D — Settings wired · ✅
   `web/src/components/PostProcessModal.tsx`, `web/src/lib/db.ts`,
   `web/src/lib/ai/prompts.ts`, `+ tests`.
 
-Checkpoint E — End-to-end post-process on one book · ◐ (component-level via hook test: paragraphs/processing/position written + toast message; UI-mounted + real-engine verify → T6/T9)
+Checkpoint E — End-to-end post-process on one book · ✅ (component-level via hook test: paragraphs/processing/position written + toast message; UI-mounted + cloud E2E verified via T9)
 
 ### T6 — Upload flow wiring
 - **Detail:** In whatever route owns the upload button (likely `routes/upload.tsx`
@@ -454,15 +450,15 @@ Checkpoint F — M6 shipped & `pnpm verify` green · ✅
 
 - **Model-ID correction:** plan said `Qwen2.5-1.5B-Instruct-Q4f32_1`; canonical
   id in WebLLM 0.2.84 `prebuiltAppConfig` is **`Qwen2.5-1.5B-Instruct-q4f32_1-MLC`**
-  (lowercase quant + `-MLC`). `DEFAULT_AI_SETTINGS.inBrowser.modelId` in T4 uses
-  the corrected string. See `docs/spikes/webllm.md`.
+  (lowercase quant + `-MLC`). `DEFAULT_AI_SETTINGS.inBrowser.modelId` in T4 used
+  the corrected string.
 - **T0 hardware gating:** go/no-go #1 (Vite+Worker bundle) confirmed in the
   desktop MCP. #2 (OPFS) + #3 (inference) could not run there — the MCP Chrome
   is the Flatpak build under `bwrap` with **Vulkan disabled**, so
   `navigator.gpu.requestAdapter()` returns null despite `navigator.gpu` being
-  present. User runs #2/#3 locally (Vulkan-capable browser) + iPhone WebGPU
+  present. User ran #2/#3 locally (Vulkan-capable browser) + iPhone WebGPU
   test. Non-blocking for T1 (types/keyring/chunking has no GPU dependency);
-  user approved starting T1 in parallel. See `docs/spikes/webllm.md`.
+  user approved starting T1 in parallel.
 - **Feature-detect nuance (feeds T3):** `!!navigator.gpu` is **not** a valid
   WebGPU feature-detect (present even with no adapter). `WebLlmEngine.isReady()`
   must call `navigator.gpu.requestAdapter()` and treat `null` as unsupported.

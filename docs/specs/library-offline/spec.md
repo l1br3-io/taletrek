@@ -6,8 +6,7 @@ shipped: 2026-07-12
 
 # PRD: M5 — Library & Offline
 
-> **Status:** Ready to implement.
-> **Companions:** [`../../VISION.md`](../VISION.md), [`../../ROADMAP.md`](../ROADMAP.md), [`M0-foundation.md`](M0-foundation.md), [`M1-upload-read.md`](M1-upload-read.md), [`M2-speak.md`](M2-speak.md), [`M3-jog.md`](M3-jog.md), [`M4-clean-reading.md`](M4-clean-reading.md), [`../spikes/piper-wasm.md`](../spikes/piper-wasm.md), [`../adrs/0002-mit-piper-pipeline.md`](../adrs/0002-mit-piper-pipeline.md).
+> **Companions:** [`../../VISION.md`](../../VISION.md), [`../../ROADMAP.md`](../../ROADMAP.md), [`../foundation/spec.md`](../foundation/spec.md), [`../upload-read/spec.md`](../upload-read/spec.md), [`../speak/spec.md`](../speak/spec.md), [`../jog-mode/spec.md`](../jog-mode/spec.md), [`../clean-reading/spec.md`](../clean-reading/spec.md), [`../../adrs/0002-mit-piper-pipeline.md`](../../adrs/0002-mit-piper-pipeline.md).
 
 ## Objective
 

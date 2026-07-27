@@ -6,8 +6,7 @@ shipped: 2026-07-23
 
 # PRD: M7 — Reader UX & Mobile
 
-> **Status:** Shipped.
-> **Companions:** [`../../VISION.md`](../VISION.md), [`../../ROADMAP.md`](../ROADMAP.md).
+> **Companions:** [`../../VISION.md`](../../VISION.md), [`../../ROADMAP.md`](../../ROADMAP.md).
 
 ## Objective
 

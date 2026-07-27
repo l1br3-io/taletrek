@@ -6,8 +6,7 @@ shipped: 2026-07-18
 
 # PRD: M10 — PDF Structure (pdfjs Outline + AI Fallback)
 
-> **Status:** Done — shipped alongside ADR-0008.
-> **Companions:** [`../VISION.md`](../VISION.md), [`../ROADMAP.md`](../ROADMAP.md), [`M1-upload-read.md`](M1-upload-read.md), [`../adrs/0008-pdf-structure-extraction.md`](../adrs/0008-pdf-structure-extraction.md).
+> **Companions:** [`../../VISION.md`](../../VISION.md), [`../../ROADMAP.md`](../../ROADMAP.md), [`../upload-read/spec.md`](../upload-read/spec.md), [`../../adrs/0008-pdf-structure-extraction.md`](../../adrs/0008-pdf-structure-extraction.md).
 
 ## Objective
 
@@ -174,7 +173,7 @@ Library → "Outline" → OutlineSheet
 | `web/src/routes/library/OutlineSheet.test.tsx`        | Updated to drop Auto-detect assertions.                                                | -10          |
 | `web/src/routes/library.test.tsx`                     | Removed two Auto-detect flow tests; updated remaining tests for "Re-process outline" label. | -45 / +25    |
 | `docs/adrs/0008-pdf-structure-extraction.md`           | Rewritten for 2-tier (was 3-tier).                                                    | +50 / -80    |
-| `docs/prds/M10-pdf-structure.md`                      | This file — rewritten for shipped 2-tier design.                                      | +130 / -130  |
+| `docs/specs/pdf-structure/spec.md`                    | This file — rewritten for shipped 2-tier design.                                      | +130 / -130  |
 | `docs/ROADMAP.md`                                     | M10 description simplified.                                                            | -2 / +2      |
 | `AGENTS.md`                                           | Gotcha #17 simplified.                                                                 | -2 / +2      |
 | **Net**                                                 |                                                                                        | **~−950 LoC** |

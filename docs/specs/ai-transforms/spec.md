@@ -7,17 +7,12 @@ shipped: 2026-07-13
 # PRD: M6 — AI Transforms
 
 > **Note (post-ship revision):** The on-device **WebLLM / in-browser backend was
-> removed** (see [`../adrs/0005-remove-in-browser-llm-backend.md`](../adrs/0005-remove-in-browser-llm-backend.md)).
+> removed** (see [`../../adrs/0005-remove-in-browser-llm-backend.md`](../../adrs/0005-remove-in-browser-llm-backend.md)).
 > M6 is now **cloud-only**. The historical text below still describes the
 > original dual-backend design; treat the in-browser/WebGPU/WebLLM portions as
-> superseded. The `webllm.md` spike was deleted with the backend.
+> superseded.
 
-> **Status:** Implementation in progress (Checkpoint B). T0 WebLLM spike:
-> go/no-go #1 (Vite+Worker bundle) ✅ confirmed; #2 (OPFS) + #3 (inference)
-> pending real-hardware run — see [`../spikes/webllm.md`](../spikes/webllm.md).
-> T1 (types + keyring + chunking) shipped, `pnpm verify` green. Post-M5; not
-> part of launch-read-aloud core.
-> **Companions:** [`../../VISION.md`](../VISION.md), [`../../ROADMAP.md`](../ROADMAP.md), [`M0-foundation.md`](M0-foundation.md), [`M1-upload-read.md`](M1-upload-read.md), [`M2-speak.md`](M2-speak.md), [`M3-jog.md`](M3-jog.md), [`M4-clean-reading.md`](M4-clean-reading.md), [`M5-library-offline.md`](M5-library-offline.md), [`../adrs/0003-ai-transform-architecture.md`](../adrs/0003-ai-transform-architecture.md), [`../adrs/0004-api-key-threat-model.md`](../adrs/0004-api-key-threat-model.md).
+> **Companions:** [`../../VISION.md`](../../VISION.md), [`../../ROADMAP.md`](../../ROADMAP.md), [`../foundation/spec.md`](../foundation/spec.md), [`../upload-read/spec.md`](../upload-read/spec.md), [`../speak/spec.md`](../speak/spec.md), [`../jog-mode/spec.md`](../jog-mode/spec.md), [`../clean-reading/spec.md`](../clean-reading/spec.md), [`../library-offline/spec.md`](../library-offline/spec.md), [`../../adrs/0003-ai-transform-architecture.md`](../../adrs/0003-ai-transform-architecture.md), [`../../adrs/0004-api-key-threat-model.md`](../../adrs/0004-api-key-threat-model.md).
 
 ## Objective
 
@@ -45,12 +40,12 @@ This milestone **does not change** parsing, M4 cleaning, or playback engine beha
 | ---- | -------- |
 | Scope (v1) | **Cleanup, translate, summarize, simplify, pronunciation-hints.** PDF chapter-boundary detection is a stretch goal — different shape (changes chapter count, not paragraph text), likely lands as a separate "restructure" action, deferred. |
 | Two backends | **Both behind one `AiTransformEngine` interface.** In-browser = default. Cloud = opt-in power-user. **No TaleTrek backend ever** (preserves `VISION.md` non-goals). |
-| In-browser stack | **WebGPU via WebLLM.** Default model: **Qwen2.5-1.5B-Instruct (Q4, ~1GB)** — WebLLM model id `Qwen2.5-1.5B-Instruct-q4f32_1-MLC` (canonical, corrected in the spike). Smallest model that handles translation + instruction-following acceptably. Cached in OPFS, mirrors the Piper pattern (`tts/voices.ts` → `piper.download()`/`stored()`). Switchable in Settings. See [`../spikes/webllm.md`](../spikes/webllm.md). |
+| In-browser stack | **WebGPU via WebLLM** *(removed post-ship — see ADR-0005; documented here for historical context)*. Default model was **Qwen2.5-1.5B-Instruct (Q4, ~1GB)** — WebLLM model id `Qwen2.5-1.5B-Instruct-q4f32_1-MLC`. Was cached in OPFS, mirroring the Piper pattern (`tts/voices.ts` → `piper.download()`/`stored()`); switchable in Settings. |
 | Cloud stack | **OpenAI-compatible HTTP only.** Single `{baseUrl, apiKey, model}` config covers OpenAI, Anthropic, OpenRouter, Groq, Together, Ollama, LM Studio. No per-provider SDKs — one code path, ~90% provider coverage. |
-| API key storage | **In-memory only.** Module-scoped variable, dies on tab close. **Never** written to IndexedDB, localStorage, or sessionStorage. IndexedDB-at-rest and master-passphrase tiers explicitly rejected for v1 — see [ADR-0004](../adrs/0004-api-key-threat-model.md). |
+| API key storage | **In-memory only.** Module-scoped variable, dies on tab close. **Never** written to IndexedDB, localStorage, or sessionStorage. IndexedDB-at-rest and master-passphrase tiers explicitly rejected for v1 — see [ADR-0004](../../adrs/0004-api-key-threat-model.md). |
 | Exfiltration prevention | **Strict CSP `connect-src` allowlist** to known OpenAI-compatible host patterns + `localhost`. Even if XSS reads the key, it can't phone home anywhere except the legitimate provider. Primary security mitigation, more valuable than any at-rest encryption. |
 | Originals policy | **Raw bytes are source of truth** (existing `files` store, gotcha #2). `Chapter.paragraphs` becomes "current view" — transformed if processing has run, original otherwise. Re-process always re-parses from raw bytes via `parseInWorker`; no `transforms?` sidecar field, no layer/toggle UX. |
-| Position invalidation on transform | **Keep `chapterIndex`, reset `paragraphIndex` to 0** when a transform runs. Transforms preserve chapter boundaries (PDF chapter-detection is the stretch exception), so `chapterIndex` stays valid; `paragraphIndex` is meaningless after paragraph-content change. UI shows a one-line toast: *"Transform applied — resumed at start of chapter X."* `progressFraction` is also reset (it was computed against the old paragraph count). Consistent with M5's drift-fallback pattern (`M5-library-offline.md:228`). |
+| Position invalidation on transform | **Keep `chapterIndex`, reset `paragraphIndex` to 0** when a transform runs. Transforms preserve chapter boundaries (PDF chapter-detection is the stretch exception), so `chapterIndex` stays valid; `paragraphIndex` is meaningless after paragraph-content change. UI shows a one-line toast: *"Transform applied — resumed at start of chapter X."* `progressFraction` is also reset (it was computed against the old paragraph count). Consistent with M5's drift-fallback pattern (`../library-offline/spec.md:228`). |
 | Pronunciation UX | **LLM-proposes, user-reviews** (see `clean/pronunciation.ts:15` for the existing apply path). LLM scans first chapter (sample, not whole book), returns confidence-ranked candidates; user bulk-accepts/rejects; accepted entries land in the existing **global** `Settings.cleaning.pronunciation` dictionary. Dictionary stays source of truth — deterministic at TTS time, LLM out of the hot path, hints benefit all books. |
 | Post-processing UX | **Action, not setting.** Surfaces in upload flow + library card menu (M5). Modal lists transforms as opt-in checkboxes, none checked by default. Cancel = proceed without transforms; book lands in library unprocessed. Modal is an offer, not a gate. |
 | Modal timing flags | Two Settings flags govern the upload flow: `modal.beforeUpload` (default **false**) shows modal before file picker opens; `modal.afterUpload` (default **true**) shows modal after parse, before reader opens. **Both on → both fire, post-upload modal pre-filled from pre-upload choices.** Power-user affordance; default (B-only) is the right call for most readers. |
@@ -299,7 +294,7 @@ Follows `.opencode/tech/typescript/patterns.md` + `react/patterns.md` and the M0
 
 | # | Task | Acceptance | Verify | Files |
 | - | ---- | ---------- | ------ | ----- |
-| T0 | **WebLLM spike** | Verify `@mlc-ai/web-llm` loads under Vite + Web Worker + PWA; model downloads to OPFS; one inference round-trip works; document gotchas | `docs/spikes/webllm.md` (new) | throwaway spike under `spike/webllm/` |
+| T0 | **WebLLM spike** *(historical — backend removed in ADR-0005)* | Verified `@mlc-ai/web-llm` loads under Vite + Web Worker + PWA; model downloads to OPFS; one inference round-trip works | archived record | throwaway spike under `spike/webllm/` (deleted with the backend) |
 | T1 | Types + keyring + chunking | `AiTransformEngine`, `TransformOp`, `AppliedProcessing`, `AiSettings` defined; `keyring` set/get/clear round-trip + zero persistence assertion; `chunk` strategies produce expected counts | `lib/ai/{types,chunk,keyring}.test.ts` | `lib/ai/types.ts`, `lib/ai/keyring.ts`, `lib/ai/chunk.ts` |
 | T2 | Cloud engine + CSP | `engines/openai.ts` builds correct requests, parses SSE, aborts on signal; CSP `connect-src` allowlist configured; non-allowlisted host blocked in browser | `lib/ai/engines/openai.test.ts`; browser CSP test | `lib/ai/engines/openai.ts`, `vite.config.ts` (or `index.html` meta) |
 | T3 | WebLLM engine + worker | `engines/webllm.ts` + worker protocol; load → transform → progress events; model cached in OPFS; idle teardown | `lib/ai/engines/webllm.test.ts`; browser MCP run | `lib/ai/engines/webllm.ts`, `lib/ai/protocol.ts`, `lib/ai/worker.ts`, `lib/ai/client.ts` |

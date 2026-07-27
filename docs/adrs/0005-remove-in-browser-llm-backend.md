@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-14
 - **Supersedes:** the in-browser half of [`0003-ai-transform-architecture.md`](./0003-ai-transform-architecture.md) (cloud backend + `AiTransformEngine` interface + ADR-0004 key handling remain in force)
-- **Companion:** [`../prds/M6-ai-transforms.md`](../prds/M6-ai-transforms.md)
+- **Companion:** [`../specs/ai-transforms/spec.md`](../specs/ai-transforms/spec.md)
 
 ## Context
 
@@ -26,7 +26,7 @@ The cloud backend covers the same transforms (cleanup/translate/summarize/simpli
 
 **Remove the in-browser WebLLM backend. M6 is cloud-only.**
 
-- Delete `web/src/lib/ai/engines/webllm.ts`, `webllm.worker.ts`, `webgpu.ts` (feature-detect), the `spike/webllm/` throwaway app, and `docs/spikes/webllm.md`.
+- Delete `web/src/lib/ai/engines/webllm.ts`, `webllm.worker.ts`, `webgpu.ts` (feature-detect), and the throwaway `spike/webllm/` app.
 - Drop the `@mlc-ai/web-llm` dependency and all build/SW special-casing for it (`manualChunks`, `globIgnores`, `webllm-runtime` cache, the worker entry).
 - `AiSettings.backend` narrows from `'in-browser' | 'cloud'` to the literal `'cloud'`; the `inBrowser` field is removed. The `backend` field is retained as a discriminator so `migrateAi()` can read and coerce stale stored `in-browser` settings to `cloud` (keeping `enabled` as-stored).
 - The `AiTransformEngine` interface, the shared `runner.ts`/`prompts.ts`/`chunk.ts`, the cloud `engines/openai.ts` + `engines/sse.ts`, and ADR-0004 (in-memory key) are **unchanged**.
@@ -38,3 +38,9 @@ The cloud backend covers the same transforms (cleanup/translate/summarize/simpli
 - **Negative:** Transforms no longer work offline. This narrows M6's reach for the jog-mode / no-connectivity use case — but the on-device TTS pipeline (the core product) is unaffected and remains fully offline.
 - **Migration:** A user with `backend: 'in-browser'` stored will, after upgrade, see the AI section enabled with an empty cloud provider list. They must add a provider to continue using transforms. `enabled` is preserved so the opt-in signal isn't silently flipped.
 - **Reversibility:** The `AiTransformEngine` contract is intact, so a future local backend (a smaller WebGPU/WASM model, or WASI-compiled runtime) can slot back in without touching the runner, prompts, or UI wiring. This ADR removes a backend, not the abstraction.
+
+## Alternatives considered
+
+- **Keep both backends (status quo).** The strategic argument for the in-browser default was the offline-first promise. Rejected because the costs above (bundle, runtime fragility, quality ceiling, testing burden, model lifecycle) compounded across releases and the cloud path covers the same surface. The on-device **TTS** pipeline (the actual core product) remains fully offline; only AI transforms lose offline support.
+- **Wait for a smaller / better-behaved local model.** A sub-1B model with acceptable translation quality, or a WASI-compiled runtime avoiding WebGPU entirely, could change the calculus. Rejected as a *defer* not a *block* — the abstraction is intact, so a future local backend can slot in without touching the runner, prompts, or UI wiring (see Reversibility above).
+- **Hybrid: keep the in-browser backend as an opt-in power-user path.** Considered; rejected because the build/SW/feature-detect costs apply even when the path is opt-in (the chunks ship regardless), and the cloud path already serves power users with their own provider key.

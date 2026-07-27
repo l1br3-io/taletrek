@@ -6,10 +6,8 @@ shipped: 2026-07-19
 
 # SPEC — M11: Pluggable Playback Engines, Pausable Synthesis, Mobile Synth Lockdown
 
-> **Status:** ✅ Shipped · 2026-07-19.
 > Archived plan: [`plan.md`](./plan.md) · Checklist: [`todo.md`](./todo.md) ·
-> Decisions: [`docs/adrs/0010-playback-engine-architecture.md`](../../../docs/adrs/0010-playback-engine-architecture.md) ·
-> Spike gate: [`docs/spikes/web-audio-mobile.md`](../../../docs/spikes/web-audio-mobile.md).
+> Decisions: [`docs/adrs/0010-playback-engine-architecture.md`](../../../docs/adrs/0010-playback-engine-architecture.md).
 
 ## Problem
 
