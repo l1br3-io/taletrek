@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-15
-- **Companion:** [`../prds/M9-mobile-streaming.md`](../prds/M9-mobile-streaming.md)
+- **Companion:** [`../specs/mobile-streaming-deferred/spec.md`](../specs/mobile-streaming-deferred/spec.md)
 
 ## Context
 
@@ -61,3 +61,14 @@ The mobile engine is a **parallel code path** — desktop playback (`useParagrap
 - **New dependency:** `@ffmpeg/ffmpeg` (latest) — MIT licensed.
 - **DB schema bump:** v3 → v4 (additive `audioSegments` store, no migration of existing records).
 - **Reversibility:** The mobile engine is fully isolated behind the `UseParagraphPlayerResult` interface. If a better approach emerges (e.g., iOS ships audio MSE support), the mobile hook can be swapped without touching desktop, UI, or engine contracts.
+
+## Alternatives considered
+
+Evaluated and rejected before settling on MSE-on-`<video>` (full detail in Context above):
+
+- **PCM-stitch chunks** — same `src`+`play()` lock problem at chunk boundaries.
+- **Whole-chapter blob** — ~80–160 MB PCM per chapter, OOM risk, no compression.
+- **Service Worker streaming** — unproven on iOS Safari for long-form `<audio>` consumption.
+- **Web Audio API** — `AudioContext` suspends when tab hidden on iOS. Not viable. *(This rejection was later revisited and superseded by [ADR-0010](./0010-playback-engine-architecture.md), which accepts the same lock-pause parity as the MSE path.)*
+- **MediaSource Extensions on `<audio>`** — iOS Safari supports MSE only on `<video>`.
+- **Wake Lock only** — doesn't override manual lock button. Complementary, not a solution.

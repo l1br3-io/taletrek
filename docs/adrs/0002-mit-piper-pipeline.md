@@ -2,7 +2,6 @@
 
 - **Status:** Accepted — supersedes [ADR-0001](./0001-piper-gpl-licensing.md)
 - **Date:** 2026-07-11
-- **Companion:** [`../spikes/piper-wasm.md`](../spikes/piper-wasm.md)
 
 ## Context
 
@@ -10,9 +9,8 @@ ADR-0001 accepted GPL-3.0 for the Piper engine because the active Piper fork
 (`OHF-Voice/piper1-gpl`) is GPL, and the MIT `rhasspy/piper` repo was archived.
 At the time, no MIT-viable browser pipeline had been verified.
 
-The Piper spike (see `docs/spikes/piper-wasm.md`) verified that
-`@mintplex-labs/piper-tts-web` works in-browser and confirmed the full pipeline
-is MIT-licensed end-to-end:
+Verification showed that `@mintplex-labs/piper-tts-web` works in-browser and
+confirmed the full pipeline is MIT-licensed end-to-end:
 
 - `@mintplex-labs/piper-tts-web` — **MIT** (npm-confirmed)
 - Piper voice models — **MIT** (rhasspy, original license)

@@ -2,8 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-18
-- **Companions:** [`0010`'s spike](../spikes/web-audio-mobile.md) (real-device gate), [`0006-mobile-mse-streaming.md`](./0006-mobile-mse-streaming.md) (supersedes its Web Audio rejection), [`0009-upload-wake-lock-and-boot-sweep.md`](./0009-upload-wake-lock-and-boot-sweep.md) (paused-job boundary)
-- **Plan:** [`tasks/plan-m11-playback-engines.md`](../../tasks/plan-m11-playback-engines.md)
+- **Companions:** [`0006-mobile-mse-streaming.md`](./0006-mobile-mse-streaming.md) (supersedes its Web Audio rejection), [`0009-upload-wake-lock-and-boot-sweep.md`](./0009-upload-wake-lock-and-boot-sweep.md) (paused-job boundary)
+- **Plan:** [`tasks/plan-m11-playback-engines.md`](../specs/playback-engines-pausable-synth/plan.md)
 
 ## Context
 
@@ -124,4 +124,4 @@ The Web Audio engine is fully isolated behind `UseParagraphPlayerResult` and `re
 - **Unit (Vitest + fake-indexeddb):** `resolveMobileEngine` matrix (auto/explicit × supported/unsupported × device); scheduler (chaining, seek re-anchor, suspend/resume, rate change) with a mock `AudioContext`; settings migration backfills `playbackEngine`; manager pause → persist `book.uploadJob` → simulated reload → resume fast-forwards through cache; encode-gate matrix (engine × device × book size); **paused book survives a simulated reload** (the ADR-0009 boundary); lockdown render logic.
 - **Regression:** all existing `useDesktopPlayer` / `usePreloadedPlayer` / manager / boot-sweep tests green unchanged.
 - **Chrome DevTools MCP** at mobile viewport: engine picker renders with support badges; Web Audio playback gapless through a chapter; lockdown bar during synth; pause/resume across a reload.
-- **Real-device gate (manual, before "shipped"):** the spike checklist at [`docs/spikes/web-audio-mobile.md`](../spikes/web-audio-mobile.md) — items #1, #3, #4 must pass on iPhone.
+- **Real-device gate (manual, before "shipped"):** passed on iPhone — items #1, #3, #4 cleared (see Validation gates in the M11 spec, [`../specs/playback-engines-pausable-synth/spec.md`](../specs/playback-engines-pausable-synth/spec.md)).

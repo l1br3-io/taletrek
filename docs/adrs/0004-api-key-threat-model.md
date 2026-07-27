@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (default tier). **Augmented** by [`0007-biometric-key-caching.md`](./0007-biometric-key-caching.md) — an opt-in biometric-caching tier was added in M6.1. The in-memory default, the CSP allowlist as primary defence, and the threat-model framing below all remain authoritative.
 - **Date:** 2026-07-12
-- **Companion:** [`../prds/M6-ai-transforms.md`](../prds/M6-ai-transforms.md), [`0003-ai-transform-architecture.md`](./0003-ai-transform-architecture.md), [`0007-biometric-key-caching.md`](./0007-biometric-key-caching.md)
+- **Companion:** [`../specs/ai-transforms/spec.md`](../specs/ai-transforms/spec.md), [`0003-ai-transform-architecture.md`](./0003-ai-transform-architecture.md), [`0007-biometric-key-caching.md`](./0007-biometric-key-caching.md)
 
 ## Context
 
@@ -47,7 +47,7 @@ export function clearApiKey(): void { key = undefined }
 ## Consequences
 
 - **UX cost: re-enter key per session.** Acceptable for a power-user feature. Most transforms are batch operations done in one sitting; the friction is bounded. The transformed output itself persists in `Chapter.paragraphs`, so future reads of the same book don't need the key.
-- **Tab-close mid-transform loses the key but not progress.** Per-paragraph completion is checkpointed to IndexedDB (per `M6-ai-transforms.md` risks table); resuming requires only re-entering the key.
+- **Tab-close mid-transform loses the key but not progress.** Per-paragraph completion is checkpointed to IndexedDB (per `ai-transforms/spec.md` risks table); resuming requires only re-entering the key.
 - **IndexedDB / localStorage / sessionStorage dumps show no key.** This is verifiable in browser DevTools and is part of the M6 acceptance criteria (Success Criterion #3).
 - **CSP allowlist must be maintained.** New providers require a Settings-driven extension to the allowlist for the user's session. User-configured `baseUrl` is automatically allowlisted for that session.
 - **Tier-2 (IndexedDB at-rest) and Tier-3 (master-passphrase encryption)** are explicitly **not** built. They would add UX friction (master password) without adding real security (the JS still decrypts). Revisit only if power users explicitly request "remember key" and accept the documented risk.

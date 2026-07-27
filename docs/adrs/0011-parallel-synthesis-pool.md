@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (verified 2026-07-19 on iPhone + desktop)
 - **Date:** 2026-07-19
-- **Companions:** [`0006-mobile-mse-streaming.md`](./0006-mobile-mse-streaming.md) (COOP/COEP rejection — why we don't use ORT threads), [`0009-upload-wake-lock-and-boot-sweep.md`](./0009-upload-wake-lock-and-boot-sweep.md) (resume contract preserved), [`0010-playback-engine-architecture.md`](./0010-playback-engine-architecture.md) (pluggable engines — pool is pre-synth only, playback stays singleton), [`docs/spikes/phonemize-module-reuse.md`](../spikes/phonemize-module-reuse.md) (follow-up optimisation)
+- **Companions:** [`0006-mobile-mse-streaming.md`](./0006-mobile-mse-streaming.md) (COOP/COEP rejection — why we don't use ORT threads), [`0009-upload-wake-lock-and-boot-sweep.md`](./0009-upload-wake-lock-and-boot-sweep.md) (resume contract preserved), [`0010-playback-engine-architecture.md`](./0010-playback-engine-architecture.md) (pluggable engines — pool is pre-synth only, playback stays singleton)
 
 ## Context
 
@@ -16,7 +16,7 @@ Today every layer is strictly sequential:
 
 The line `ort.env.wasm.numThreads = navigator.hardwareConcurrency` at `session.ts:126` is **effectively a no-op in production**. ORT pthreads require `SharedArrayBuffer`, which requires cross-origin isolation (COOP/COEP) headers, which the project has rejected repeatedly (M2, M3, ADR-0006) for the "any static host works (incl. GitHub Pages)" property. ORT is also hard-pinned to `1.18.0` (gotcha #1 — `@mintplex-labs/piper-tts-web` hardcodes the ORT wasm URL to cdnjs@1.18.0; any other version deadlocks inference).
 
-Intra-worker concurrency is blocked independently of ORT: the phonemize Emscripten module's MEMFS is global per worker. The `predictChain` Promise chain in `PiperSession.predict` is the explicit guard against re-entrant MEMFS corruption. Removing it safely is a separate spike (`docs/spikes/phonemize-module-reuse.md`).
+Intra-worker concurrency is blocked independently of ORT: the phonemize Emscripten module's MEMFS is global per worker. The `predictChain` Promise chain in `PiperSession.predict` is the explicit guard against re-entrant MEMFS corruption. Removing it safely is a separate future effort (audit `callMain` re-entrancy).
 
 What **is** cleanly parallelisable: multiple Worker realms, each with its own `PiperEngine` + `PiperSession` + resident ORT session + phonemize MEMFS. The IDB audio cache is content-addressed (`voiceId:normVersion:sha256(text)`) and shared across workers, so two workers writing different paragraphs never conflict. `returnAudio: false` (already used by the upload pipeline) keeps WAVs in-worker — no main-thread structured-clone round-trip per paragraph.
 
@@ -91,11 +91,11 @@ The singleton client recovers from fatal errors via an in-place `resetEngine` (c
 ## Consequences
 
 - **Mobile upload ≈ 2× faster**; **desktop upload ≈ 4–8× faster**. The full speedup lands only on real hardware — jsdom can't measure it.
-- **iOS memory pressure is the gating risk.** Pool size 2 is the documented safe ceiling, but the real-device spike (`docs/spikes/web-audio-mobile.md` pattern) is a hard gate before this hits production. A worker that OOMs is recovered via the fatal-error path (terminate + respawn), but repeated OOMs under sustained mobile memory pressure would thrash — the recovery is best-effort, not a guarantee.
+- **iOS memory pressure is the gating risk.** Pool size 2 is the documented safe ceiling, but real-device verification was a hard gate before this hit production (passed 2026-07-19 on iPhone — see Validation gates). A worker that OOMs is recovered via the fatal-error path (terminate + respawn), but repeated OOMs under sustained mobile memory pressure would thrash — the recovery is best-effort, not a guarantee.
 - **Cold-start cost unchanged for the first paragraph.** Lazy spin-up means worker 0 pays the same ~4s model load as before. Workers 1..N pay it concurrently on their first dispatch — net faster than sequential even on cold start.
 - **Resume contract unchanged.** ADR-0009's `done` counter remains monotonic; the M8 cache is content-addressed so out-of-order completion doesn't desync resume. The persisted `lastFlatIndex` / `lastChapterTitle` / etc. fields are UI-display-only (per `types.ts`), so reflecting the most-recently-completed paragraph rather than the last contiguous one is fine — both are accurate "where the user got to" hints.
 - **Reader/playback path is untouched.** The singleton `ttsClient` keeps its one-worker model; the reader's cache-miss re-synth path, the per-¶ look-ahead, and the Settings voice picker are all unchanged. No risk to the playback hot path.
-- **Future: `phonemize-module-reuse` spike** (composable, not required). The comment at `session.ts:28-30` already flags this as a worthwhile optimisation — keeping one Emscripten module alive across predicts instead of re-instantiating per call. It's independent of the pool (speeds up every predict, in any worker) and is a prerequisite for any future intra-worker concurrency. See `docs/spikes/phonemize-module-reuse.md`.
+- **Future: phonemize module reuse** (composable, not required). The comment at `session.ts:28-30` already flags this as a worthwhile optimisation — keeping one Emscripten module alive across predicts instead of re-instantiating per call. It's independent of the pool (speeds up every predict, in any worker) and is a prerequisite for any future intra-worker concurrency. Tracked as a future effort, not yet scoped.
 
 ## Out of scope
 
