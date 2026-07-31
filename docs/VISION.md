@@ -46,7 +46,7 @@ The launch read-aloud core — upload any ebook format, clean the audio stream, 
 **At launch — NOT shipping:**
 
 - Cloud-based TTS voices — all synthesis runs on-device via Piper WASM; no audio is sent to or processed by a server.
-- Cloud storage or syncing — books live in the browser's IndexedDB; no account, no cloud sync.
+- A hosted cloud library or sync — books live in the browser's IndexedDB; no account, no TaleTrek-operated cloud. (Self-hostable personal-server sync is a later, opt-in track — see [ADR-0013](./adrs/0013-off-device-synth-and-portable-bundles.md).)
 - Online ebook store or library integration — users bring their own files.
 - Real-time speech recognition / voice commands.
 - Multi-user or social features (sharing notes, ratings, reading groups).
@@ -55,8 +55,8 @@ The launch read-aloud core — upload any ebook format, clean the audio stream, 
 **Across all phases — NOT building:**
 
 - Paid tiers or subscriptions — the app is always free; sustainability comes from community contributions and the open-source model, never paywalls.
-- Cloud dependency for core functionality — the entire read-aloud pipeline works offline; the internet is only needed for the initial page load and optional voice model downloads.
-- Server-side processing of user content — no user book text or audio ever leaves their device.
+- Cloud dependency for the *default* experience — the entire read-aloud pipeline works offline; the internet is only needed for the initial page load and optional voice model downloads.
+- A TaleTrek-operated hosted cloud or multi-tenant SaaS — there is no TaleTrek-run backend. (An **optional, self-hostable companion track** — desktop synth app + personal Docker server — is in scope as of [ADR-0013](./adrs/0013-off-device-synth-and-portable-bundles.md); it is user-owned, off by default, and never weakens the offline-first PWA.)
 - DRM circumvention — TaleTrek reads files the user already has; it does not strip or bypass copy protection.
 
 ---

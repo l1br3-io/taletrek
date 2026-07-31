@@ -32,3 +32,13 @@ Thumbs.db
 *.log
 npm-debug.log*
 pnpm-debug.log*
+
+# rust
+target/
+
+# generated bundle dev artifacts (canonical fixtures are committed under crates/synth/tests/fixtures)
+*.taletrek
+*.taletrek-lib
+!crates/synth/tests/fixtures/
+!crates/synth/tests/fixtures/*.taletrek
+!crates/synth/tests/fixtures/*.taletrek-lib

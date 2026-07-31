@@ -84,3 +84,18 @@ Shipped efforts live under [`docs/specs/`](./specs/). Ship history: [`CHANGELOG.
 - **Platform & ecosystem** — cross-platform desktop app, browser extension, CarPlay/Bluetooth casting.
 - **Advanced voices** — additional open-source TTS engines (Coqui, eSpeak), custom voice training, multilingual books.
 - **Accessibility** — high-contrast themes, dyslexia-friendly fonts, screen-reader-optimized navigation.
+
+## Active track — Off-device synthesis + portable bundles (ADR-0013)
+
+An **optional, self-hostable companion track** that moves the slow synthesis step off the phone onto standalone Rust apps, with books flowing between apps as portable `.taletrek` files. The default offline-first PWA (on-device Piper) is unchanged — this track is additive. See [`adrs/0013-off-device-synth-and-portable-bundles.md`](./adrs/0013-off-device-synth-and-portable-bundles.md).
+
+Four efforts, each shippable on its own:
+
+| # | Effort | State |
+| --- | --- | --- |
+| T1 | `portable-bundle-format` — format spec + Rust `crates/synth` crate | 🔨 active ([spec](./specs/portable-bundle-format/spec.md)) |
+| T2 | `desktop-synth-app` — standalone Rust synth tool (import text-only bundle → export full bundle) | queued |
+| T3 | `spa-bundle-import-export` — TS bundle reader/writer + UI in the SPA | queued |
+| T4 | `personal-server` — Rust Docker library server + worker-mode synth | queued |
+
+Tiers: **(1)** SPA alone (on-device synth, exists today) · **(2)** SPA + Desktop (off-device synth via bundle exchange) · **(3)** + Server (central library, always-on synth, sharing).
