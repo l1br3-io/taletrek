@@ -3,12 +3,12 @@
 > Spec: [`spec.md`](./spec.md) · Plan: [`plan.md`](./plan.md) · Track ADR: [`../../adrs/0013-off-device-synth-and-portable-bundles.md`](../../adrs/0013-off-device-synth-and-portable-bundles.md).
 > Track this file for live status; flip `[ ]` → `[x]` as work lands.
 
-## Phase 1 — Workspace + CLI skeleton
-- [ ] Root `Cargo.toml` updated: `members = ["crates/*", "desktop/*"]`
-- [ ] `desktop/Cargo.toml` (binary `taletrek-desktop`, deps: taletrek-synth, clap, rayon, ureq, dirs, anyhow)
-- [ ] `desktop/src/main.rs` + `cli.rs` — clap `synth` | `resynth` subcommands with shared `CommonArgs`
-- [ ] `cargo run -p taletrek-desktop -- --help` prints both subcommands
-- [ ] `cargo build` + `cargo clippy -p taletrek-desktop -- -D warnings` clean
+## Phase 1 — Workspace + CLI skeleton ✅
+- [x] Root `Cargo.toml` updated: `members = ["crates/*", "desktop"]`
+- [x] `desktop/Cargo.toml` (binary `taletrek-desktop`, deps: clap, anyhow — rayon/ureq/dirs/taletrek-synth added in their phases)
+- [x] `desktop/src/main.rs` + `cli.rs` — clap `synth` | `resynth` subcommands with shared `CommonArgs`
+- [x] `cargo run -p taletrek-desktop -- --help` prints both subcommands
+- [x] `cargo build` + `cargo clippy -p taletrek-desktop --all-targets -- -D warnings` clean
 
 ## Phase 2 — Voice catalog + resolve/download/cache (`voices.rs`)
 - [ ] `CURATED_VOICES` mirror (8 English medium voices) + HF base + path map (parity with `web/src/lib/tts/voices.ts` + `vendor/piper/models.ts`)

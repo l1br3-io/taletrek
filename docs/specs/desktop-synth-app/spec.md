@@ -39,14 +39,14 @@ It reuses `crates/synth` for *everything* synth-related: normalize, cache-key, `
 | Native deps | **`piper` + `ffmpeg` on `PATH`.** Not bundled (matches effort 1 + ADR-0013). `--piper` / `--ffmpeg` flags override the binary path. |
 | Default voice | `en_US-hfc_female-medium` (matches the SPA's `DEFAULT_VOICE_ID`). |
 | Error policy (per-paragraph) | **Abort on first error** for v1. Piper is reliable; a failing paragraph usually means a text/encoding issue the user must fix. Continue-on-error (`--keep-going`) is a follow-up. |
-| Workspace | **Add `desktop/` to the existing Cargo workspace** (`members = ["crates/*", "desktop/*"]`). pnpm workspace untouched. |
+| Workspace | **Add `desktop/` to the existing Cargo workspace** (`members = ["crates/*", "desktop"]`; effort 4 will append `"server"`). pnpm workspace untouched. |
 | Binary name | `taletrek-desktop` (matches the `generator.app` value in `bundle-format.md`). |
 
 ## Architecture
 
 ```
 taletrek/                          # repo root
-  Cargo.toml                       # UPDATED — members += "desktop/*"
+  Cargo.toml                       # UPDATED — members += "desktop"
   crates/synth/                    # effort 1 (shipped) — consumed, not modified
   desktop/                         # NEW — this effort's deliverable
     Cargo.toml                     # binary "taletrek-desktop"
