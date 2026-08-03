@@ -32,10 +32,10 @@
 - [x] Unit test: round-trip via `read_book_bundle`; manifest correctness; refuse-full-input error
 
 ## Phase 5 — Resynth (whole-book voice swap) (`resynth.rs`)
-- [ ] `resynth --input <full|text-only> --voice <new>`: re-synth every paragraph with new voice; discard old audio
-- [ ] Update `book.voiceId` in output manifest
-- [ ] Accepts text-only or full input
-- [ ] Unit test: every output segment re-keyed to new voice; manifest `voiceId` updated
+- [x] `resynth --input <full|text-only> --voice <new>`: re-synth every paragraph with new voice; discard old audio
+- [x] Update `book.voiceId` in output manifest
+- [x] Accepts text-only or full input
+- [x] Unit test: every output segment re-keyed to new voice; manifest `voiceId` updated
 
 ## Phase 6 — Progress logging (`progress.rs`)
 - [ ] stderr writer behind a `Write` seam (testable)
