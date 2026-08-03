@@ -38,11 +38,11 @@
 - [x] Unit test: every output segment re-keyed to new voice; manifest `voiceId` updated
 
 ## Phase 6 — Progress logging (`progress.rs`)
-- [ ] stderr writer behind a `Write` seam (testable)
-- [ ] Synth progress: `[n/total] pct%` per paragraph (or per N)
-- [ ] Voice-download progress: bytes / total during fetch
-- [ ] Final summary line: `synth: N paragraphs, Xm Ys, → <out>`
-- [ ] Unit test: progress lines captured via the seam
+- [x] stderr writer behind a `Write` seam (testable)
+- [x] Synth progress: `[n/total] pct%` per paragraph (or per N)
+- [x] Voice-download progress: bytes / total during fetch
+- [x] Final summary line: `synth: N paragraphs, Xm Ys, → <out>`
+- [x] Unit test: progress lines captured via the seam
 
 ## Phase 7 — Manual end-to-end + integration test
 - [ ] `#[ignore]` integration test: real `piper` + `ffmpeg` + real curated voice on a text-only fixture → full bundle (gated like effort 1)

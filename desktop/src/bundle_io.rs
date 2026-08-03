@@ -23,6 +23,7 @@ use taletrek_synth::{
     write_book_bundle, AudioCodec, BookBundle, BundleError, Encoder, NORM_VERSION,
 };
 
+use crate::progress::Progress;
 use crate::synth_job::{synth_all_paragraphs, SynthJobError};
 
 /// `generator.app` value stamped into every desktop-written bundle. Matches
@@ -147,6 +148,9 @@ fn stamp_full_manifest(bundle: &mut BookBundle, codec: AudioCodec) {
 /// encoder is shared by `&E` across all tasks.
 ///
 /// Aborts on the first paragraph error (lifted as [`BundleIoError::Synth`]).
+///
+/// `progress`, when `Some`, is forwarded to the synth engine for per-paragraph
+/// `synth [n/total] pct%` lines. `None` is silent.
 pub fn synth_and_stamp<R, E, F>(
     bundle: &mut BookBundle,
     voice_id: &str,
@@ -154,13 +158,22 @@ pub fn synth_and_stamp<R, E, F>(
     make_runner: F,
     encoder: &E,
     jobs: usize,
+    progress: Option<&Progress>,
 ) -> Result<(), BundleIoError>
 where
     R: PiperRunner + Send,
     E: Encoder + Sync,
     F: Fn() -> R + Sync,
 {
-    let segments = synth_all_paragraphs(bundle, voice_id, voice_model, make_runner, encoder, jobs)?;
+    let segments = synth_all_paragraphs(
+        bundle,
+        voice_id,
+        voice_model,
+        make_runner,
+        encoder,
+        jobs,
+        progress,
+    )?;
     // Replace (don't extend) so resynth's stale audio under the old voice is
     // discarded — synth starts from an empty audio map.
     bundle.audio = segments;
@@ -178,6 +191,8 @@ where
 ///
 /// Aborts on the first paragraph error (lifted as [`BundleIoError::Synth`]),
 /// matching `synth`'s v1 semantics.
+///
+/// `progress` is forwarded to the synth engine for per-paragraph progress.
 pub fn resynth_and_stamp<R, E, F>(
     bundle: &mut BookBundle,
     new_voice_id: &str,
@@ -185,6 +200,7 @@ pub fn resynth_and_stamp<R, E, F>(
     make_runner: F,
     encoder: &E,
     jobs: usize,
+    progress: Option<&Progress>,
 ) -> Result<(), BundleIoError>
 where
     R: PiperRunner + Send,
@@ -202,6 +218,7 @@ where
         make_runner,
         encoder,
         jobs,
+        progress,
     )
 }
 
@@ -390,6 +407,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             2,
+            None,
         )
         .expect("synth + stamp should succeed with stub runner");
 
@@ -446,6 +464,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             1,
+            None,
         )
         .expect("stub runner succeeds");
 
@@ -478,6 +497,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             1,
+            None,
         )
         .expect("stub runner succeeds");
 
@@ -506,6 +526,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             1,
+            None,
         )
         .expect_err("empty paragraph must error");
         assert!(matches!(err, BundleIoError::Synth(_)));
@@ -538,6 +559,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             2,
+            None,
         )
         .expect("resynth should succeed with stub runner");
 
@@ -605,6 +627,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             1,
+            None,
         )
         .expect("resynth succeeds");
 
@@ -636,6 +659,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             1,
+            None,
         )
         .expect("resynth on text-only should succeed");
 
@@ -662,6 +686,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             1,
+            None,
         )
         .expect("synth succeeds");
 

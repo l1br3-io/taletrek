@@ -20,12 +20,15 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rayon::prelude::*;
 use thiserror::Error;
 
 use taletrek_synth::synth::{synthesize_paragraph, PiperRunner, SynthError, SynthOptions};
 use taletrek_synth::{AudioSegment, BookBundle, Encoder};
+
+use crate::progress::Progress;
 
 /// All the ways a parallel synth run can fail. Typed so the host (T2.4
 /// `bundle_io`) can branch and so `?` lifts cleanly into `anyhow` at the CLI
@@ -77,6 +80,11 @@ fn collect_paragraphs(bundle: &BookBundle) -> Vec<&str> {
 /// `collect::<Result>`) → [`SynthJobError::Synth`]. Identical paragraphs dedup
 /// into one segment (content addressing), matching how the SPA's audio cache
 /// behaves.
+///
+/// `progress`, when `Some`, emits a `synth [done/total] pct%` line to stderr
+/// after each successful paragraph. Under parallelism the `done` counter is
+/// monotonic but lines may interleave out of strict order; tests pin `jobs: 1`
+/// for deterministic ordering. `None` is silent.
 pub fn synth_all_paragraphs<R, E, F>(
     bundle: &BookBundle,
     voice_id: &str,
@@ -84,6 +92,7 @@ pub fn synth_all_paragraphs<R, E, F>(
     make_runner: F,
     encoder: &E,
     jobs: usize,
+    progress: Option<&Progress>,
 ) -> Result<HashMap<String, AudioSegment>, SynthJobError>
 where
     R: PiperRunner + Send,
@@ -100,10 +109,17 @@ where
         .build()
         .map_err(|source| SynthJobError::PoolBuild { jobs, source })?;
 
+    // Progress counter shared across worker threads. Relaxed ordering is
+    // enough: each fetch_add yields a unique monotonic index; no other memory
+    // needs synchronizing with it.
+    let total = paragraphs.len();
+    let done = AtomicUsize::new(0);
+
     // Run the parallel map inside our bounded pool. Each task constructs a
     // fresh runner (owned locally — `&mut R` can't cross threads) and borrows
     // the shared `&E` encoder by ref. `collect::<Result<Vec<_>, _>>` makes
     // rayon short-circuit on the first error → v1 "abort on first error".
+    // `.inspect` reports synth progress after each successful paragraph.
     let segments: Result<Vec<(String, AudioSegment)>, SynthError> = pool.install(|| {
         paragraphs
             .par_iter()
@@ -118,6 +134,14 @@ where
                     bytes: out.audio,
                 };
                 Ok((key, seg))
+            })
+            .inspect(|res| {
+                if let Some(p) = progress {
+                    if res.is_ok() {
+                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                        p.synth_step(n, total);
+                    }
+                }
             })
             .collect()
     });
@@ -223,6 +247,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             2,
+            None,
         )
         .expect("synth should succeed with a stub runner");
 
@@ -267,6 +292,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             1,
+            None,
         )
         .expect("stub runner succeeds");
         let expected_key = cache_key(voice, "Repeat me.");
@@ -293,6 +319,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             1,
+            None,
         )
         .expect("jobs=1 should work");
         assert_eq!(segments.len(), 3);
@@ -316,6 +343,7 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             2,
+            None,
         )
         .expect_err("empty paragraph must error");
         assert!(
@@ -335,8 +363,111 @@ mod tests {
             || StubRunner,
             &WavPassthrough,
             2,
+            None,
         )
         .expect("empty bundle should not error");
         assert!(segments.is_empty());
+    }
+
+    #[test]
+    fn progress_emits_one_line_per_paragraph_in_order_with_jobs_one() {
+        // With a single worker, paragraphs complete in chapter/paragraph order,
+        // so the captured synth lines are exactly [1/3] 33%, [2/3] 66%, [3/3]
+        // 100%. (Parallel runs would still be monotonic but could interleave.)
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec!["One.".into(), "Two.".into(), "Three.".into()],
+        )]);
+
+        let captured = Captured::default();
+        let progress = Progress::new(Box::new(captured.clone()));
+
+        synth_all_paragraphs(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1, // deterministic ordering
+            Some(&progress),
+        )
+        .expect("synth succeeds");
+
+        let out = captured.take();
+        assert_eq!(out, "synth [1/3] 33%\nsynth [2/3] 66%\nsynth [3/3] 100%\n");
+    }
+
+    #[test]
+    fn progress_skips_total_zero_so_empty_bundle_is_silent() {
+        // No paragraphs → total 0 → synth_step is a no-op; nothing is written.
+        let bundle = text_only_bundle(vec![]);
+        let captured = Captured::default();
+        let progress = Progress::new(Box::new(captured.clone()));
+
+        synth_all_paragraphs(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+            Some(&progress),
+        )
+        .expect("empty bundle");
+
+        assert_eq!(captured.take(), "", "empty bundle must emit no synth lines");
+    }
+
+    #[test]
+    fn progress_reports_no_steps_after_a_paragraph_error() {
+        // A paragraph that normalizes to empty errors immediately; inspect only
+        // reports on Ok results, so no synth line is emitted before the abort.
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec!["   \n   ".into()],
+        )]);
+        let captured = Captured::default();
+        let progress = Progress::new(Box::new(captured.clone()));
+
+        let _ = synth_all_paragraphs(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+            Some(&progress),
+        );
+
+        assert_eq!(
+            captured.take(),
+            "",
+            "no progress on the errored paragraph (inspect reports Ok only)"
+        );
+    }
+
+    /// A clonable `Write` that records into a shared `Arc<Mutex<Vec<u8>>>` so a
+    /// test can read what `Progress` wrote while the sink owns the box.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Captured {
+        fn take(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().split_off(0)).unwrap()
+        }
+    }
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 }

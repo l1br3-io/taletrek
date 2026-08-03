@@ -29,6 +29,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::progress::Progress;
+
 /// The HuggingFace base the SPA downloads Piper voices from. Verbatim copy of
 /// `web/src/lib/tts/vendor/piper/models.ts`'s `HF_BASE` so URLs match exactly.
 pub const HF_BASE: &str = "https://huggingface.co/diffusionstudio/piper-voices/resolve/main";
@@ -215,26 +217,91 @@ pub fn default_cache_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("taletrek").join("voices"))
 }
 
-/// Testable seam over voice-model HTTP fetch. One method — fetch the full body
-/// at a URL — so unit tests stub the network and assert cache-hit short-circuits
-/// without going online. The production implementor is [`UreqVoiceSource`].
+/// Testable seam over voice-model HTTP fetch. The streaming variant
+/// ([`VoiceSource::fetch_with_progress`]) invokes `progress(bytes_done,
+/// bytes_total)` as bytes arrive so [`Progress::download_step`] can render
+/// `voice d.t MiB (pct%)` lines; `bytes_total` is `0` when the source can't
+/// report a length. Unit tests stub the network by implementing the streaming
+/// method directly and asserting cache-hit short-circuits + progress callbacks
+/// without going online. The non-streaming [`VoiceSource::fetch`] is provided
+/// for callers that don't care about per-byte progress.
 pub trait VoiceSource {
-    /// Fetch the full byte body at `url`. Errors carry enough context for
-    /// [`ResolveError::Download`] to surface the failing URL to the user.
-    fn fetch(&self, url: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>>;
+    /// Fetch the full byte body at `url`, invoking `progress(bytes_done,
+    /// bytes_total)` as bytes arrive. `bytes_total` is `0` when the source
+    /// doesn't report a length. Errors carry enough context for
+    /// [`ResolveError::Download`] to surface the failing URL.
+    fn fetch_with_progress(
+        &self,
+        url: &str,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>>;
+
+    /// Fetch without per-byte progress. The default delegates to
+    /// [`VoiceSource::fetch_with_progress`] with a no-op callback.
+    fn fetch(&self, url: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+        self.fetch_with_progress(url, &mut |_, _| {})
+    }
 }
 
 /// Production [`VoiceSource`] backed by `ureq` (blocking HTTP). Chosen over
-/// `reqwest` for minimal footprint (ADR-0013).
+/// `reqwest` for minimal footprint (ADR-0013). Streams the response body in
+/// 64 KiB chunks and reports throttled progress (one line per integer pct, or
+/// per whole MiB when `Content-Length` is absent) so a 63 MiB download emits
+/// ~100 lines, not ~1000.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UreqVoiceSource;
 
 impl VoiceSource for UreqVoiceSource {
-    fn fetch(&self, url: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+    fn fetch_with_progress(
+        &self,
+        url: &str,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let resp = ureq::get(url).call()?;
+        let total: u64 = resp
+            .headers()
+            .get("Content-Length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         let mut reader = resp.into_body().into_reader();
         let mut buf = Vec::with_capacity(1024 * 1024);
-        reader.read_to_end(&mut buf)?;
+        let mut chunk = [0u8; 64 * 1024];
+        let mut done: u64 = 0;
+        let mut last_pct: i64 = -1;
+        let mut last_mib: u64 = 0;
+        loop {
+            let n = reader.read(&mut chunk)?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            done += n as u64;
+            // Throttle: only call back when the integer pct (known length) or
+            // whole-MiB count (unknown length) changes. `checked_div` returning
+            // `None` covers `total == 0` (no Content-Length) → per-MiB path.
+            match done
+                .checked_mul(100)
+                .and_then(|x| x.checked_div(total))
+                .map(|v| v.min(100) as i64)
+            {
+                Some(pct) if pct != last_pct => {
+                    progress(done, total);
+                    last_pct = pct;
+                }
+                None => {
+                    let mib = done / (1024 * 1024);
+                    if mib != last_mib {
+                        progress(done, total);
+                        last_mib = mib;
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Always emit a final line so completion is visible even if the last
+        // chunk didn't cross a pct/MiB boundary.
+        progress(done, total);
         Ok(buf)
     }
 }
@@ -297,10 +364,14 @@ pub enum ResolveError {
 ///   the curated catalog. A cache hit (both `.onnx` and `.json` present under
 ///   `opts.cache_dir`) short-circuits the download. On a miss, both files are
 ///   fetched via `source` and written to the cache before returning.
+///
+/// `progress`, when `Some`, renders `voice d.t MiB (pct%)` lines during each
+/// download. `None` is silent (e.g. tests that only assert cache behavior).
 pub fn resolve_voice(
     id: Option<&str>,
     opts: &ResolveOpts,
     source: &dyn VoiceSource,
+    progress: Option<&Progress>,
 ) -> Result<PathBuf, ResolveError> {
     // Path 1: --voice-path override (offline, no catalog lookup, no download).
     if let Some(onnx) = &opts.voice_path {
@@ -337,19 +408,36 @@ pub fn resolve_voice(
     let rel_json = rel_onnx
         .strip_suffix(".onnx")
         .expect("curated rel path always ends in .onnx");
-    download(source, &hf_url(rel_onnx), &onnx_path)?;
-    download(source, &hf_url(&format!("{rel_json}.json")), &json_path)?;
+    download(source, &hf_url(rel_onnx), &onnx_path, progress)?;
+    download(
+        source,
+        &hf_url(&format!("{rel_json}.json")),
+        &json_path,
+        progress,
+    )?;
     Ok(onnx_path)
 }
 
 /// Fetch `url` via `source` and atomically-ish write the bytes to `dest`.
+/// `progress`, when `Some`, renders download progress lines as bytes arrive.
 /// Failures surface as [`ResolveError::Download`] carrying the failing URL so
 /// the user can verify reachability or fall back to `--voice-path`.
-fn download(source: &dyn VoiceSource, url: &str, dest: &Path) -> Result<(), ResolveError> {
-    let bytes = source.fetch(url).map_err(|e| ResolveError::Download {
-        url: url.to_string(),
-        message: e.to_string(),
-    })?;
+fn download(
+    source: &dyn VoiceSource,
+    url: &str,
+    dest: &Path,
+    progress: Option<&Progress>,
+) -> Result<(), ResolveError> {
+    let bytes = source
+        .fetch_with_progress(url, &mut |done, total| {
+            if let Some(p) = progress {
+                p.download_step(done, total);
+            }
+        })
+        .map_err(|e| ResolveError::Download {
+            url: url.to_string(),
+            message: e.to_string(),
+        })?;
     let mut file = fs::File::create(dest)?;
     file.write_all(&bytes)?;
     Ok(())
@@ -370,7 +458,11 @@ mod tests {
     }
 
     impl VoiceSource for StubSource {
-        fn fetch(&self, url: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+        fn fetch_with_progress(
+            &self,
+            url: &str,
+            _progress: &mut dyn FnMut(u64, u64),
+        ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
             self.calls.lock().unwrap().push(url.to_string());
             Ok(url.as_bytes().to_vec())
         }
@@ -481,7 +573,7 @@ mod tests {
         let stub = StubSource::default();
 
         // When --voice-path is set, the voice id is irrelevant.
-        let resolved = resolve_voice(Some("en_US-ryan-medium"), &opts, &stub).unwrap();
+        let resolved = resolve_voice(Some("en_US-ryan-medium"), &opts, &stub, None).unwrap();
         assert_eq!(resolved, onnx);
         assert!(
             stub.calls_snapshot().is_empty(),
@@ -496,7 +588,7 @@ mod tests {
         let opts = ResolveOpts::new(Some(onnx.clone()), dir.path().join("cache"));
         let stub = StubSource::default();
 
-        let err = resolve_voice(None, &opts, &stub).unwrap_err();
+        let err = resolve_voice(None, &opts, &stub, None).unwrap_err();
         match err {
             ResolveError::VoicePathNotFound { path } => assert_eq!(path, onnx),
             other => panic!("expected VoicePathNotFound, got {other:?}"),
@@ -512,7 +604,7 @@ mod tests {
         let opts = ResolveOpts::new(Some(onnx.clone()), dir.path().join("cache"));
         let stub = StubSource::default();
 
-        let err = resolve_voice(None, &opts, &stub).unwrap_err();
+        let err = resolve_voice(None, &opts, &stub, None).unwrap_err();
         match err {
             ResolveError::MissingJsonSibling { onnx: o, json } => {
                 assert_eq!(o, onnx);
@@ -533,7 +625,7 @@ mod tests {
         let opts = ResolveOpts::new(None, cache.path().to_path_buf());
         let stub = StubSource::default();
 
-        let resolved = resolve_voice(Some(id), &opts, &stub).unwrap();
+        let resolved = resolve_voice(Some(id), &opts, &stub, None).unwrap();
         assert_eq!(resolved, cache.path().join(format!("{id}.onnx")));
         assert!(
             stub.calls_snapshot().is_empty(),
@@ -548,7 +640,7 @@ mod tests {
         let opts = ResolveOpts::new(None, cache.path().to_path_buf());
         let stub = StubSource::default();
 
-        let resolved = resolve_voice(Some(id), &opts, &stub).unwrap();
+        let resolved = resolve_voice(Some(id), &opts, &stub, None).unwrap();
 
         // The .onnx path is returned and the file exists on disk.
         let onnx_path = cache.path().join(format!("{id}.onnx"));
@@ -581,7 +673,7 @@ mod tests {
 
         let opts = ResolveOpts::new(None, cache.path().to_path_buf());
         let stub = StubSource::default();
-        let resolved = resolve_voice(None, &opts, &stub).unwrap();
+        let resolved = resolve_voice(None, &opts, &stub, None).unwrap();
         assert_eq!(resolved, cache.path().join(format!("{id}.onnx")));
     }
 
@@ -591,7 +683,7 @@ mod tests {
         let opts = ResolveOpts::new(None, cache.path().to_path_buf());
         let stub = StubSource::default();
 
-        let err = resolve_voice(Some("en_US-ryan-high"), &opts, &stub).unwrap_err();
+        let err = resolve_voice(Some("en_US-ryan-high"), &opts, &stub, None).unwrap_err();
         match err {
             ResolveError::UnknownCuratedId(id) => {
                 assert_eq!(id, "en_US-ryan-high");
@@ -609,5 +701,107 @@ mod tests {
             Some("HFC Female")
         );
         assert_eq!(find_curated("en_US-ryan-high"), None);
+    }
+
+    /// A clonable `Write` that records into a shared buffer, so a test can read
+    /// what `Progress` wrote while the sink owns the box.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Captured {
+        fn take(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().split_off(0)).unwrap()
+        }
+    }
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A stub source that simulates a 2 MiB download in two 1 MiB chunks,
+    /// invoking the progress callback at 50% then 100%. Exercises the
+    /// `fetch_with_progress` → `download` → `Progress::download_step` path
+    /// without going online.
+    #[derive(Default)]
+    struct StreamingStub;
+
+    impl VoiceSource for StreamingStub {
+        fn fetch_with_progress(
+            &self,
+            url: &str,
+            progress: &mut dyn FnMut(u64, u64),
+        ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+            let total: u64 = 2 * 1024 * 1024;
+            progress(total / 2, total);
+            progress(total, total);
+            Ok(url.as_bytes().to_vec())
+        }
+    }
+
+    #[test]
+    fn cache_miss_emits_download_progress_lines_per_file() {
+        // A cache miss fetches both .onnx + .json; each emits 50% then 100%.
+        let cache = tempfile::tempdir().unwrap();
+        let id = "en_US-ryan-medium";
+        let opts = ResolveOpts::new(None, cache.path().to_path_buf());
+
+        let captured = Captured::default();
+        let progress = crate::progress::Progress::new(Box::new(captured.clone()));
+
+        resolve_voice(Some(id), &opts, &StreamingStub, Some(&progress)).unwrap();
+
+        // Two files, two progress callbacks each → four lines, repeated twice.
+        assert_eq!(
+            captured.take(),
+            "voice 1.0/2.0 MiB (50%)\n\
+             voice 2.0/2.0 MiB (100%)\n\
+             voice 1.0/2.0 MiB (50%)\n\
+             voice 2.0/2.0 MiB (100%)\n"
+        );
+    }
+
+    #[test]
+    fn cache_hit_emits_no_download_progress() {
+        // Pre-populate the cache so no fetch happens → no progress lines.
+        let cache = tempfile::tempdir().unwrap();
+        let id = "en_US-hfc_female-medium";
+        std::fs::write(cache.path().join(format!("{id}.onnx")), b"m").unwrap();
+        std::fs::write(cache.path().join(format!("{id}.json")), b"c").unwrap();
+        let opts = ResolveOpts::new(None, cache.path().to_path_buf());
+
+        let captured = Captured::default();
+        let progress = crate::progress::Progress::new(Box::new(captured.clone()));
+
+        resolve_voice(Some(id), &opts, &StreamingStub, Some(&progress)).unwrap();
+
+        assert_eq!(captured.take(), "", "cache hit must emit no download lines");
+    }
+
+    #[test]
+    fn voice_path_override_emits_no_download_progress() {
+        // --voice-path short-circuits the network entirely → no progress lines.
+        let dir = tempfile::tempdir().unwrap();
+        let onnx = dir.path().join("my.onnx");
+        let json = dir.path().join("my.json");
+        std::fs::write(&onnx, b"model").unwrap();
+        std::fs::write(&json, b"cfg").unwrap();
+        let opts = ResolveOpts::new(Some(onnx.clone()), dir.path().join("cache"));
+
+        let captured = Captured::default();
+        let progress = crate::progress::Progress::new(Box::new(captured.clone()));
+
+        let resolved = resolve_voice(None, &opts, &StreamingStub, Some(&progress)).unwrap();
+        assert_eq!(resolved, onnx);
+        assert_eq!(
+            captured.take(),
+            "",
+            "--voice-path must emit no download lines"
+        );
     }
 }

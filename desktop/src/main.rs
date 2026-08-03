@@ -1,12 +1,14 @@
 //! Entry point for `taletrek-desktop`.
 //!
-//! Phase 5 (T2.5) wires the `resynth` subcommand end-to-end:
-//! read bundle (text-only OR full) → resolve new voice → rewrite book.voiceId
-//! → parallel synth → stamp manifest → write `<stem>.<voice>.taletrek`.
-//! `synth` was wired in Phase 4 (T2.4).
+//! Phase 6 (T2.6) wires a `Progress` sink (stderr behind a `Write` seam)
+//! through both subcommands: download progress during voice resolution,
+//! `synth [n/total] pct%` per paragraph, and a final `kind: N segments, voice
+//! V, Mm Ss → out` summary line. `synth` was wired in Phase 4 (T2.4);
+//! `resynth` in Phase 5 (T2.5).
 
 mod bundle_io;
 mod cli;
+mod progress;
 mod synth_job;
 mod voices;
 
@@ -23,6 +25,7 @@ use crate::bundle_io::{
     synth_and_stamp, write_book_bundle_file,
 };
 use crate::cli::{Cli, Cmd, CommonArgs};
+use crate::progress::Progress;
 use crate::voices::{
     default_cache_dir, resolve_voice, ResolveOpts, UreqVoiceSource, DEFAULT_VOICE_ID,
 };
@@ -40,8 +43,12 @@ fn main() -> Result<()> {
 /// Loads a text-only bundle, refuses an already-full input (pointing the user
 /// at `resynth`), resolves the voice (curated download or `--voice-path`),
 /// synthesizes every paragraph in parallel, stamps the manifest, and writes the
-/// result beside the input (or to `--output`).
+/// result beside the input (or to `--output`). Progress flows to stderr
+/// throughout: voice-download bytes, per-paragraph synth count, and a final
+/// summary.
 fn run_synth(common: CommonArgs) -> Result<()> {
+    let progress = Progress::to_stderr();
+
     // Load + guard: synth only accepts text-only bundles.
     let input_bytes = fs::read(&common.input)
         .with_context(|| format!("reading input bundle {}", common.input.display()))?;
@@ -53,8 +60,13 @@ fn run_synth(common: CommonArgs) -> Result<()> {
         "no platform cache directory discovered (set $HOME or pass --voice-path to use a local model)",
     )?;
     let opts = ResolveOpts::new(common.voice_path.clone(), cache_dir);
-    let voice_model = resolve_voice(common.voice.as_deref(), &opts, &UreqVoiceSource)
-        .context("resolving voice model")?;
+    let voice_model = resolve_voice(
+        common.voice.as_deref(),
+        &opts,
+        &UreqVoiceSource,
+        Some(&progress),
+    )
+    .context("resolving voice model")?;
     let voice_id = common
         .voice
         .clone()
@@ -72,6 +84,7 @@ fn run_synth(common: CommonArgs) -> Result<()> {
         move || SubprocessPiperRunner::new(&piper_bin),
         &encoder,
         jobs,
+        Some(&progress),
     )?;
 
     // Write the full bundle out: explicit --output, else <stem>.synth.taletrek
@@ -82,11 +95,7 @@ fn run_synth(common: CommonArgs) -> Result<()> {
         .unwrap_or_else(|| default_synth_output(&common.input));
     write_book_bundle_file(&bundle, &output)
         .with_context(|| format!("writing output bundle {}", output.display()))?;
-    eprintln!(
-        "synth: {} segments, voice {voice_id} → {}",
-        bundle.audio.len(),
-        output.display()
-    );
+    progress.summary("synth", bundle.audio.len(), &voice_id, &output);
     Ok(())
 }
 
@@ -95,8 +104,10 @@ fn run_synth(common: CommonArgs) -> Result<()> {
 /// Re-voices a bundle (text-only OR full) with a new voice. Unlike `synth`,
 /// already-full input is accepted — that's the primary use case. The manifest's
 /// `book.voiceId` is rewritten to the new voice before synth so the stamped
-/// manifest and content-addressed cache keys agree.
+/// manifest and content-addressed cache keys agree. Progress mirrors `synth`.
 fn run_resynth(common: CommonArgs) -> Result<()> {
+    let progress = Progress::to_stderr();
+
     // Load: resynth accepts text-only OR full input (no refuse_full_input guard).
     let input_bytes = fs::read(&common.input)
         .with_context(|| format!("reading input bundle {}", common.input.display()))?;
@@ -107,8 +118,13 @@ fn run_resynth(common: CommonArgs) -> Result<()> {
         "no platform cache directory discovered (set $HOME or pass --voice-path to use a local model)",
     )?;
     let opts = ResolveOpts::new(common.voice_path.clone(), cache_dir);
-    let voice_model = resolve_voice(common.voice.as_deref(), &opts, &UreqVoiceSource)
-        .context("resolving voice model")?;
+    let voice_model = resolve_voice(
+        common.voice.as_deref(),
+        &opts,
+        &UreqVoiceSource,
+        Some(&progress),
+    )
+    .context("resolving voice model")?;
     let voice_id = common
         .voice
         .clone()
@@ -127,6 +143,7 @@ fn run_resynth(common: CommonArgs) -> Result<()> {
         move || SubprocessPiperRunner::new(&piper_bin),
         &encoder,
         jobs,
+        Some(&progress),
     )?;
 
     // Write the re-voiced bundle out: explicit --output, else
@@ -137,11 +154,7 @@ fn run_resynth(common: CommonArgs) -> Result<()> {
         .unwrap_or_else(|| default_resynth_output(&common.input, &voice_id));
     write_book_bundle_file(&bundle, &output)
         .with_context(|| format!("writing output bundle {}", output.display()))?;
-    eprintln!(
-        "resynth: {} segments, voice {voice_id} → {}",
-        bundle.audio.len(),
-        output.display()
-    );
+    progress.summary("resynth", bundle.audio.len(), &voice_id, &output);
     Ok(())
 }
 
