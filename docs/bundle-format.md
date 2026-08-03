@@ -123,6 +123,7 @@ Library import is **idempotent and merge-safe**: each book is ingested by its co
 - **Write:** must emit `manifest.json` with `schemaVersion: 1`, `text.json`, and (if full) at least one `audio/` entry whose codec matches the manifest.
 - **Read:** must accept a text-only bundle (`audio.present === false` or missing `audio/`). Must refuse a `schemaVersion` it does not understand with a typed error, not a silent best-effort load.
 - **Audio codec:** Opus is the default for v1 (best size/quality for speech). M4A is permitted (iOS-native). WAV is permitted but discouraged. Readers must support Opus + M4A.
+  - *Rust crate encoder note:* `crates/synth` ships its Opus encoder as an ffmpeg subprocess (`-c:a libopus`, OGG/Opus on stdout) behind an `Encoder` trait. This avoids a hard dependency on `libopus` dev headers (the native `audiopus`/`opus` crates require them to link); `ffmpeg` is already expected wherever off-device synth runs (desktop/server). A native-Opus impl can replace it behind the same trait without touching the pipeline. Default bitrate 24 kbps (mono speech).
 - **IDs:** book/chapter IDs are preserved across export/import when present; if an importer finds a collision with an existing book, it allocates a new id and ingests as a separate book (never overwrites silently).
 
 ## Versioning

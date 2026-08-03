@@ -9,10 +9,17 @@
 //! The single most parity-critical invariant is that [`cache_key`] produces the
 //! *exact same string* the SPA's `audioCacheKey` produces for the same input,
 //! so audio deduplicates across apps. See `tests/cache_key_parity.rs`.
+//!
+//! The synthesis entry point is [`synthesize_paragraph`], which wires the
+//! normalize → split → Piper → concat-WAV → encode pipeline behind injectable
+//! [`PiperRunner`] and [`Encoder`] traits.
 
 pub mod bundle;
 pub mod cache_key;
+pub mod encode;
 pub mod normalize;
+pub mod pcm;
+pub mod synth;
 
 // Submodule re-exports for advanced/qualified-path access.
 pub use bundle::{audio, error, io, library, manifest, text};
@@ -32,4 +39,8 @@ pub use bundle::text::ChapterText;
 pub use bundle::BookBundle;
 
 pub use cache_key::{cache_key, NORM_VERSION};
+pub use encode::{Encoder, OpusEncoder, WavPassthrough};
 pub use normalize::{normalize_for_speech, split_for_speech, MAX_SYNTH_CHARS};
+pub use synth::{
+    synthesize_paragraph, PiperRunner, SubprocessPiperRunner, SynthError, SynthOptions, SynthOutput,
+};

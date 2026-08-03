@@ -37,12 +37,12 @@
 - [x] `bundle/library.rs` — `LibraryBundle`, read/write
 - [x] Round-trip test: multi-book library
 
-## Phase 7 — Synth pipeline (NEXT — deferred to its own checkpoint)
-- [ ] `PiperRunner` trait + `SubprocessPiperRunner`
-- [ ] `Encoder` trait + Opus impl (audiopus or ffmpeg behind trait)
-- [ ] `synthesize_paragraph(voice, text)` wiring
-- [ ] Stubbed unit test (trait seam); `#[ignore]` real-piper integration test
-- [ ] Note: requires `piper` binary on PATH; medium risk (native deps)
+## Phase 7 — Synth pipeline ✅
+- [x] `PiperRunner` trait + `SubprocessPiperRunner`
+- [x] `Encoder` trait + Opus impl (ffmpeg subprocess behind the trait; `audiopus`/`opus` crates skipped — no `libopus` dev headers on the supported toolchain, task T1.7 step 3 fallback)
+- [x] `synthesize_paragraph(voice, text, opts)` wiring
+- [x] Stubbed unit test (trait seam); `#[ignore]` real-piper integration test
+- [x] Note: requires `piper` binary on PATH; medium risk (native deps) — ffmpeg chosen over native Opus dep
 
 ## Phase 8 — Conformance fixtures ✅
 - [x] `examples/gen_fixtures.rs` → 3 fixtures under `tests/fixtures/`
