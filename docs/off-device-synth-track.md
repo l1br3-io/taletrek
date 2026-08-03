@@ -55,12 +55,13 @@ Content-addressing means audio from *any* source dedups on import for free — a
 
 | # | Effort | Deliverable | Status |
 | --- | --- | --- | --- |
-| 1 | [`portable-bundle-format`](./specs/portable-bundle-format/spec.md) | Format spec + Rust `crates/synth` crate (clean → Piper → encode + bundle I/O). No app. | 🔨 active — 8/9 phases done, **T1.7 synth pipeline next** |
-| 2 | `desktop-synth-app` *(spec not yet created)* | Standalone Rust synth tool (text-only bundle in → full bundle out). | ⏸ queued → **Tier-2 milestone lands here** |
+| 1 | [`portable-bundle-format`](./specs/portable-bundle-format/spec.md) | Format spec + Rust `crates/synth` crate (clean → Piper → encode + bundle I/O). No app. | ✅ shipped (2026-08-03) |
+| 2 | [`desktop-synth-app`](./specs/desktop-synth-app/spec.md) | Standalone Rust synth tool (text-only bundle in → full bundle out). | 🔨 active (spec drafted) → **Tier-2 milestone lands here** |
 | 3 | `spa-bundle-import-export` *(spec not yet created)* | TS bundle reader/writer + UI in the SPA. SPA's only new surface. | ⏸ queued → **closes the loop** |
 | 4 | `personal-server` *(spec not yet created)* | Rust Docker library server + worker-mode job queue. | ⏸ queued → **Tier-3 milestone lands here** |
 
 Task-level breakdown for all four: [`specs/portable-bundle-format/tasks/README.md`](./specs/portable-bundle-format/tasks/README.md).
+Next action: task [`specs/desktop-synth-app/todo.md`](./specs/desktop-synth-app/todo.md) (Phase 1).
 
 ## Locked decisions (from ADR-0013)
 - **Synth jobs live off the SPA** when a desktop/server is available. The SPA is a consumer.
@@ -73,6 +74,6 @@ Task-level breakdown for all four: [`specs/portable-bundle-format/tasks/README.m
 ## Resume pointers
 - **Decision:** [`adrs/0013-…`](./adrs/0013-off-device-synth-and-portable-bundles.md)
 - **Format:** [`bundle-format.md`](./bundle-format.md)
-- **Current effort spec:** [`specs/portable-bundle-format/spec.md`](./specs/portable-bundle-format/spec.md)
+- **Current effort spec:** [`specs/desktop-synth-app/spec.md`](./specs/desktop-synth-app/spec.md)
 - **All tasks, in order:** [`specs/portable-bundle-format/tasks/README.md`](./specs/portable-bundle-format/tasks/README.md)
-- **Next action:** task [`specs/portable-bundle-format/tasks/007-synth-pipeline.md`](./specs/portable-bundle-format/tasks/007-synth-pipeline.md)
+- **Next action:** [`specs/desktop-synth-app/todo.md`](./specs/desktop-synth-app/todo.md) (Phase 1)
