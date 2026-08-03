@@ -82,6 +82,22 @@ pub fn default_synth_output(input: &Path) -> PathBuf {
     parent.join(format!("{stem}.synth.taletrek"))
 }
 
+/// Default output path for `resynth`: `<input-stem>.<voice_id>.taletrek`
+/// beside the input. Embedding the voice id in the name keeps multiple
+/// re-voiced variants of the same source distinct on disk
+/// (`book.en_US-ryan-medium.taletrek` vs `book.en_US-lessac-medium.taletrek`).
+///
+/// `<stem>` is the input filename with its final extension removed. A bare
+/// `book.taletrek` with voice `en_US-ryan-medium` stays in the current
+/// directory as `book.en_US-ryan-medium.taletrek`. A path with no extension
+/// keeps its whole name as the stem.
+#[must_use]
+pub fn default_resynth_output(input: &Path, voice_id: &str) -> PathBuf {
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("book");
+    let parent = input.parent().unwrap_or_else(|| Path::new(""));
+    parent.join(format!("{stem}.{voice_id}.taletrek"))
+}
+
 /// Refuse an already-full bundle for `synth`. `synth` only accepts text-only
 /// input (`audio.present == false`); re-voicing an existing bundle is what
 /// `resynth` is for. The error carries the input path display + the existing
@@ -152,6 +168,43 @@ where
     Ok(())
 }
 
+/// Re-voice a bundle: rewrite `book.voiceId` to `new_voice_id`, then re-synth
+/// every paragraph under the new voice. The audio map is **replaced**
+/// (delegates to [`synth_and_stamp`]), so stale segments keyed under the
+/// previous voice are discarded — not merged.
+///
+/// Unlike `synth`, this accepts **both** text-only and full input: re-voicing
+/// a full bundle is the whole point. The caller must not run [`refuse_full_input`].
+///
+/// Aborts on the first paragraph error (lifted as [`BundleIoError::Synth`]),
+/// matching `synth`'s v1 semantics.
+pub fn resynth_and_stamp<R, E, F>(
+    bundle: &mut BookBundle,
+    new_voice_id: &str,
+    voice_model: &Path,
+    make_runner: F,
+    encoder: &E,
+    jobs: usize,
+) -> Result<(), BundleIoError>
+where
+    R: PiperRunner + Send,
+    E: Encoder + Sync,
+    F: Fn() -> R + Sync,
+{
+    // Rewrite the manifest's voice FIRST so the stamped manifest and the
+    // content-addressed cache keys agree on the new voice. stamp_full_manifest
+    // preserves this value (it only touches audio.* + generator.*).
+    bundle.manifest.book.voice_id = new_voice_id.to_string();
+    synth_and_stamp(
+        bundle,
+        new_voice_id,
+        voice_model,
+        make_runner,
+        encoder,
+        jobs,
+    )
+}
+
 /// Write `bundle` to `output` as a `.taletrek` ZIP file. Wraps the lib's
 /// in-memory [`write_book_bundle`] with a buffered file write so callers don't
 /// manage the `Write + Seek` handle themselves. The parent directory must
@@ -176,8 +229,8 @@ mod tests {
 
     use taletrek_synth::synth::{PiperRunner, SynthError};
     use taletrek_synth::{
-        cache_key, read_book_bundle, AudioCodec, AudioMeta, BookBundle, BookMeta, ChapterText,
-        Generator, Manifest, ManifestKind, WavPassthrough,
+        cache_key, read_book_bundle, AudioCodec, AudioMeta, AudioSegment, BookBundle, BookMeta,
+        ChapterText, Generator, Manifest, ManifestKind, WavPassthrough,
     };
 
     /// Canonical mono 16-bit 16 kHz WAV with `pcm` as its data payload — the
@@ -270,6 +323,26 @@ mod tests {
     fn default_synth_output_no_extension_uses_whole_name_as_stem() {
         let out = default_synth_output(Path::new("book"));
         assert_eq!(out, PathBuf::from("book.synth.taletrek"));
+    }
+
+    // ---- default_resynth_output ----
+
+    #[test]
+    fn default_resynth_output_embeds_voice_beside_input() {
+        let out = default_resynth_output(Path::new("dir/book.taletrek"), "en_US-ryan-medium");
+        assert_eq!(out, PathBuf::from("dir/book.en_US-ryan-medium.taletrek"));
+    }
+
+    #[test]
+    fn default_resynth_output_bare_filename_no_parent() {
+        let out = default_resynth_output(Path::new("book.taletrek"), "en_US-hfc_female-medium");
+        assert_eq!(out, PathBuf::from("book.en_US-hfc_female-medium.taletrek"));
+    }
+
+    #[test]
+    fn default_resynth_output_no_extension_uses_whole_name_as_stem() {
+        let out = default_resynth_output(Path::new("book"), "en_US-lessac-medium");
+        assert_eq!(out, PathBuf::from("book.en_US-lessac-medium.taletrek"));
     }
 
     // ---- refuse_full_input ----
@@ -436,6 +509,139 @@ mod tests {
         )
         .expect_err("empty paragraph must error");
         assert!(matches!(err, BundleIoError::Synth(_)));
+    }
+
+    // ---- resynth_and_stamp ----
+
+    #[test]
+    fn resynth_and_stamp_updates_manifest_voice_and_rekeys_segments() {
+        // Start from a full bundle under voice A; resynth to voice B; assert
+        // the manifest's voiceId flipped to B and every segment is keyed under B.
+        let mut b = bundle(
+            "en_US-lessac-medium",
+            true,
+            vec![
+                ChapterText::new(
+                    "bk_test",
+                    0,
+                    "Ch",
+                    vec!["Hello world.".into(), "Second.".into()],
+                ),
+                ChapterText::new("bk_test", 1, "Two", vec!["Across chapters.".into()]),
+            ],
+        );
+
+        resynth_and_stamp(
+            &mut b,
+            "en_US-ryan-medium",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            2,
+        )
+        .expect("resynth should succeed with stub runner");
+
+        // Manifest voice flipped to the new voice.
+        assert_eq!(b.manifest.book.voice_id, "en_US-ryan-medium");
+        // Audio marked present + segment count matches distinct paragraphs.
+        assert!(b.manifest.audio.present);
+        assert_eq!(b.manifest.audio.segment_count, 3);
+
+        // Every segment keyed under the new voice.
+        let new_voice = "en_US-ryan-medium";
+        for text in &["Hello world.", "Second.", "Across chapters."] {
+            let key = cache_key(new_voice, text);
+            assert!(
+                b.audio.contains_key(&key),
+                "missing segment keyed under new voice: {key}"
+            );
+        }
+        // No segments keyed under the old voice survive.
+        let old_voice = "en_US-lessac-medium";
+        for text in &["Hello world.", "Second.", "Across chapters."] {
+            let key = cache_key(old_voice, text);
+            assert!(
+                !b.audio.contains_key(&key),
+                "stale segment under old voice survived: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn resynth_and_stamp_discards_stale_audio_from_previous_voice() {
+        // A full bundle carrying audio under the OLD voice. After resynth, none
+        // of those old segments survive — synth_and_stamp replaces (not
+        // extends) the audio map.
+        let mut b = bundle(
+            "en_US-lessac-medium",
+            true,
+            vec![ChapterText::new(
+                "bk_test",
+                0,
+                "Ch",
+                vec!["Hello world.".into()],
+            )],
+        );
+        // Pre-populate audio under the old voice (as a prior synth run would).
+        let old_key = cache_key("en_US-lessac-medium", "Hello world.");
+        b.audio.insert(
+            old_key.clone(),
+            AudioSegment {
+                key: old_key.clone(),
+                codec: AudioCodec::Wav,
+                bytes: canonical_wav(&[0xFF]),
+            },
+        );
+        assert_eq!(
+            b.audio.len(),
+            1,
+            "fixture: one stale segment under old voice"
+        );
+
+        resynth_and_stamp(
+            &mut b,
+            "en_US-ryan-medium",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+        )
+        .expect("resynth succeeds");
+
+        // The old segment is gone; only the new-voice segment remains.
+        assert!(
+            !b.audio.contains_key(&old_key),
+            "old-voice segment must be discarded"
+        );
+        let new_key = cache_key("en_US-ryan-medium", "Hello world.");
+        assert!(
+            b.audio.contains_key(&new_key),
+            "new-voice segment must be present"
+        );
+        assert_eq!(b.audio.len(), 1);
+    }
+
+    #[test]
+    fn resynth_and_stamp_accepts_text_only_input() {
+        // resynth accepts text-only input too (it's "synth + voice rewrite").
+        let mut b = text_only_bundle(
+            "en_US-lessac-medium",
+            vec![ChapterText::new("bk_test", 0, "Ch", vec!["Hi.".into()])],
+        );
+
+        resynth_and_stamp(
+            &mut b,
+            "en_US-ryan-medium",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+        )
+        .expect("resynth on text-only should succeed");
+
+        assert_eq!(b.manifest.book.voice_id, "en_US-ryan-medium");
+        assert!(b.manifest.audio.present);
+        assert!(b.audio.contains_key(&cache_key("en_US-ryan-medium", "Hi.")));
     }
 
     // ---- write_book_bundle_file ----
