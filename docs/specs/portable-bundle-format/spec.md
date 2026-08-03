@@ -1,6 +1,7 @@
 ---
-status: active
+status: shipped
 started: 2026-07-31
+shipped: 2026-08-03
 ---
 
 # SPEC — Off-device synth track · Effort 1: Portable Bundle Format + Rust synth crate
