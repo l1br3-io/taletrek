@@ -11,10 +11,6 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-/// The curated voice used when `--voice` is omitted. Matches the SPA's
-/// `DEFAULT_VOICE_ID` (`web/src/lib/tts/voices.ts`).
-pub const DEFAULT_VOICE: &str = "en_US-hfc_female-medium";
-
 /// Top-level CLI parsed from `std::env::args`.
 #[derive(Parser, Debug)]
 #[command(
@@ -53,7 +49,7 @@ pub struct CommonArgs {
     pub input: PathBuf,
 
     /// Voice id (curated, e.g. `en_US-hfc_female-medium`). Downloaded on first
-    /// use. Omit to use the default voice ([`DEFAULT_VOICE`]).
+    /// use. Omit to use the default curated voice (`en_US-hfc_female-medium`).
     #[arg(long)]
     pub voice: Option<String>,
 

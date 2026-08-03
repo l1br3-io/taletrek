@@ -25,11 +25,11 @@
 - [x] Unit test (stub runner + `WavPassthrough`): every paragraph yields a segment; keys == `cache_key(voice, text)`
 
 ## Phase 4 — Bundle I/O glue + full manifest stamp (`bundle_io.rs`)
-- [ ] Stamp manifest: `audio.present=true`, `codec=opus`, `normVersion=NORM_VERSION`, `segmentCount`, `generator={taletrek-desktop, 0.1.0}`, keep `book.voiceId`
-- [ ] `write_book_bundle` → output file; default naming `<stem>.synth.taletrek` when `--output` omitted
-- [ ] Wire `synth` subcommand end-to-end (voices → synth_job → bundle_io)
-- [ ] `synth` refuses already-full input (→ points at `resynth`)
-- [ ] Unit test: round-trip via `read_book_bundle`; manifest correctness; refuse-full-input error
+- [x] Stamp manifest: `audio.present=true`, `codec=opus`, `normVersion=NORM_VERSION`, `segmentCount`, `generator={taletrek-desktop, 0.1.0}`, keep `book.voiceId`
+- [x] `write_book_bundle` → output file; default naming `<stem>.synth.taletrek` when `--output` omitted
+- [x] Wire `synth` subcommand end-to-end (voices → synth_job → bundle_io)
+- [x] `synth` refuses already-full input (→ points at `resynth`)
+- [x] Unit test: round-trip via `read_book_bundle`; manifest correctness; refuse-full-input error
 
 ## Phase 5 — Resynth (whole-book voice swap) (`resynth.rs`)
 - [ ] `resynth --input <full|text-only> --voice <new>`: re-synth every paragraph with new voice; discard old audio
