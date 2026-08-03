@@ -4,7 +4,9 @@
 
 ## Current effort
 
-**None active (between phases).** The last effort — M11 (Pluggable Playback Engines, Pausable Synthesis) — shipped 2026-07-19; its spec lives at [`docs/specs/playback-engines-pausable-synth/spec.md`](docs/specs/playback-engines-pausable-synth/spec.md). The next effort starts fresh at `/spec`, which creates `docs/specs/<effort-slug>/spec.md`.
+**Off-device synth track — Effort 1: `portable-bundle-format`** (active). High-level view: [`docs/off-device-synth-track.md`](docs/off-device-synth-track.md) (start there) → track decision [`docs/adrs/0013-off-device-synth-and-portable-bundles.md`](docs/adrs/0013-off-device-synth-and-portable-bundles.md) → format [`docs/bundle-format.md`](docs/bundle-format.md) → current effort spec [`docs/specs/portable-bundle-format/spec.md`](docs/specs/portable-bundle-format/spec.md) → ordered tasks [`docs/specs/portable-bundle-format/tasks/README.md`](docs/specs/portable-bundle-format/tasks/README.md).
+
+The track moves synthesis off the phone onto standalone Rust apps (desktop + Docker server), with books flowing between apps as portable `.taletrek` bundles. The default offline-first PWA is unchanged. Effort 1 (format + Rust `crates/synth` crate) is 8/9 phases done; **task T1.7 (synth pipeline: native piper subprocess + Opus encode) is next** — see [`docs/specs/portable-bundle-format/tasks/007-synth-pipeline.md`](docs/specs/portable-bundle-format/tasks/007-synth-pipeline.md).
 
 Live status always lives in the current effort's `spec.md` frontmatter (`status:`) + `todo.md` — **not here**.
 
