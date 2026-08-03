@@ -17,6 +17,8 @@ anyhow = "1"
 thiserror = "2"
 ureq = "3"
 dirs = "6"
+rayon = "1"
+taletrek-synth = { path = "../crates/synth" }
 
 [dev-dependencies]
 tempfile = "3"
