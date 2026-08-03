@@ -11,11 +11,11 @@
 - [x] `cargo build` + `cargo clippy -p taletrek-desktop --all-targets -- -D warnings` clean
 
 ## Phase 2 — Voice catalog + resolve/download/cache (`voices.rs`)
-- [ ] `CURATED_VOICES` mirror (8 English medium voices) + HF base + path map (parity with `web/src/lib/tts/voices.ts` + `vendor/piper/models.ts`)
-- [ ] `resolve_voice(id, opts) -> Result<PathBuf>`: cache-hit short-circuits; else download `.onnx` + `.json` into `$XDG_CACHE_HOME/taletrek/voices/`
-- [ ] `--voice-path` override (pre-check `<stem>.json` exists → clear error)
-- [ ] `VoiceSource` trait (fetch bytes for URL) so unit tests stub HTTP
-- [ ] Unit test: cache-hit short-circuits download; unknown curated id → typed error
+- [x] `CURATED_VOICES` mirror (8 English medium voices) + HF base + path map (parity with `web/src/lib/tts/voices.ts` + `vendor/piper/models.ts`)
+- [x] `resolve_voice(id, opts) -> Result<PathBuf>`: cache-hit short-circuits; else download `.onnx` + `.json` into `$XDG_CACHE_HOME/taletrek/voices/`
+- [x] `--voice-path` override (pre-check `<stem>.json` exists → clear error)
+- [x] `VoiceSource` trait (fetch bytes for URL) so unit tests stub HTTP
+- [x] Unit test: cache-hit short-circuits download; unknown curated id → typed error
 
 ## Phase 3 — Parallel synth engine (`synth_job.rs`)
 - [ ] Load text-only bundle via `read_book_bundle`; enumerate every paragraph across chapters
