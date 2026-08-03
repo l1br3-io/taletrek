@@ -11,7 +11,7 @@
 
 ---
 
-## Effort 1 — `portable-bundle-format` 🔨 ACTIVE
+## Effort 1 — `portable-bundle-format` ✅ SHIPPED (2026-08-03)
 *Spec: [`../spec.md`](../spec.md) · Plan: [`../plan.md`](../plan.md) · Deliverable: the format + Rust `crates/synth` crate. No app.*
 
 | # | Task | Status | Key files |
@@ -26,14 +26,14 @@
 | T1.8 | Conformance fixtures | ✅ done | `crates/synth/examples/gen_fixtures.rs`, `tests/fixtures/*`, `tests/fixtures_conformance.rs` |
 | T1.9 | Final gates (clippy + test green) | ✅ done | — |
 
-**After T1.7 ships → effort 1 is `shipped`.** Verification for any task in this effort: `cargo test -p taletrek-synth && cargo clippy -p taletrek-synth --all-targets -- -D warnings`.
+**Effort 1 shipped 2026-08-03** (all of T1.1–T1.9 done). Verification for any task in this effort: `cargo test -p taletrek-synth && cargo clippy -p taletrek-synth --all-targets -- -D warnings`.
 
 ---
 
-## Effort 2 — `desktop-synth-app` ⏸ QUEUED (start after T1.7)
+## Effort 2 — `desktop-synth-app` 🔨 ACTIVE (spec drafted)
 *Standalone Rust app: import a text-only `.taletrek` → synthesize with native Piper → export a full `.taletrek`. Headless-first. **No server, no parsing** (takes bundles only).*
 
-Start by creating the effort: open opencode and run `/spec` (or create `docs/specs/desktop-synth-app/{spec.md,plan.md,todo.md}`), then build phase by phase. Rough phase map:
+**Spec + plan + todo:** [`../../desktop-synth-app/`](../../desktop-synth-app/) (`spec.md`, `plan.md`, `todo.md`). Build phase by phase off the todo. Rough phase map:
 
 | # | Task | Key files |
 | --- | --- | --- |
