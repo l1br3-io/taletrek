@@ -5,6 +5,7 @@
 //! land (`synth` → T2.3–T2.4, `resynth` → T2.5).
 
 mod cli;
+mod synth_job;
 mod voices;
 
 use clap::Parser;

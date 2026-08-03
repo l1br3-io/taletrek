@@ -18,11 +18,11 @@
 - [x] Unit test: cache-hit short-circuits download; unknown curated id → typed error
 
 ## Phase 3 — Parallel synth engine (`synth_job.rs`)
-- [ ] Load text-only bundle via `read_book_bundle`; enumerate every paragraph across chapters
-- [ ] `rayon` bounded pool, `--jobs` default `num_cpus`; per-task fresh `SubprocessPiperRunner`, shared `&OpusEncoder`
-- [ ] Per-paragraph: `synthesize_paragraph(voice, text, &mut opts)` → `(cache_key, AudioSegment)`; abort on first error
-- [ ] Collect into `BookBundle.audio` HashMap
-- [ ] Unit test (stub runner + `WavPassthrough`): every paragraph yields a segment; keys == `cache_key(voice, text)`
+- [x] Load text-only bundle via `read_book_bundle`; enumerate every paragraph across chapters
+- [x] `rayon` bounded pool, `--jobs` default `num_cpus`; per-task fresh `SubprocessPiperRunner`, shared `&OpusEncoder`
+- [x] Per-paragraph: `synthesize_paragraph(voice, text, &mut opts)` → `(cache_key, AudioSegment)`; abort on first error
+- [x] Collect into `BookBundle.audio` HashMap
+- [x] Unit test (stub runner + `WavPassthrough`): every paragraph yields a segment; keys == `cache_key(voice, text)`
 
 ## Phase 4 — Bundle I/O glue + full manifest stamp (`bundle_io.rs`)
 - [ ] Stamp manifest: `audio.present=true`, `codec=opus`, `normVersion=NORM_VERSION`, `segmentCount`, `generator={taletrek-desktop, 0.1.0}`, keep `book.voiceId`
