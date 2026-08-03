@@ -45,8 +45,8 @@
 - [x] Unit test: progress lines captured via the seam
 
 ## Phase 7 — Manual end-to-end + integration test
-- [ ] `#[ignore]` integration test: real `piper` + `ffmpeg` + real curated voice on a text-only fixture → full bundle (gated like effort 1)
-- [ ] Human runbook: synth a real text-only bundle → confirm Opus audio plays + `manifest.audio` correct; round-trip output back through SPA import (effort 3 will automate)
+- [x] `#[ignore]` integration test: real `piper` + `ffmpeg` + real curated voice on a text-only fixture → full bundle (gated like effort 1)
+- [x] Human runbook: synth a real text-only bundle → confirm Opus audio plays + `manifest.audio` correct; round-trip output back through SPA import (effort 3 will automate)
 
 ## Phase 8 — Final gates
 - [ ] `cargo clippy -p taletrek-desktop --all-targets -- -D warnings` clean
