@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 started: 2026-08-03
 ---
 
