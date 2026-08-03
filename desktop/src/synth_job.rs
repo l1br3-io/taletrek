@@ -15,10 +15,8 @@
 //! circuits `collect::<Result<..>>`). Continue-on-error (`--keep-going`) is a
 //! follow-up; v1 aborts.
 //!
-//! `dead_code`: this module lands in T2.3 ahead of its sole consumer —
-//! `run_synth`/`run_resynth` wire `synth_all_paragraphs` in T2.4. Drop or
-//! narrow this allow once T2.4 makes the runtime path reach these items.
-#![allow(dead_code)]
+//! `dead_code` was lifted in T2.4: `synth_all_paragraphs` + `SynthJobError` are
+//! now reached via `bundle_io::synth_and_stamp` → `run_synth`.
 
 use std::collections::HashMap;
 use std::path::Path;
