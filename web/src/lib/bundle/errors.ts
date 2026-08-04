@@ -76,3 +76,19 @@ export class BundleTooLargeError extends BundleError {
     super("Import would exceed this device's storage quota. Free up space and try again.")
   }
 }
+
+/**
+ * Full export was requested for a book with no synthesized audio recoverable
+ * from the cache (no `audioCache` entries owned by the book and no paused
+ * `uploadJob` whose voice could anchor a payload). The full-audio payload
+ * cannot be built, so the egress path refuses; text-only export remains
+ * available and is what the message points the user at (resolved decision #2).
+ */
+export class NoAudioToExportError extends BundleError {
+  override readonly name = 'NoAudioToExportError'
+  constructor() {
+    super(
+      'This book has no synthesized audio to export. Export a text-only bundle instead and synth it on the desktop.',
+    )
+  }
+}

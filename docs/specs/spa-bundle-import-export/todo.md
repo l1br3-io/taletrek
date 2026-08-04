@@ -17,7 +17,7 @@
 
 ## Phase 3 — IDB integration
 - [x] T5: Import — new-id-on-collision, audio dedup, size guard (`tasks/005-import.md`)
-- [ ] T6: Export — voice recovery, text-only vs full (`tasks/006-export.md`)
+- [x] T6: Export — voice recovery, text-only vs full (`tasks/006-export.md`)
 
 ### Checkpoint: IDB round-trip reproduces a conformant archive.
 
