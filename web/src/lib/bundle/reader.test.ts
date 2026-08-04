@@ -6,8 +6,9 @@ import {
   UnsupportedBundleKindError,
   UnsupportedSchemaVersionError,
 } from './errors'
-import type { Manifest, TextJson } from './manifest'
+import type { BookBundle, Manifest, TextJson } from './manifest'
 import { readBookBundle } from './reader'
+import { writeBookBundle } from './writer'
 
 /** Build a ZIP from a path → content map (string or bytes). Returns the archive bytes. */
 async function buildZip(entries: Record<string, string | Uint8Array>): Promise<Uint8Array> {
@@ -50,16 +51,21 @@ function text(): TextJson {
   }
 }
 
+/** Build a valid BookBundle for round-trip tests (writer stamps generator + audio). */
+function makeBundle(audio: Map<string, Uint8Array>, meta: BookBundle['meta'] = {}): BookBundle {
+  return { manifest: manifest(), chapters: text().chapters, audio, meta }
+}
+
 describe('readBookBundle — happy paths', () => {
   it('reads a full bundle: chapters + every audio entry keyed by cache key', async () => {
-    const bytes = await buildZip({
-      'manifest.json': JSON.stringify(
-        manifest({ audio: { present: true, codec: 'opus', normVersion: 2, segmentCount: 2 } }),
+    const bytes = await writeBookBundle(
+      makeBundle(
+        new Map([
+          [KEY_A, new Uint8Array([1, 2, 3])],
+          [KEY_B, new Uint8Array([4, 5, 6])],
+        ]),
       ),
-      'text.json': JSON.stringify(text()),
-      [`audio/${KEY_A}.opus`]: new Uint8Array([1, 2, 3]),
-      [`audio/${KEY_B}.opus`]: new Uint8Array([4, 5, 6]),
-    })
+    )
 
     const bundle = await readBookBundle(bytes)
 
@@ -72,10 +78,7 @@ describe('readBookBundle — happy paths', () => {
   })
 
   it('reads a text-only bundle (audio.present=false, no audio/ entries) → empty audio map', async () => {
-    const bytes = await buildZip({
-      'manifest.json': JSON.stringify(manifest()),
-      'text.json': JSON.stringify(text()),
-    })
+    const bytes = await writeBookBundle(makeBundle(new Map()))
 
     const bundle = await readBookBundle(bytes)
 
@@ -84,13 +87,13 @@ describe('readBookBundle — happy paths', () => {
   })
 
   it('parses meta/* when present', async () => {
-    const bytes = await buildZip({
-      'manifest.json': JSON.stringify(manifest()),
-      'text.json': JSON.stringify(text()),
-      'meta/source.json': JSON.stringify({ filename: 'book.epub', format: 'epub' }),
-      'meta/processing.json': JSON.stringify({ defIds: [], label: 'raw' }),
-      'meta/position.json': JSON.stringify({ chapterIndex: 3, paragraphIndex: 12 }),
-    })
+    const bytes = await writeBookBundle(
+      makeBundle(new Map(), {
+        source: { filename: 'book.epub', format: 'epub' },
+        processing: { appliedAt: 0, ops: [] },
+        position: { chapterIndex: 3, paragraphIndex: 12 },
+      }),
+    )
 
     const bundle = await readBookBundle(bytes)
 
@@ -100,10 +103,7 @@ describe('readBookBundle — happy paths', () => {
   })
 
   it('omits meta/* when absent (all undefined)', async () => {
-    const bytes = await buildZip({
-      'manifest.json': JSON.stringify(manifest()),
-      'text.json': JSON.stringify(text()),
-    })
+    const bytes = await writeBookBundle(makeBundle(new Map()))
     const bundle = await readBookBundle(bytes)
     expect(bundle.meta.source).toBeUndefined()
     expect(bundle.meta.processing).toBeUndefined()

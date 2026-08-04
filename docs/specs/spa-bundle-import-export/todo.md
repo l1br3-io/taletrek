@@ -11,7 +11,7 @@
 ### Checkpoint: Conformance gate — SPA reads desktop output; #1 risk retired.
 
 ## Phase 2 — Writer
-- [ ] T4: Writer — jszip deflate + Opus stamp, round-trips through reader (`tasks/004-writer.md`)
+- [x] T4: Writer — jszip deflate + Opus stamp, round-trips through reader (`tasks/004-writer.md`)
 
 ### Checkpoint: In-memory round-trip holds.
 
