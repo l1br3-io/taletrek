@@ -49,11 +49,11 @@
 - [x] Human runbook: synth a real text-only bundle → confirm Opus audio plays + `manifest.audio` correct; round-trip output back through SPA import (effort 3 will automate)
 
 ## Phase 8 — Final gates
-- [ ] `cargo clippy -p taletrek-desktop --all-targets -- -D warnings` clean
-- [ ] `cargo test -p taletrek-desktop` green
-- [ ] `cargo test -p taletrek-synth` still green (effort 1 untouched)
-- [ ] `pnpm verify` still green (no `web/` changes)
-- [ ] Flip `spec.md` frontmatter `status: draft → active` on /build checkpoint; flip to `shipped` on merge
+- [x] `cargo clippy -p taletrek-desktop --all-targets -- -D warnings` clean
+- [x] `cargo test -p taletrek-desktop` green (53 passed; 2 e2e `#[ignore]`)
+- [x] `cargo test -p taletrek-synth` still green (effort 1 untouched; 4 passed)
+- [ ] `pnpm verify` still green (no `web/` changes) — **BLOCKED, pre-existing on main**: `pnpm lint` fails with 2 errors in `web/src/lib/parse/pdf.ts` (forbidden non-null assertions). Verified identical on merge base `7d6eff2` (effort 1 ship) — predates this branch; this effort never touched `web/`. `pnpm typecheck`/`test` (1022)/`build` all green. Flagged for a separate web/ cleanup; not a regression from this effort.
+- [x] Flip `spec.md` frontmatter `status: draft → active` on /build checkpoint (done — spec is `active`); flip to `shipped` on merge (merge-time, outside `/build`)
 
 ## Follow-on efforts (NOT this one)
 - [ ] Effort 3 — `spa-bundle-import-export` (TS bundle reader/writer + UI)
