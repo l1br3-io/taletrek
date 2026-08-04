@@ -6,7 +6,7 @@
 ## Phase 1 — Format layer (the conformance gate)
 - [x] T1: Manifest types + typed errors (`tasks/001-manifest-errors.md`)
 - [x] T2: Reader — jszip unzip + validate (`tasks/002-reader.md`)
-- [ ] T3: Parity test against the 3 Rust fixtures (`tasks/003-parity.md`)
+- [x] T3: Parity test against the 3 Rust fixtures (`tasks/003-parity.md`)
 
 ### Checkpoint: Conformance gate — SPA reads desktop output; #1 risk retired.
 

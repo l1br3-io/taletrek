@@ -54,6 +54,15 @@ type RawManifest = {
  */
 export async function readBookBundle(input: Uint8Array): Promise<BookBundle> {
   const zip = await loadZip(input)
+
+  // Structural library-bundle refusal: a `.taletrek-lib` uses
+  // `library-manifest.json` (no `manifest.json`), so detect it by its marker
+  // entry before the book-manifest read. Gives the specific error the UI maps
+  // to "library bundles not yet supported" rather than a confusing "corrupt".
+  if (zip.file('library-manifest.json')) {
+    throw new UnsupportedBundleKindError('library')
+  }
+
   const raw = await readRequiredJson<RawManifest>(zip, MANIFEST_ENTRY)
 
   // Schema gate first: a newer format is never best-effort loaded. Read before
