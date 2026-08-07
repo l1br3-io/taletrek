@@ -1,5 +1,6 @@
 import {
   AudioLines,
+  Download,
   List,
   MoreVertical,
   Pencil,
@@ -44,6 +45,8 @@ interface BookCardProps {
   onResynthesize?: (id: BookId) => void
   /** When provided, resumes a paused synthesis job for the book (ADR-0010 / M11). */
   onResume?: (id: BookId) => void
+  /** When provided, shows an "Export bundle" action on the card. */
+  onExportBundle?: (id: BookId) => void
   /**
    * When `false`, AI menu items (Transform / Pronunciation) render with an amber
    * dot to flag "enabled but not usable right now" — click still fires the
@@ -68,6 +71,7 @@ export function BookCard({
   onOutline,
   onResynthesize,
   onResume,
+  onExportBundle,
   aiUsable = true,
   aiUnusableReason = null,
 }: BookCardProps) {
@@ -192,6 +196,19 @@ export function BookCard({
             </button>
           )}
           <div className="my-1 border-t border-line" />
+          {onExportBundle && (
+            <button
+              type="button"
+              onClick={() => {
+                onExportBundle(book.id)
+                close()
+              }}
+              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
+              aria-label={`Export bundle for ${book.title}`}
+            >
+              <Download className="h-4 w-4" /> Export bundle
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
