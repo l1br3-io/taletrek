@@ -22,7 +22,7 @@
 ### Checkpoint: IDB round-trip reproduces a conformant archive.
 
 ## Phase 4 — UI
-- [ ] T7: Library "Import bundle" button (`tasks/007-ui-import.md`)
+- [x] T7: Library "Import bundle" button (`tasks/007-ui-import.md`)
 - [ ] T8: Per-book "Export bundle" action (`tasks/008-ui-export.md`)
 
 ### Checkpoint: User-visible loop closes (export → re-import → plays).
