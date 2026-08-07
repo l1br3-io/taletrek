@@ -28,7 +28,7 @@
 ### Checkpoint: User-visible loop closes (export → re-import → plays).
 
 ## Phase 5 — Docs + ship
-- [ ] T9: Docs + gotchas + byte-compat wording fix in `bundle-format.md` (`tasks/009-docs.md`)
+- [x] T9: Docs + gotchas + byte-compat wording fix in `bundle-format.md` (`tasks/009-docs.md`)
 - [ ] T10: Runbook + final gates (`tasks/010-runbook-gates.md`)
 
 ## Follow-on (NOT this effort)

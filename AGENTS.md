@@ -93,6 +93,8 @@ Full detail lives in [`docs/gotchas.md`](docs/gotchas.md) — **read the relevan
 24. **Pausable synthesis persists via uploadJob with uploading=false** — [`G24`](docs/gotchas.md#g24)
 25. **Parallel synthesis — PoolEngine, pre-synth only, mobile cap=2** — [`G25`](docs/gotchas.md#g25)
 26. **Whole-book streaming transform — in-place, resume mirrors uploadJob** — [`G26`](docs/gotchas.md#g26)
+27. **Bundle import loads whole archive into memory (jszip); huge bundles pressure mobile RAM** — [`G27`](docs/gotchas.md#g27)
+28. **`sourceFormat: "unknown"` maps to `'txt'` on SPA import** — [`G28`](docs/gotchas.md#g28)
 
 ## How to resume (in a new session)
 
