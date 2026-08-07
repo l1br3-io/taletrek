@@ -38,11 +38,11 @@ export interface ImportBundleResult {
  * least-lossy default (plain text is the lowest-common-denominator input the
  * reader can always display).
  *
- * GOTCHA: `bundle-format.md` permits `sourceFormat: "unknown"` (a desktop
- * synth may not know the original file type); the SPA's `BookFormat` union
- * does not. Mapping to `'txt'` keeps the book playable. If this ever causes
- * confusion (e.g. a re-export round-trips `epub → unknown → txt`), note it in
- * `docs/gotchas.md`.
+ * GOTCHA (G28, `docs/gotchas.md#g28`): `bundle-format.md` permits
+ * `sourceFormat: "unknown"` (a desktop synth may not know the original file
+ * type); the SPA's `BookFormat` union does not. Mapping to `'txt'` keeps the
+ * book playable. The side effect is that a round-trip `epub → unknown → txt`
+ * is lossy on the format label only — the text is already cleaned upstream.
  */
 function sourceFormatToBookFormat(sf: BundleSourceFormat): BookFormat {
   switch (sf) {
