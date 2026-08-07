@@ -468,6 +468,7 @@ export function useLibraryState() {
     outline,
     hints,
     list,
+    refresh,
     runCtx,
     hintsTitle,
     parseState,

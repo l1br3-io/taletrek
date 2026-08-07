@@ -1,4 +1,5 @@
 import { X } from 'lucide-react'
+import { BundleImportButton } from '../../components/BundleImportButton'
 import { uploadManager } from '../../lib/upload/manager'
 import { AiStatusChip } from './AiStatusChip'
 import { FeatureUnavailableSheet } from './FeatureUnavailableSheet'
@@ -22,6 +23,7 @@ export function Library() {
     outline,
     hints,
     list,
+    refresh,
     runCtx,
     hintsTitle,
     parseState,
@@ -67,7 +69,10 @@ export function Library() {
           </span>
           Library
         </h1>
-        <UploadButton onSelect={handleSelect} disabled={uploadBusy} />
+        <div className="flex flex-wrap items-center gap-3">
+          <UploadButton onSelect={handleSelect} disabled={uploadBusy} />
+          <BundleImportButton onImported={() => void refresh()} disabled={uploadBusy} />
+        </div>
       </div>
 
       {parseState.type === 'parsing' && (
