@@ -1,6 +1,6 @@
 # TaleTrek Bundle Format (`*.taletrek`)
 
-> **Status:** Canonical spec · v1 (`schemaVersion: 1`)
+> **Status:** Canonical spec · v1 (`schemaVersion: 1`) · *2026-08-07: "byte-compatible archives" wording → "mutual round-trip conformance" (clarification only; format unchanged — see Design invariant 2 + §Conformance rules).*
 > **Owners:** all three apps (SPA / TS, desktop / Rust, server / Rust) MUST conform.
 > Origin ADR: [`adrs/0013-off-device-synth-and-portable-bundles.md`](./adrs/0013-off-device-synth-and-portable-bundles.md).
 
@@ -9,7 +9,7 @@ A **bundle** is the portable interchange unit for one book (or a whole library) 
 ## Design invariants
 
 1. **Content-addressed audio.** Every audio segment is named by its TaleTrek cache key: `${voiceId}:${NORM_VERSION}:${sha256(normalizedText)}`. Re-importing the same paragraph never double-stores. This is the same key the SPA's `audioCache` IDB store already uses.
-2. **One format, two implementations.** Rust (`crates/synth`) and TypeScript (SPA) must produce byte-compatible archives. A shared fixtures set (under `crates/synth/tests/fixtures/`) is the conformance gate — both sides must round-trip every fixture.
+2. **One format, two implementations.** Rust (`crates/synth`) and TypeScript (SPA) must produce mutually-conformant archives: each side must read what the other wrote. A shared fixtures set (under `crates/synth/tests/fixtures/`) is the conformance gate — both sides must round-trip every fixture. The conformance rule is mutual round-trip, **not** byte-identity: ZIP implementations legitimately differ in entry order, compression level, and header timestamps, and pinning those would hurt both sides for no real gain.
 3. **Forward-compatible.** The manifest carries a `schemaVersion`. Unknown fields are ignored on read; a major bump is a breaking change that readers must refuse with a clear error.
 4. **State-independent.** A bundle may be text-only (no `audio/` entries) or full. Import handles both; "additional synth" imports a text-only (or partial) bundle, synth fills the gaps, re-export is full.
 
@@ -119,6 +119,8 @@ library.taletrek-lib  (ZIP)
 Library import is **idempotent and merge-safe**: each book is ingested by its content; content-addressed audio dedups. Importing the same library twice is a no-op (books matched by id; audio by key).
 
 ## Conformance rules
+
+Conformance is **mutual round-trip, not byte-identity**: a conforming writer produces archives a conforming reader ingests, and vice versa. ZIP implementations legitimately differ in entry order, compression level, and header timestamps — those are not conformance concerns. The rules below define what a conformant archive *contains* and how readers must *react*; the shared fixtures under `crates/synth/tests/fixtures/` are the gate.
 
 - **Write:** must emit `manifest.json` with `schemaVersion: 1`, `text.json`, and (if full) at least one `audio/` entry whose codec matches the manifest.
 - **Read:** must accept a text-only bundle (`audio.present === false` or missing `audio/`). Must refuse a `schemaVersion` it does not understand with a typed error, not a silent best-effort load.

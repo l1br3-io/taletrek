@@ -112,6 +112,12 @@ export function useLibraryState() {
   const [outlineBookId, setOutlineBookId] = useState<BookId | null>(null)
   const [outlineFormat, setOutlineFormat] = useState<BookFormat>('txt')
   /**
+   * Set when the user picks "Export bundle" from a book's action menu — opens
+   * the {@link BundleExportAction} chooser (text-only vs full). Holds the id +
+   * title so the chooser can run + name the download without a re-read.
+   */
+  const [exportTarget, setExportTarget] = useState<{ id: BookId; title: string } | null>(null)
+  /**
    * Set when the user clicks an AI menu item (Reprocess / Pronunciation) while
    * `aiUnusableReason !== null`. The explanatory `<FeatureUnavailableSheet>`
    * reads this to show reason-specific copy + a deep-link to Settings → AI.
@@ -456,6 +462,13 @@ export function useLibraryState() {
     [settings.voiceId, settings.cleaning],
   )
 
+  // --- per-book export bundle (opens the text-only vs full chooser) ---
+  const handleExportBundle = useCallback(async (id: BookId): Promise<void> => {
+    const book = await getBook(id)
+    if (!book) return
+    setExportTarget({ id, title: book.title })
+  }, [])
+
   return {
     ai,
     online,
@@ -468,6 +481,7 @@ export function useLibraryState() {
     outline,
     hints,
     list,
+    refresh,
     runCtx,
     hintsTitle,
     parseState,
@@ -491,6 +505,9 @@ export function useLibraryState() {
     onHintsClose,
     handleDelete,
     handleResynthesize,
+    exportTarget,
+    handleExportBundle,
+    handleExportClose: () => setExportTarget(null),
     dismissParseError: () => setParseState({ type: 'idle' }),
     navigate,
   }

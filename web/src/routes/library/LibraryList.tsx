@@ -16,6 +16,8 @@ interface LibraryListProps {
   onResynthesize?: (id: BookId) => void
   /** When provided, resumes a paused synthesis job for the book (ADR-0010 / M11). */
   onResume?: (id: BookId) => void
+  /** When provided, shows an "Export bundle" action on each card. */
+  onExportBundle?: (id: BookId) => void
   /** When provided, shows a "Rename" action on each card. */
   onRename?: (id: BookId) => void
   /**
@@ -43,7 +45,7 @@ export function LibraryList({
   onOutline,
   onResynthesize,
   onResume,
-  onRename,
+  onExportBundle,
   aiUsable = true,
   aiUnusableReason = null,
 }: LibraryListProps) {
@@ -73,7 +75,7 @@ export function LibraryList({
           onOutline={onOutline}
           onResynthesize={onResynthesize}
           onResume={onResume}
-          onRename={onRename}
+          onExportBundle={onExportBundle}
           aiUsable={aiUsable}
           aiUnusableReason={aiUnusableReason}
         />
