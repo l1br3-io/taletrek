@@ -29,7 +29,19 @@
 
 ## Phase 5 — Docs + ship
 - [x] T9: Docs + gotchas + byte-compat wording fix in `bundle-format.md` (`tasks/009-docs.md`)
-- [ ] T10: Runbook + final gates (`tasks/010-runbook-gates.md`)
+- [x] T10: Runbook + final gates (`tasks/010-runbook-gates.md`)
+
+### Final gates (run @ T10, branch `spa-bundle-import-export`)
+- [x] `cargo test -p taletrek-synth` green — 4+5+3+4 suites pass (1 `#[ignore]` needs `piper`+`ffmpeg`; fixtures unchanged, effort 1 frozen).
+- [x] `pnpm test` green — 86 files / **1113 tests**, includes `bundle/parity.test.ts` against the 3 live Rust fixtures.
+- [x] `pnpm typecheck` green (`tsc --noEmit`).
+- [x] `pnpm build` green — `dist/` + PWA service worker generated.
+- [ ] `pnpm verify` (full) — **BLOCKED, pre-existing on main**: `pnpm lint` fails with **2 errors** in `web/src/lib/tts/pool.test.ts` (`lint/suspicious/useIterableCallbackReturn`, lines 43 & 48). `pool.test.ts` is byte-identical on `main` and this branch; `biome.json` untouched by this effort; `web/src/lib/bundle/` (13 files) is lint-clean. Same shape of blocker effort 2 recorded (Phase 8); the `web/` noNonNullAssertion warnings (`pdf.ts`, `pcm.test.ts`) are also pre-existing. `typecheck`/`test`/`build` all green. Flagged for a separate `web/` cleanup; not a regression from this effort.
+- [ ] Runbook walkthrough on a real browser (`runbook.md`) — **human-run, pending**: export text-only → `taletrek-desktop synth` → import full → plays offline with no re-synthesis. _(Record date + commit here when run.)_
+
+### Checkpoint: Ready for review
+- [x] All `spec.md` §"Success criteria" checked or explicitly deferred (runbook walkthrough = deferred to human run, above).
+- [x] Runbook + final gates task complete. `spec.md` `status:` stays `active` — flips to `shipped` on the merge commit (per ROADMAP §"How we plan").
 
 ## Follow-on (NOT this effort)
 - [ ] Library-bundle (`.taletrek-lib`) SPA support

@@ -187,16 +187,16 @@ No e2e/browser test in this effort. Manual end-to-end (real desktop round-trip) 
 
 ## Success criteria (testable)
 
-- [ ] `parity.test.ts` loads all 3 Rust fixtures; the two book fixtures import cleanly, the library fixture is refused with `UnsupportedBundleKindError`.
-- [ ] Reader refuses a synthetic `schemaVersion: 2` archive with `UnsupportedSchemaVersionError`.
-- [ ] Reader accepts a text-only bundle (`audio.present === false` **and** missing `audio/`) — both absence shapes per format doc.
-- [ ] Import of a full bundle writes one `audioCache` entry per distinct paragraph, keyed exactly by `audioCacheKey(voice, normalizedText)`; re-import of the same bundle creates a second book (new `BookId`) with **zero** new `audioCache` writes (content-addressed dedup).
-- [ ] Export of a book with cached audio produces a bundle whose `manifest.audio.present === true`, `codec === "opus"`, and `segmentCount` matches the distinct-paragraph count.
-- [ ] Export of a book with no cached audio produces a text-only bundle (`audio.present === false`, no `audio/` entries).
-- [ ] `meta/{source,processing,position}.json` survive export → (desktop noop) → import; `position` lands on `Book.position`, `processing` on `Book.processing`, source provenance on the `files` store.
-- [ ] Library page shows a working "Import bundle" button (accepts `.taletrek`) and a per-book "Export bundle" action producing a download.
-- [ ] `pnpm verify` green; `cargo test -p taletrek-synth` still green (untouched, but confirms fixtures unchanged).
-- [ ] Runbook entry: real SPA-export → `taletrek-desktop synth` → SPA-import round-trip produces a playable book on a real browser.
+- [x] `parity.test.ts` loads all 3 Rust fixtures; the two book fixtures import cleanly, the library fixture is refused with `UnsupportedBundleKindError`.
+- [x] Reader refuses a synthetic `schemaVersion: 2` archive with `UnsupportedSchemaVersionError`.
+- [x] Reader accepts a text-only bundle (`audio.present === false` **and** missing `audio/`) — both absence shapes per format doc.
+- [x] Import of a full bundle writes one `audioCache` entry per distinct paragraph, keyed exactly by `audioCacheKey(voice, normalizedText)`; re-import of the same bundle creates a second book (new `BookId`) with **zero** new `audioCache` writes (content-addressed dedup).
+- [x] Export of a book with cached audio produces a bundle whose `manifest.audio.present === true`, `codec === "opus"`, and `segmentCount` matches the distinct-paragraph count.
+- [x] Export of a book with no cached audio produces a text-only bundle (`audio.present === false`, no `audio/` entries).
+- [x] `meta/{source,processing,position}.json` survive export → (desktop noop) → import; `position` lands on `Book.position`, `processing` on `Book.processing`, source provenance on the `files` store.
+- [x] Library page shows a working "Import bundle" button (accepts `.taletrek`) and a per-book "Export bundle" action producing a download.
+- [x] `pnpm verify` green; `cargo test -p taletrek-synth` still green (untouched, but confirms fixtures unchanged). _— `cargo test -p taletrek-synth` green; `pnpm typecheck`/`test`(1113)/`build` green. `pnpm verify` blocked at the `lint` step by a pre-existing failure on `main` (`pool.test.ts`, byte-identical on this branch); `bundle/` is lint-clean. Recorded in `todo.md` Phase 5 gates._
+- [ ] Runbook entry: real SPA-export → `taletrek-desktop synth` → SPA-import round-trip produces a playable book on a real browser. _— **Deferred**: human-run walkthrough; `runbook.md` drafted, awaiting a real-browser run (see `todo.md`). Not flippable inside `/build`._
 
 ## Resolved decisions (from spec review)
 
