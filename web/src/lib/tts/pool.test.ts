@@ -40,12 +40,16 @@ class WorkerStub {
 
   emit(msg: TtsResponse): void {
     const evt = { data: msg } as MessageEvent
-    this.listeners.get('message')?.forEach((fn) => fn(evt))
+    this.listeners.get('message')?.forEach((fn) => {
+      fn(evt)
+    })
   }
 
   emitError(error: ErrorEventInit & { message?: string }): void {
     const evt = new ErrorEvent('error', error)
-    this.listeners.get('error')?.forEach((fn) => fn(evt))
+    this.listeners.get('error')?.forEach((fn) => {
+      fn(evt)
+    })
   }
 }
 
