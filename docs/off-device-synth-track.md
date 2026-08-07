@@ -74,6 +74,7 @@ Next action: task [`specs/desktop-synth-app/todo.md`](./specs/desktop-synth-app/
 ## Resume pointers
 - **Decision:** [`adrs/0013-…`](./adrs/0013-off-device-synth-and-portable-bundles.md)
 - **Format:** [`bundle-format.md`](./bundle-format.md)
+- **Manual testing (Tier-2 round-trip):** [`specs/spa-bundle-import-export/runbook.md`](./specs/spa-bundle-import-export/runbook.md) · desktop synth: [`specs/desktop-synth-app/runbook.md`](./specs/desktop-synth-app/runbook.md)
 - **Current effort spec:** [`specs/desktop-synth-app/spec.md`](./specs/desktop-synth-app/spec.md)
 - **All tasks, in order:** [`specs/portable-bundle-format/tasks/README.md`](./specs/portable-bundle-format/tasks/README.md)
 - **Next action:** [`specs/desktop-synth-app/todo.md`](./specs/desktop-synth-app/todo.md) (Phase 1)
