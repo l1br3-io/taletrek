@@ -1,4 +1,6 @@
 import { X } from 'lucide-react'
+import { BundleExportAction } from '../../components/BundleExportAction'
+import { BundleImportButton } from '../../components/BundleImportButton'
 import { uploadManager } from '../../lib/upload/manager'
 import { AiStatusChip } from './AiStatusChip'
 import { FeatureUnavailableSheet } from './FeatureUnavailableSheet'
@@ -22,6 +24,7 @@ export function Library() {
     outline,
     hints,
     list,
+    refresh,
     runCtx,
     hintsTitle,
     parseState,
@@ -43,6 +46,9 @@ export function Library() {
     onHintsClose,
     handleDelete,
     handleResynthesize,
+    exportTarget,
+    handleExportBundle,
+    handleExportClose,
     dismissParseError,
     synthesizeOnUpload,
     navigate,
@@ -67,7 +73,10 @@ export function Library() {
           </span>
           Library
         </h1>
-        <UploadButton onSelect={handleSelect} disabled={uploadBusy} />
+        <div className="flex flex-wrap items-center gap-3">
+          <UploadButton onSelect={handleSelect} disabled={uploadBusy} />
+          <BundleImportButton onImported={() => void refresh()} disabled={uploadBusy} />
+        </div>
       </div>
 
       {parseState.type === 'parsing' && (
@@ -155,6 +164,7 @@ export function Library() {
             onResynthesize={synthesizeOnUpload !== 'off' ? handleResynthesize : undefined}
             onResume={(id) => void uploadManager.resume(id)}
             onRename={handleRename}
+            onExportBundle={(id) => void handleExportBundle(id)}
             aiUsable={aiUsable}
             aiUnusableReason={aiUnusableReason}
           />
@@ -193,6 +203,17 @@ export function Library() {
         onAccept={onHintsAccept}
         onClose={onHintsClose}
       />
+
+      {/* Per-book "Export bundle" chooser (text-only vs full). The book list
+          drives export from every card; this sheet does the IDB read → ZIP
+          write → browser download. See BundleExportAction. */}
+      {exportTarget && (
+        <BundleExportAction
+          bookId={exportTarget.id}
+          title={exportTarget.title}
+          onClose={handleExportClose}
+        />
+      )}
 
       {/* Explanatory sheet shown when the user clicks an AI menu item while AI
           is enabled but not usable. Tells them what's missing and offers a
