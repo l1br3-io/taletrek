@@ -11,7 +11,6 @@
 
 mod bundle_io;
 mod cli;
-mod synth_job;
 
 use std::fs;
 use std::thread::available_parallelism;

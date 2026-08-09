@@ -15,6 +15,8 @@ path = "src/lib.rs"
 ureq = "3"
 dirs = "6"
 thiserror = "2"
+rayon = "1"
+taletrek-synth = { path = "../synth" }
 
 [dev-dependencies]
 tempfile = "3"

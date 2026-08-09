@@ -15,8 +15,9 @@
 //! circuits `collect::<Result<..>>`). Continue-on-error (`--keep-going`) is a
 //! follow-up; v1 aborts.
 //!
-//! `dead_code` was lifted in T2.4: `synth_all_paragraphs` + `SynthJobError` are
-//! now reached via `bundle_io::synth_and_stamp` → `run_synth`.
+//! Re-exported at the crate root ([`synth_all_paragraphs`], [`SynthJobError`]);
+//! both hosts (desktop CLI, server) reach this through their own stamping glue
+//! (`bundle_io::synth_and_stamp` on the desktop).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -28,11 +29,11 @@ use thiserror::Error;
 use taletrek_synth::synth::{synthesize_paragraph, PiperRunner, SynthError, SynthOptions};
 use taletrek_synth::{AudioSegment, BookBundle, Encoder};
 
-use taletrek_worker::{Progress, ProgressSink};
+use crate::ProgressSink;
 
-/// All the ways a parallel synth run can fail. Typed so the host (T2.4
-/// `bundle_io`) can branch and so `?` lifts cleanly into `anyhow` at the CLI
-/// boundary.
+/// All the ways a parallel synth run can fail. Typed so the host (desktop's
+/// `bundle_io` / server's synth runner) can branch and so `?` lifts cleanly
+/// into `anyhow` at the binary boundary.
 #[derive(Debug, Error)]
 pub enum SynthJobError {
     /// The `rayon` thread pool could not be built for the requested job count.
@@ -81,10 +82,10 @@ fn collect_paragraphs(bundle: &BookBundle) -> Vec<&str> {
 /// into one segment (content addressing), matching how the SPA's audio cache
 /// behaves.
 ///
-/// `progress`, when `Some`, emits a `synth [done/total] pct%` line to stderr
-/// after each successful paragraph. Under parallelism the `done` counter is
-/// monotonic but lines may interleave out of strict order; tests pin `jobs: 1`
-/// for deterministic ordering. `None` is silent.
+/// `progress`, when `Some`, emits a `synth [done/total] pct%` line after each
+/// successful paragraph. Under parallelism the `done` counter is monotonic but
+/// lines may interleave out of strict order; tests pin `jobs: 1` for
+/// deterministic ordering. `None` is silent.
 pub fn synth_all_paragraphs<R, E, F>(
     bundle: &BookBundle,
     voice_id: &str,
@@ -92,7 +93,7 @@ pub fn synth_all_paragraphs<R, E, F>(
     make_runner: F,
     encoder: &E,
     jobs: usize,
-    progress: Option<&Progress>,
+    progress: Option<&dyn ProgressSink>,
 ) -> Result<HashMap<String, AudioSegment>, SynthJobError>
 where
     R: PiperRunner + Send,
@@ -159,6 +160,8 @@ mod tests {
         cache_key, AudioCodec, AudioMeta, BookBundle, BookMeta, ChapterText, Generator, Manifest,
         ManifestKind, WavPassthrough, NORM_VERSION,
     };
+
+    use crate::Progress;
 
     /// Canonical mono 16-bit 16 kHz WAV with `pcm` as its data payload — the
     /// shape Piper emits on stdout and `concat_wav` / `wav_duration` expect.

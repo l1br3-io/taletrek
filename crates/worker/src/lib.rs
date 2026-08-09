@@ -25,6 +25,7 @@
 //! trait as inherent methods on the concrete type.
 
 pub mod progress;
+pub mod synth_job;
 pub mod voices;
 
 /// Seam between the worker engine (voice acquire, synth pool) and the host's
@@ -36,11 +37,16 @@ pub mod voices;
 /// - the **desktop** CLI writes human-readable lines to stderr ([`Progress`]);
 /// - the **server** updates a job row's `done`/`total` columns (effort 4, T9).
 ///
+/// `Send + Sync` is a supertrait because the synth pool calls these methods
+/// from rayon worker threads — the trait object must be shareable across
+/// threads. Both hosts' reporters are already thread-safe ([`Progress`] wraps a
+/// `Mutex`; the server's future job-row reporter will wrap DB access).
+///
 /// GOTCHA: only the two methods the engine calls live here. Host-only reporters
 /// (the desktop's final `summary` line + `elapsed()` timer) are inherent on the
 /// concrete [`Progress`] type — the server never summarizes, so they don't
 /// belong on the shared trait.
-pub trait ProgressSink {
+pub trait ProgressSink: Send + Sync {
     /// Report synth progress: `done` of `total` paragraphs have completed.
     /// Hosts may skip when `total == 0` (nothing to report, e.g. an empty
     /// bundle).
@@ -54,6 +60,7 @@ pub trait ProgressSink {
 
 // Flat type re-exports — the primary public API.
 pub use progress::Progress;
+pub use synth_job::{synth_all_paragraphs, SynthJobError};
 pub use voices::{
     default_cache_dir, find_curated, resolve_voice, CURATED_VOICES, DEFAULT_VOICE_ID, HF_BASE,
     ResolveError, ResolveOpts, UreqVoiceSource, Voice, VoiceQuality, VoiceSource,
