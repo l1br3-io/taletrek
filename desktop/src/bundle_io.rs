@@ -1,15 +1,20 @@
-//! Bundle I/O glue: turn a synth'd bundle into a stamped `.taletrek` file on disk.
+//! Desktop-only bundle I/O glue: output-path naming, the buffered file write,
+//! and thin desktop-flavored wrappers around the worker's stamping core.
 //!
-//! [`synth_and_stamp`] runs the parallel synth engine (Phase 3) over a bundle,
-//! fills its `audio` map, and stamps the manifest as a full bundle. It is pure:
-//! no file I/O, no network — those live in `run_synth`/`run_resynth`. The
-//! manifest's `book.voice_id` is preserved here; `resynth` (Phase 5) rewrites it
-//! before calling in so the cache keys and manifest agree after a voice swap.
+//! The host-shared stamping core (parallel synth + manifest stamp + the
+//! text-only input guard) lives in [`taletrek_worker::stamp`]. It is
+//! **parameterized by `generator.app`** so the desktop and the personal server
+//! stamp their distinct producer strings through one code path (see
+//! [`taletrek_worker::stamp`] for the single-stamping-path invariant). The
+//! wrappers here fix [`GENERATOR_APP`] = `"taletrek-desktop"` so [`main.rs`]'s
+//! call sites are unchanged from the pre-extraction shape.
 //!
-//! [`write_book_bundle_file`] wraps the lib's in-memory writer with a buffered
-//! file write; [`default_synth_output`] computes the `<input-stem>.synth.taletrek`
-//! default so `synth` and its test share one source of truth, and
-//! [`refuse_full_input`] guards `synth` against already-full input.
+//! [`main.rs`]: crate::main
+//!
+//! What stays desktop-only: [`default_synth_output`] / [`default_resynth_output`]
+//! (CLI output-path naming — the server has no concept of "beside the input"),
+//! and [`write_book_bundle_file`] (buffered file write — the server writes its
+//! own store).
 
 use std::fs;
 use std::io::BufWriter;
@@ -17,42 +22,32 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use taletrek_synth::bundle::manifest::{AudioMeta, Generator};
 use taletrek_synth::synth::PiperRunner;
-use taletrek_synth::{
-    write_book_bundle, AudioCodec, BookBundle, BundleError, Encoder, NORM_VERSION,
-};
+use taletrek_synth::{write_book_bundle, BookBundle, BundleError, Encoder};
 
-use taletrek_worker::{synth_all_paragraphs, ProgressSink, SynthJobError};
+use taletrek_worker::stamp;
+use taletrek_worker::ProgressSink;
 
 /// `generator.app` value stamped into every desktop-written bundle. Matches
-/// `docs/bundle-format.md`'s enumeration of bundle producers.
+/// `docs/bundle-format.md`'s enumeration of bundle producers. Passed to the
+/// worker's stamping core by every desktop wrapper below so the desktop never
+/// forgets to stamp it.
 pub const GENERATOR_APP: &str = "taletrek-desktop";
 
-/// Error returned when `synth` is pointed at a bundle that already carries
-/// audio. `synth` only accepts text-only input; the user wants `resynth` to
-/// re-voice an existing bundle. Carries the existing `voiceId` so the message
-/// can hint at what's already there.
-#[derive(Debug, Error)]
-#[error(
-    "input bundle `{input}` already contains audio (voice `{voice}`); use `taletrek-desktop resynth` to re-voice it"
-)]
-pub struct FullInputError {
-    /// Display string of the input path.
-    pub input: String,
-    /// The voice the existing audio was synth'd under (`book.voiceId`).
-    pub voice: String,
-}
+// Re-export the host-shared stamping error types so desktop callers and tests
+// can name them through `crate::bundle_io::` (as they did before the move),
+// and so the wrapper signatures below can reference them unqualified.
+pub use stamp::{FullInputError, StampError};
 
 /// All the ways desktop bundle I/O can fail. Typed so callers can branch and
 /// so `?` lifts cleanly into `anyhow` at the CLI boundary.
+///
+/// Only the file-write path is desktop-specific: the synth + stamp failures
+/// surface through [`StampError`] (returned by the thin wrappers below). This
+/// enum carries the serialization error from [`write_book_bundle`] plus the
+/// buffered-file-write error.
 #[derive(Debug, Error)]
 pub enum BundleIoError {
-    /// Parallel synth failed (first-paragraph abort, pool build, etc.). Lifted
-    /// from [`SynthJobError`].
-    #[error(transparent)]
-    Synth(#[from] SynthJobError),
-
     /// Serializing the bundle (ZIP + JSON) failed. Lifted from the lib.
     #[error(transparent)]
     Bundle(#[from] BundleError),
@@ -98,58 +93,18 @@ pub fn default_resynth_output(input: &Path, voice_id: &str) -> PathBuf {
     parent.join(format!("{stem}.{voice_id}.taletrek"))
 }
 
-/// Refuse an already-full bundle for `synth`. `synth` only accepts text-only
-/// input (`audio.present == false`); re-voicing an existing bundle is what
-/// `resynth` is for. The error carries the input path display + the existing
-/// `book.voiceId` so the message can point the user at `resynth`.
+/// Refuse an already-full bundle for `synth`. Thin desktop wrapper around
+/// [`taletrek_worker::stamp::refuse_full_input`], passing the input path's
+/// display string as the caller-supplied label so the error message stays
+/// useful. See the worker's module doc for the guard's semantics.
 pub fn refuse_full_input(bundle: &BookBundle, input: &Path) -> Result<(), FullInputError> {
-    if bundle.manifest.audio.present {
-        return Err(FullInputError {
-            input: input.display().to_string(),
-            voice: bundle.manifest.book.voice_id.clone(),
-        });
-    }
-    Ok(())
-}
-
-/// Stamp `bundle`'s manifest to reflect a completed synth run: audio present,
-/// the encoder's codec, the current norm version, the segment count, and the
-/// `taletrek-desktop` generator at the running crate version. The book's
-/// `voice_id` is preserved — `synth` keeps the input value; `resynth` rewrites
-/// it before calling [`synth_and_stamp`] so keys and manifest agree.
-fn stamp_full_manifest(bundle: &mut BookBundle, codec: AudioCodec) {
-    // Dedup collapses identical paragraphs into one segment, so `segment_count`
-    // is the stored entry count (not the paragraph count). Matches how the SPA's
-    // audio cache behaves and what `read_book_bundle` reconstructs on import.
-    let segment_count = u32::try_from(bundle.audio.len()).unwrap_or(u32::MAX);
-    bundle.manifest.audio = AudioMeta {
-        present: true,
-        codec,
-        norm_version: NORM_VERSION
-            .parse()
-            .expect("NORM_VERSION is a decimal u32 (crate invariant)"),
-        segment_count,
-    };
-    bundle.manifest.generator = Generator {
-        app: GENERATOR_APP.to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-    };
+    stamp::refuse_full_input(bundle, &input.display().to_string())
 }
 
 /// Run the parallel synth engine over every paragraph in `bundle`, fill its
-/// `audio` map with the resulting segments, and stamp the manifest as a full
-/// bundle. Pure: no file I/O, no network.
-///
-/// `voice_id` namespaces the cache keys; the caller ensures it matches the
-/// manifest's `book.voice_id` when that matters (for `resynth`, rewrite
-/// `book.voice_id` first). `make_runner` is called once per paragraph to
-/// produce a fresh, task-owned runner (see [`synth_all_paragraphs`]). The
-/// encoder is shared by `&E` across all tasks.
-///
-/// Aborts on the first paragraph error (lifted as [`BundleIoError::Synth`]).
-///
-/// `progress`, when `Some`, is forwarded to the synth engine for per-paragraph
-/// `synth [n/total] pct%` lines. `None` is silent.
+/// `audio` map, and stamp the manifest as a full bundle. Thin desktop wrapper
+/// around [`taletrek_worker::stamp::synth_and_stamp`] that fixes
+/// [`GENERATOR_APP`] — see the worker for the pure semantics. No file I/O.
 pub fn synth_and_stamp<R, E, F>(
     bundle: &mut BookBundle,
     voice_id: &str,
@@ -158,40 +113,28 @@ pub fn synth_and_stamp<R, E, F>(
     encoder: &E,
     jobs: usize,
     progress: Option<&dyn ProgressSink>,
-) -> Result<(), BundleIoError>
+) -> Result<(), StampError>
 where
     R: PiperRunner + Send,
     E: Encoder + Sync,
     F: Fn() -> R + Sync,
 {
-    let segments = synth_all_paragraphs(
+    stamp::synth_and_stamp(
         bundle,
         voice_id,
         voice_model,
         make_runner,
         encoder,
         jobs,
+        GENERATOR_APP,
         progress,
-    )?;
-    // Replace (don't extend) so resynth's stale audio under the old voice is
-    // discarded — synth starts from an empty audio map.
-    bundle.audio = segments;
-    stamp_full_manifest(bundle, encoder.codec());
-    Ok(())
+    )
 }
 
 /// Re-voice a bundle: rewrite `book.voiceId` to `new_voice_id`, then re-synth
-/// every paragraph under the new voice. The audio map is **replaced**
-/// (delegates to [`synth_and_stamp`]), so stale segments keyed under the
-/// previous voice are discarded — not merged.
-///
-/// Unlike `synth`, this accepts **both** text-only and full input: re-voicing
-/// a full bundle is the whole point. The caller must not run [`refuse_full_input`].
-///
-/// Aborts on the first paragraph error (lifted as [`BundleIoError::Synth`]),
-/// matching `synth`'s v1 semantics.
-///
-/// `progress` is forwarded to the synth engine for per-paragraph progress.
+/// every paragraph under the new voice. Thin desktop wrapper around
+/// [`taletrek_worker::stamp::resynth_and_stamp`] that fixes [`GENERATOR_APP`].
+/// Accepts text-only or full input. See the worker for the pure semantics.
 pub fn resynth_and_stamp<R, E, F>(
     bundle: &mut BookBundle,
     new_voice_id: &str,
@@ -200,23 +143,20 @@ pub fn resynth_and_stamp<R, E, F>(
     encoder: &E,
     jobs: usize,
     progress: Option<&dyn ProgressSink>,
-) -> Result<(), BundleIoError>
+) -> Result<(), StampError>
 where
     R: PiperRunner + Send,
     E: Encoder + Sync,
     F: Fn() -> R + Sync,
 {
-    // Rewrite the manifest's voice FIRST so the stamped manifest and the
-    // content-addressed cache keys agree on the new voice. stamp_full_manifest
-    // preserves this value (it only touches audio.* + generator.*).
-    bundle.manifest.book.voice_id = new_voice_id.to_string();
-    synth_and_stamp(
+    stamp::resynth_and_stamp(
         bundle,
         new_voice_id,
         voice_model,
         make_runner,
         encoder,
         jobs,
+        GENERATOR_APP,
         progress,
     )
 }
@@ -239,19 +179,19 @@ pub fn write_book_bundle_file(bundle: &BookBundle, output: &Path) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::io::Cursor;
     use std::path::Path;
 
     use taletrek_synth::synth::{PiperRunner, SynthError};
+    use std::collections::HashMap;
+
     use taletrek_synth::{
-        cache_key, read_book_bundle, AudioCodec, AudioMeta, AudioSegment, BookBundle, BookMeta,
-        ChapterText, Generator, Manifest, ManifestKind, WavPassthrough,
+        read_book_bundle, AudioCodec, AudioMeta, BookMeta, ChapterText, Generator, Manifest,
+        ManifestKind, WavPassthrough, NORM_VERSION,
     };
 
     /// Canonical mono 16-bit 16 kHz WAV with `pcm` as its data payload — the
-    /// shape Piper emits on stdout. Duplicated from `synth_job.rs` so each
-    /// module's tests stay self-contained.
+    /// shape Piper emits on stdout. Duplicated so the desktop residue tests
+    /// stay self-contained (the stamping core's tests live in the worker now).
     fn canonical_wav(pcm: &[u8]) -> Vec<u8> {
         let data_len = u32::try_from(pcm.len()).unwrap();
         let mut out = Vec::with_capacity(44 + pcm.len());
@@ -282,10 +222,8 @@ mod tests {
     }
 
     /// Build a minimal bundle with the given audio-present flag + voice id.
-    /// Defaults to a text-only bundle under the given voice.
     fn bundle(voice_id: &str, present: bool, chapters: Vec<ChapterText>) -> BookBundle {
         let chapter_count = u32::try_from(chapters.len()).unwrap();
-        let segment_count = if present { u32::MAX } else { 0 };
         BookBundle {
             manifest: Manifest {
                 schema_version: 1,
@@ -305,7 +243,7 @@ mod tests {
                     present,
                     codec: AudioCodec::Opus,
                     norm_version: NORM_VERSION.parse().unwrap(),
-                    segment_count,
+                    segment_count: if present { u32::MAX } else { 0 },
                 },
                 generator: Generator {
                     app: "taletrek-spa".into(),
@@ -361,312 +299,6 @@ mod tests {
         assert_eq!(out, PathBuf::from("book.en_US-lessac-medium.taletrek"));
     }
 
-    // ---- refuse_full_input ----
-
-    #[test]
-    fn refuse_full_input_accepts_text_only() {
-        let b = text_only_bundle("v", vec![]);
-        assert!(refuse_full_input(&b, Path::new("x.taletrek")).is_ok());
-    }
-
-    #[test]
-    fn refuse_full_input_rejects_full_bundle_with_existing_voice() {
-        let b = bundle("en_US-lessac-medium", true, vec![]);
-        let err = refuse_full_input(&b, Path::new("full.taletrek")).unwrap_err();
-        assert_eq!(err.input, "full.taletrek");
-        assert_eq!(err.voice, "en_US-lessac-medium");
-        assert!(
-            err.to_string().contains("resynth"),
-            "error must point at resynth: {err}"
-        );
-    }
-
-    // ---- synth_and_stamp + stamp_full_manifest ----
-
-    #[test]
-    fn synth_and_stamp_round_trips_with_correct_manifest() {
-        let mut b = text_only_bundle(
-            "en_US-hfc_female-medium",
-            vec![
-                ChapterText::new(
-                    "bk_test",
-                    0,
-                    "Ch",
-                    vec!["Hello world.".into(), "Second paragraph.".into()],
-                ),
-                ChapterText::new("bk_test", 1, "Two", vec!["Across chapters.".into()]),
-            ],
-        );
-        let voice = "en_US-hfc_female-medium";
-
-        synth_and_stamp(
-            &mut b,
-            voice,
-            Path::new("/dev/null"),
-            || StubRunner,
-            &WavPassthrough,
-            2,
-            None,
-        )
-        .expect("synth + stamp should succeed with stub runner");
-
-        // Round-trip through the lib's writer/reader so the manifest we stamp
-        // is exactly what a consumer will see on import.
-        let mut buf = Cursor::new(Vec::new());
-        write_book_bundle(&b, &mut buf).expect("write should succeed");
-        let back = read_book_bundle(&buf.into_inner()).expect("read should succeed");
-
-        // Audio descriptor flipped to "full" with the encoder's codec (WAV via
-        // WavPassthrough), current norm version, and the dedup'd segment count.
-        assert!(back.manifest.audio.present, "audio.present must be true");
-        assert_eq!(back.manifest.audio.codec, AudioCodec::Wav);
-        assert_eq!(
-            back.manifest.audio.norm_version,
-            NORM_VERSION.parse::<u32>().unwrap()
-        );
-        assert_eq!(back.manifest.audio.segment_count, 3);
-
-        // Generator stamped as taletrek-desktop at the running crate version.
-        assert_eq!(back.manifest.generator.app, GENERATOR_APP);
-        assert_eq!(back.manifest.generator.version, env!("CARGO_PKG_VERSION"));
-
-        // book.voiceId preserved (synth does not rewrite it).
-        assert_eq!(back.manifest.book.voice_id, voice);
-
-        // Every distinct paragraph produced a segment keyed by cache_key, and
-        // the audio map survived the round-trip intact.
-        let expected_keys = [
-            cache_key(voice, "Hello world."),
-            cache_key(voice, "Second paragraph."),
-            cache_key(voice, "Across chapters."),
-        ];
-        for k in &expected_keys {
-            assert!(back.audio.contains_key(k), "missing audio for {k}");
-        }
-        assert_eq!(back.audio.len(), expected_keys.len());
-    }
-
-    #[test]
-    fn synth_and_stamp_preserves_book_voice_id_when_synth_voice_differs() {
-        // synth uses --voice for keying but must NOT rewrite book.voiceId
-        // (that's resynth's job). A mismatch is the user's choice; we keep the
-        // manifest's value verbatim.
-        let mut b = text_only_bundle(
-            "en_US-lessac-medium",
-            vec![ChapterText::new("bk_test", 0, "Ch", vec!["Hi.".into()])],
-        );
-
-        synth_and_stamp(
-            &mut b,
-            "en_US-ryan-medium",
-            Path::new("/dev/null"),
-            || StubRunner,
-            &WavPassthrough,
-            1,
-            None,
-        )
-        .expect("stub runner succeeds");
-
-        assert_eq!(
-            b.manifest.book.voice_id, "en_US-lessac-medium",
-            "synth must keep the input book.voiceId"
-        );
-        // Audio is keyed under the synth voice (ryan), not the manifest voice.
-        assert!(b.audio.contains_key(&cache_key("en_US-ryan-medium", "Hi.")));
-    }
-
-    #[test]
-    fn synth_and_stamp_segment_count_reflects_dedup() {
-        // Two identical paragraphs collapse to one segment (content addressing);
-        // segmentCount must be 1, not 2.
-        let mut b = text_only_bundle(
-            "v",
-            vec![ChapterText::new(
-                "bk_test",
-                0,
-                "Ch",
-                vec!["Repeat.".into(), "Repeat.".into()],
-            )],
-        );
-
-        synth_and_stamp(
-            &mut b,
-            "v",
-            Path::new("/dev/null"),
-            || StubRunner,
-            &WavPassthrough,
-            1,
-            None,
-        )
-        .expect("stub runner succeeds");
-
-        assert_eq!(b.manifest.audio.segment_count, 1);
-        assert_eq!(b.audio.len(), 1);
-    }
-
-    #[test]
-    fn synth_and_stamp_aborts_on_empty_paragraph() {
-        // Delegates to synth_job's abort-on-first-error: an empty paragraph
-        // surfaces as Synth(EmptyText), not a silent skip.
-        let mut b = text_only_bundle(
-            "v",
-            vec![ChapterText::new(
-                "bk_test",
-                0,
-                "Ch",
-                vec!["   \n   ".into()],
-            )],
-        );
-
-        let err = synth_and_stamp(
-            &mut b,
-            "v",
-            Path::new("/dev/null"),
-            || StubRunner,
-            &WavPassthrough,
-            1,
-            None,
-        )
-        .expect_err("empty paragraph must error");
-        assert!(matches!(err, BundleIoError::Synth(_)));
-    }
-
-    // ---- resynth_and_stamp ----
-
-    #[test]
-    fn resynth_and_stamp_updates_manifest_voice_and_rekeys_segments() {
-        // Start from a full bundle under voice A; resynth to voice B; assert
-        // the manifest's voiceId flipped to B and every segment is keyed under B.
-        let mut b = bundle(
-            "en_US-lessac-medium",
-            true,
-            vec![
-                ChapterText::new(
-                    "bk_test",
-                    0,
-                    "Ch",
-                    vec!["Hello world.".into(), "Second.".into()],
-                ),
-                ChapterText::new("bk_test", 1, "Two", vec!["Across chapters.".into()]),
-            ],
-        );
-
-        resynth_and_stamp(
-            &mut b,
-            "en_US-ryan-medium",
-            Path::new("/dev/null"),
-            || StubRunner,
-            &WavPassthrough,
-            2,
-            None,
-        )
-        .expect("resynth should succeed with stub runner");
-
-        // Manifest voice flipped to the new voice.
-        assert_eq!(b.manifest.book.voice_id, "en_US-ryan-medium");
-        // Audio marked present + segment count matches distinct paragraphs.
-        assert!(b.manifest.audio.present);
-        assert_eq!(b.manifest.audio.segment_count, 3);
-
-        // Every segment keyed under the new voice.
-        let new_voice = "en_US-ryan-medium";
-        for text in &["Hello world.", "Second.", "Across chapters."] {
-            let key = cache_key(new_voice, text);
-            assert!(
-                b.audio.contains_key(&key),
-                "missing segment keyed under new voice: {key}"
-            );
-        }
-        // No segments keyed under the old voice survive.
-        let old_voice = "en_US-lessac-medium";
-        for text in &["Hello world.", "Second.", "Across chapters."] {
-            let key = cache_key(old_voice, text);
-            assert!(
-                !b.audio.contains_key(&key),
-                "stale segment under old voice survived: {key}"
-            );
-        }
-    }
-
-    #[test]
-    fn resynth_and_stamp_discards_stale_audio_from_previous_voice() {
-        // A full bundle carrying audio under the OLD voice. After resynth, none
-        // of those old segments survive — synth_and_stamp replaces (not
-        // extends) the audio map.
-        let mut b = bundle(
-            "en_US-lessac-medium",
-            true,
-            vec![ChapterText::new(
-                "bk_test",
-                0,
-                "Ch",
-                vec!["Hello world.".into()],
-            )],
-        );
-        // Pre-populate audio under the old voice (as a prior synth run would).
-        let old_key = cache_key("en_US-lessac-medium", "Hello world.");
-        b.audio.insert(
-            old_key.clone(),
-            AudioSegment {
-                key: old_key.clone(),
-                codec: AudioCodec::Wav,
-                bytes: canonical_wav(&[0xFF]),
-            },
-        );
-        assert_eq!(
-            b.audio.len(),
-            1,
-            "fixture: one stale segment under old voice"
-        );
-
-        resynth_and_stamp(
-            &mut b,
-            "en_US-ryan-medium",
-            Path::new("/dev/null"),
-            || StubRunner,
-            &WavPassthrough,
-            1,
-            None,
-        )
-        .expect("resynth succeeds");
-
-        // The old segment is gone; only the new-voice segment remains.
-        assert!(
-            !b.audio.contains_key(&old_key),
-            "old-voice segment must be discarded"
-        );
-        let new_key = cache_key("en_US-ryan-medium", "Hello world.");
-        assert!(
-            b.audio.contains_key(&new_key),
-            "new-voice segment must be present"
-        );
-        assert_eq!(b.audio.len(), 1);
-    }
-
-    #[test]
-    fn resynth_and_stamp_accepts_text_only_input() {
-        // resynth accepts text-only input too (it's "synth + voice rewrite").
-        let mut b = text_only_bundle(
-            "en_US-lessac-medium",
-            vec![ChapterText::new("bk_test", 0, "Ch", vec!["Hi.".into()])],
-        );
-
-        resynth_and_stamp(
-            &mut b,
-            "en_US-ryan-medium",
-            Path::new("/dev/null"),
-            || StubRunner,
-            &WavPassthrough,
-            1,
-            None,
-        )
-        .expect("resynth on text-only should succeed");
-
-        assert_eq!(b.manifest.book.voice_id, "en_US-ryan-medium");
-        assert!(b.manifest.audio.present);
-        assert!(b.audio.contains_key(&cache_key("en_US-ryan-medium", "Hi.")));
-    }
-
     // ---- write_book_bundle_file ----
 
     #[test]
@@ -678,6 +310,8 @@ mod tests {
             "v",
             vec![ChapterText::new("bk_test", 0, "Ch", vec!["One.".into()])],
         );
+        // Use the desktop wrapper so the manifest it stamps reads
+        // generator.app == "taletrek-desktop" — the invariant main.rs relies on.
         synth_and_stamp(
             &mut b,
             "v",
@@ -696,6 +330,8 @@ mod tests {
         let back = read_book_bundle(&bytes).expect("round-trip read should succeed");
         assert!(back.manifest.audio.present);
         assert_eq!(back.manifest.audio.segment_count, 1);
+        // The desktop wrapper stamps its own producer string.
+        assert_eq!(back.manifest.generator.app, GENERATOR_APP);
     }
 
     #[test]
@@ -708,5 +344,41 @@ mod tests {
             BundleIoError::WriteFile { path, source: _ } => assert_eq!(path, out),
             other => panic!("expected WriteFile, got {other:?}"),
         }
+    }
+
+    // ---- desktop wrappers stamp the desktop producer string ----
+
+    #[test]
+    fn synth_and_stamp_wrapper_stamps_desktop_generator_app() {
+        // The thin wrapper fixes generator.app = GENERATOR_APP; this pins that
+        // the desktop can't drift from "taletrek-desktop" via the worker path.
+        let mut b = text_only_bundle(
+            "v",
+            vec![ChapterText::new("bk_test", 0, "Ch", vec!["Hi.".into()])],
+        );
+        synth_and_stamp(
+            &mut b,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+            None,
+        )
+        .expect("wrapper succeeds");
+
+        assert_eq!(b.manifest.generator.app, GENERATOR_APP);
+        assert_eq!(b.manifest.generator.version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn refuse_full_input_wrapper_labels_with_input_path_display() {
+        // The desktop wrapper passes the input path's display string as the
+        // label, so the error identifies the file (not a book id).
+        let b = bundle("en_US-lessac-medium", true, vec![]);
+
+        let err = refuse_full_input(&b, Path::new("dir/full.taletrek")).unwrap_err();
+        assert_eq!(err.input, "dir/full.taletrek");
+        assert_eq!(err.voice, "en_US-lessac-medium");
     }
 }

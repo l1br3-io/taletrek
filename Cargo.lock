@@ -734,7 +734,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "rayon",
  "taletrek-synth",
  "taletrek-worker",
  "tempfile",

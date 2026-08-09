@@ -6,7 +6,7 @@
 ## Phase 1 — Extract `crates/worker` (desktop's tests are the gate)
 - [x] T1: Worker crate scaffold + `ProgressSink` trait + move `voices` (`tasks/001-worker-voices.md`)
 - [x] T2: Move parallel synth engine into `crates/worker::synth_job` (`tasks/002-worker-synth-job.md`)
-- [ ] T3: Move stamping + `refuse_full_input` into `crates/worker`, parameterize `generator.app` (`tasks/003-worker-stamp.md`)
+- [x] T3: Move stamping + `refuse_full_input` into `crates/worker`, parameterize `generator.app` (`tasks/003-worker-stamp.md`)
 
 ### Checkpoint: Worker extraction green — desktop identical; `crates/synth` untouched.
 
