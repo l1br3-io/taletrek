@@ -1,6 +1,7 @@
 ---
-status: active
+status: shipped
 started: 2026-08-04
+shipped: 2026-08-07
 ---
 
 # SPEC — Off-device synth track · Effort 3: SPA bundle import/export
