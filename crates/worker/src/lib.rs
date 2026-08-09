@@ -25,6 +25,7 @@
 //! trait as inherent methods on the concrete type.
 
 pub mod progress;
+pub mod stamp;
 pub mod synth_job;
 pub mod voices;
 
@@ -60,6 +61,9 @@ pub trait ProgressSink: Send + Sync {
 
 // Flat type re-exports — the primary public API.
 pub use progress::Progress;
+pub use stamp::{
+    refuse_full_input, resynth_and_stamp, synth_and_stamp, FullInputError, StampError,
+};
 pub use synth_job::{synth_all_paragraphs, SynthJobError};
 pub use voices::{
     default_cache_dir, find_curated, resolve_voice, CURATED_VOICES, DEFAULT_VOICE_ID, HF_BASE,
