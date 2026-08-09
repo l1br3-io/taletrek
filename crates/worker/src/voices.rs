@@ -1,8 +1,9 @@
-//! Voice catalog + resolve/download/cache for `taletrek-desktop`.
+//! Voice catalog + resolve/download/cache — the shared worker stack used by
+//! both `taletrek-desktop` and `taletrek-server`.
 //!
 //! Mirrors the SPA's curated English voice catalog (`web/src/lib/tts/voices.ts`)
 //! and the HuggingFace base + path map (`web/src/lib/tts/vendor/piper/models.ts`)
-//! so the two apps fetch voice models from identical URLs.
+//! so the three apps fetch voice models from identical URLs.
 //!
 //! Resolution has two paths:
 //! 1. **`--voice-path` override** (`ResolveOpts::voice_path`): point directly at
@@ -13,14 +14,6 @@
 //!    the cached files under `cache_dir` or download both `.onnx` + `.json`
 //!    from `HF_BASE`. Network access is behind the [`VoiceSource`] trait so
 //!    unit tests stub HTTP.
-//!
-//! `dead_code`: this module lands in T2.2 ahead of its sole consumer —
-//! `run_synth`/`run_resynth` wire `resolve_voice` in T2.4 (wiring now would
-//! download a ~63 MB model before bailing "not yet implemented"). The catalog
-//! display fields (`name`/`quality`/`size_bytes`/`language`) stay parked here
-//! for the deferred `voices list` subcommand (spec non-goal). Drop or narrow
-//! this allow once T2.4 makes the runtime path reach these items.
-#![allow(dead_code)]
 
 use std::error::Error;
 use std::fs;
@@ -29,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use crate::progress::Progress;
+use crate::ProgressSink;
 
 /// The HuggingFace base the SPA downloads Piper voices from. Verbatim copy of
 /// `web/src/lib/tts/vendor/piper/models.ts`'s `HF_BASE` so URLs match exactly.
@@ -219,12 +212,13 @@ pub fn default_cache_dir() -> Option<PathBuf> {
 
 /// Testable seam over voice-model HTTP fetch. The streaming variant
 /// ([`VoiceSource::fetch_with_progress`]) invokes `progress(bytes_done,
-/// bytes_total)` as bytes arrive so [`Progress::download_step`] can render
-/// `voice d.t MiB (pct%)` lines; `bytes_total` is `0` when the source can't
-/// report a length. Unit tests stub the network by implementing the streaming
-/// method directly and asserting cache-hit short-circuits + progress callbacks
-/// without going online. The non-streaming [`VoiceSource::fetch`] is provided
-/// for callers that don't care about per-byte progress.
+/// bytes_total)` as bytes arrive so a [`ProgressSink::download_step`] reporter
+/// can render `voice d.t MiB (pct%)` lines; `bytes_total` is `0` when the
+/// source can't report a length. Unit tests stub the network by implementing
+/// the streaming method directly and asserting cache-hit short-circuits +
+/// progress callbacks without going online. The non-streaming
+/// [`VoiceSource::fetch`] is provided for callers that don't care about
+/// per-byte progress.
 pub trait VoiceSource {
     /// Fetch the full byte body at `url`, invoking `progress(bytes_done,
     /// bytes_total)` as bytes arrive. `bytes_total` is `0` when the source
@@ -371,7 +365,7 @@ pub fn resolve_voice(
     id: Option<&str>,
     opts: &ResolveOpts,
     source: &dyn VoiceSource,
-    progress: Option<&Progress>,
+    progress: Option<&dyn ProgressSink>,
 ) -> Result<PathBuf, ResolveError> {
     // Path 1: --voice-path override (offline, no catalog lookup, no download).
     if let Some(onnx) = &opts.voice_path {
@@ -426,7 +420,7 @@ fn download(
     source: &dyn VoiceSource,
     url: &str,
     dest: &Path,
-    progress: Option<&Progress>,
+    progress: Option<&dyn ProgressSink>,
 ) -> Result<(), ResolveError> {
     let bytes = source
         .fetch_with_progress(url, &mut |done, total| {

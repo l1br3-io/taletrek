@@ -7,18 +7,23 @@
 //!
 //! Three line shapes, all newline-terminated and flushed eagerly so a long run
 //! shows live progress:
-//! - synth step ([`Progress::synth_step`]): `synth [done/total] pct%`
-//! - download step ([`Progress::download_step`]): `voice d.t MiB (pct%)`
+//! - synth step ([`ProgressSink::synth_step`]): `synth [done/total] pct%`
+//! - download step ([`ProgressSink::download_step`]): `voice d.t MiB (pct%)`
 //!   (total + pct omitted when `Content-Length` is unknown)
 //! - summary ([`Progress::summary`]): `kind: N segments, voice V, Mm Ss → out`
 //!
-//! Phase 6 (T2.6). Wired into `synth_job` (per-paragraph), `voices` (download),
-//! and `main` (final summary).
+//! The two engine-facing methods (`synth_step`, `download_step`) are on the
+//! [`crate::ProgressSink`] trait so the server can supply its own reporter
+//! (a job row, not stderr). The CLI-only `summary` / `elapsed` / `to_stderr` /
+//! `new` constructors stay inherent on [`Progress`] — the server never
+//! summarizes.
 
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+use crate::ProgressSink;
 
 /// Testable progress sink. Wraps a `Write + Send` behind a `Mutex` so parallel
 /// synth threads can report without racing on the underlying handle. `Send +
@@ -58,36 +63,6 @@ impl Progress {
         self.start.elapsed()
     }
 
-    /// Emit a synth step line: `synth [done/total] pct%`.
-    ///
-    /// `pct = done * 100 / total` (integer division, clamped to 100). When
-    /// `total == 0` the line is skipped — there is nothing to report (e.g. an
-    /// empty bundle). Flushes so a long run shows live progress.
-    pub fn synth_step(&self, done: usize, total: usize) {
-        if total == 0 {
-            return;
-        }
-        let pct = usize::min(done * 100 / total, 100);
-        self.write_line(&format!("synth [{done}/{total}] {pct}%"));
-    }
-
-    /// Emit a download step line.
-    ///
-    /// When `bytes_total > 0`: `voice done.total MiB (pct%)` with one-decimal
-    /// MiB and integer pct. When `bytes_total == 0` (Content-Length unknown),
-    /// the total + pct are omitted: `voice done MiB`.
-    pub fn download_step(&self, bytes_done: u64, bytes_total: u64) {
-        let done_mib = bytes_done as f64 / (1024.0 * 1024.0);
-        let line = if bytes_total == 0 {
-            format!("voice {done_mib:.1} MiB")
-        } else {
-            let total_mib = bytes_total as f64 / (1024.0 * 1024.0);
-            let pct = u64::min(bytes_done * 100 / bytes_total, 100);
-            format!("voice {done_mib:.1}/{total_mib:.1} MiB ({pct}%)")
-        };
-        self.write_line(&line);
-    }
-
     /// Emit the final summary line:
     /// `kind: segments segments, voice voice_id, Mm Ss → out`.
     ///
@@ -107,6 +82,38 @@ impl Progress {
         let mut state = self.state.lock().unwrap();
         let _ = writeln!(state.out, "{line}");
         let _ = state.out.flush();
+    }
+}
+
+impl ProgressSink for Progress {
+    /// Emit a synth step line: `synth [done/total] pct%`.
+    ///
+    /// `pct = done * 100 / total` (integer division, clamped to 100). When
+    /// `total == 0` the line is skipped — there is nothing to report (e.g. an
+    /// empty bundle). Flushes so a long run shows live progress.
+    fn synth_step(&self, done: usize, total: usize) {
+        if total == 0 {
+            return;
+        }
+        let pct = usize::min(done * 100 / total, 100);
+        self.write_line(&format!("synth [{done}/{total}] {pct}%"));
+    }
+
+    /// Emit a download step line.
+    ///
+    /// When `bytes_total > 0`: `voice done.total MiB (pct%)` with one-decimal
+    /// MiB and integer pct. When `bytes_total == 0` (Content-Length unknown),
+    /// the total + pct are omitted: `voice done MiB`.
+    fn download_step(&self, bytes_done: u64, bytes_total: u64) {
+        let done_mib = bytes_done as f64 / (1024.0 * 1024.0);
+        let line = if bytes_total == 0 {
+            format!("voice {done_mib:.1} MiB")
+        } else {
+            let total_mib = bytes_total as f64 / (1024.0 * 1024.0);
+            let pct = u64::min(bytes_done * 100 / bytes_total, 100);
+            format!("voice {done_mib:.1}/{total_mib:.1} MiB ({pct}%)")
+        };
+        self.write_line(&line);
     }
 }
 

@@ -734,12 +734,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "dirs",
  "rayon",
  "taletrek-synth",
+ "taletrek-worker",
  "tempfile",
  "thiserror",
- "ureq",
 ]
 
 [[package]]
@@ -754,6 +753,16 @@ dependencies = [
  "tempfile",
  "thiserror",
  "zip",
+]
+
+[[package]]
+name = "taletrek-worker"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "tempfile",
+ "thiserror",
+ "ureq",
 ]
 
 [[package]]

@@ -28,7 +28,7 @@ use thiserror::Error;
 use taletrek_synth::synth::{synthesize_paragraph, PiperRunner, SynthError, SynthOptions};
 use taletrek_synth::{AudioSegment, BookBundle, Encoder};
 
-use crate::progress::Progress;
+use taletrek_worker::{Progress, ProgressSink};
 
 /// All the ways a parallel synth run can fail. Typed so the host (T2.4
 /// `bundle_io`) can branch and so `?` lifts cleanly into `anyhow` at the CLI

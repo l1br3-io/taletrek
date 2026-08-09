@@ -1,0 +1,23 @@
+[package]
+name = "taletrek-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "TaleTrek host-level synth worker — voice acquire + (later) parallel pool + stamping. By l1br3."
+
+[lib]
+name = "taletrek_worker"
+path = "src/lib.rs"
+
+[dependencies]
+ureq = "3"
+dirs = "6"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
