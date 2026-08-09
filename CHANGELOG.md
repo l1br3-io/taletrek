@@ -2,6 +2,16 @@
 
 Reverse-chronological history of what shipped. The current effort's spec lives at `docs/specs/<slug>/spec.md`; shipped efforts stay in place under `docs/specs/<slug>/` (the spec.md frontmatter flips to `status: shipped`).
 
+## Off-device synth track · Tier 2 (SPA ↔ Desktop bundle exchange) · 2026-08-07
+
+The optional, self-hostable companion track ([ADR-0013](docs/adrs/0013-off-device-synth-and-portable-bundles.md)) ships its first user-reachable capability: the closed loop **SPA export → `taletrek-desktop` synth → SPA import**. Books flow between the phone and a standalone Rust app as portable `.taletrek` files; the default offline-first PWA (on-device Piper) is unchanged. Three efforts landed in sequence:
+
+- **Effort 1 — `portable-bundle-format`** (2026-08-03): frozen v1 `.taletrek` format + reusable Rust `crates/synth` crate (normalize, cache-key, `synthesize_paragraph`, Piper subprocess, Opus encode, bundle I/O). ([`docs/specs/portable-bundle-format/`](docs/specs/portable-bundle-format/))
+- **Effort 2 — `desktop-synth-app`** (2026-08-04): `taletrek-desktop` headless CLI — `synth` (text-only → full bundle, parallel Piper) and `resynth` (whole-book voice swap), auto voice download from HuggingFace, stderr progress. ([`docs/specs/desktop-synth-app/`](docs/specs/desktop-synth-app/))
+- **Effort 3 — `spa-bundle-import-export`** (2026-08-07): TS reader/writer for `.taletrek` in the SPA + library Import/Export UI; full bundles play immediately via content-addressed audio-cache dedup; parity-tested against the Rust fixtures. ([`docs/specs/spa-bundle-import-export/`](docs/specs/spa-bundle-import-export/))
+
+Tiers now reachable: **(1)** SPA alone (existing) · **(2)** SPA + Desktop (this). Effort 4 (`personal-server`, Tier 3) remains.
+
 ## M7 — Reader UX & Mobile · 2026-07-23
 Responsive layout + nav drawer, chapter outline, minimized playback menu with overflow, go-to-current + FAB, auto-scroll to resumed paragraph on first Play. ([`docs/specs/reader-ux-mobile/`](docs/specs/reader-ux-mobile/spec.md))
 
