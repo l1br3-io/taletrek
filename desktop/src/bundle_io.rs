@@ -23,8 +23,7 @@ use taletrek_synth::{
     write_book_bundle, AudioCodec, BookBundle, BundleError, Encoder, NORM_VERSION,
 };
 
-use crate::synth_job::{synth_all_paragraphs, SynthJobError};
-use taletrek_worker::Progress;
+use taletrek_worker::{synth_all_paragraphs, ProgressSink, SynthJobError};
 
 /// `generator.app` value stamped into every desktop-written bundle. Matches
 /// `docs/bundle-format.md`'s enumeration of bundle producers.
@@ -158,7 +157,7 @@ pub fn synth_and_stamp<R, E, F>(
     make_runner: F,
     encoder: &E,
     jobs: usize,
-    progress: Option<&Progress>,
+    progress: Option<&dyn ProgressSink>,
 ) -> Result<(), BundleIoError>
 where
     R: PiperRunner + Send,
@@ -200,7 +199,7 @@ pub fn resynth_and_stamp<R, E, F>(
     make_runner: F,
     encoder: &E,
     jobs: usize,
-    progress: Option<&Progress>,
+    progress: Option<&dyn ProgressSink>,
 ) -> Result<(), BundleIoError>
 where
     R: PiperRunner + Send,

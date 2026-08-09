@@ -760,6 +760,8 @@ name = "taletrek-worker"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "rayon",
+ "taletrek-synth",
  "tempfile",
  "thiserror",
  "ureq",
