@@ -23,8 +23,8 @@ use taletrek_synth::{
     write_book_bundle, AudioCodec, BookBundle, BundleError, Encoder, NORM_VERSION,
 };
 
-use crate::progress::Progress;
 use crate::synth_job::{synth_all_paragraphs, SynthJobError};
+use taletrek_worker::Progress;
 
 /// `generator.app` value stamped into every desktop-written bundle. Matches
 /// `docs/bundle-format.md`'s enumeration of bundle producers.

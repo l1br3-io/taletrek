@@ -5,12 +5,13 @@
 //! `synth [n/total] pct%` per paragraph, and a final `kind: N segments, voice
 //! V, Mm Ss → out` summary line. `synth` was wired in Phase 4 (T2.4);
 //! `resynth` in Phase 5 (T2.5).
+//!
+//! Effort 4 / T1: voice acquisition + progress reporting moved into the shared
+//! `taletrek-worker` crate; this binary imports them. Behavior is identical.
 
 mod bundle_io;
 mod cli;
-mod progress;
 mod synth_job;
-mod voices;
 
 use std::fs;
 use std::thread::available_parallelism;
@@ -19,16 +20,15 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use taletrek_synth::{read_book_bundle, OpusEncoder, SubprocessPiperRunner};
+use taletrek_worker::{
+    default_cache_dir, resolve_voice, ResolveOpts, Progress, UreqVoiceSource, DEFAULT_VOICE_ID,
+};
 
 use crate::bundle_io::{
     default_resynth_output, default_synth_output, refuse_full_input, resynth_and_stamp,
     synth_and_stamp, write_book_bundle_file,
 };
 use crate::cli::{Cli, Cmd, CommonArgs};
-use crate::progress::Progress;
-use crate::voices::{
-    default_cache_dir, resolve_voice, ResolveOpts, UreqVoiceSource, DEFAULT_VOICE_ID,
-};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
