@@ -11,7 +11,7 @@
 ### Checkpoint: Worker extraction green — desktop identical; `crates/synth` untouched.
 
 ## Phase 2 — Server foundations (bottom-up)
-- [ ] T4: Server crate + `config.rs` + `main.rs` axum bind + `/api/health` (unauth) (`tasks/004-server-skeleton.md`)
+- [x] T4: Server crate + `config.rs` + `main.rs` axum bind + `/api/health` (unauth) (`tasks/004-server-skeleton.md`)
 - [ ] T5: `db.rs` — rusqlite + migrations (books/jobs) + `Db` trait seam + `spawn_blocking` (`tasks/005-db.md`)
 - [ ] T6: `store.rs` — on-disk bundle layout + `.taletrek-lib` ingest (dedup by book id) (`tasks/006-store.md`)
 

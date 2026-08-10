@@ -1,0 +1,33 @@
+[package]
+name = "taletrek-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "TaleTrek personal server — a self-hosted, Docker-first library server for .taletrek bundles."
+
+[[bin]]
+name = "taletrek-server"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = { version = "0.8", features = ["multipart"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+toml = "0.8"
+taletrek-synth = { path = "../crates/synth" }
+taletrek-worker = { path = "../crates/worker" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
