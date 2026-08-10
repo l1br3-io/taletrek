@@ -1,0 +1,733 @@
+//! SQLite persistence layer — `books` + `jobs`.
+//!
+//! Two tables back the personal server (ADR-0013): `books` mirrors each
+//! bundle's `BookMeta` so the library can be browsed/listed without opening the
+//! bundle file, and `jobs` tracks synth/resynth lifecycle. `books` rows are
+//! written by the ingest path (T6/T8); `jobs` rows by the synth runner (T9).
+//!
+//! # Sync under tokio — `spawn_blocking`
+//!
+//! GOTCHA: rusqlite is synchronous. Every call from an async handler or the
+//! synth runner MUST go through `tokio::task::spawn_blocking`, or the runtime
+//! stalls on the (blocking) SQLite syscall. The `Db` trait methods themselves
+//! are sync — they don't know about tokio — so the wrapping happens at the call
+//! site. This matches the spec's rusqlite-under-tokio risk + ADR-0013
+//! "SQLite-default". SQLite is never on the synth hot path (the rayon pool is).
+//!
+//! # Testability — the `Db` trait seam
+//!
+//! The [`Db`] trait fronts every query so HTTP handlers (T7+) are unit-testable
+//! with an in-memory stub ([`test_utils::StubDb`]) — no real SQLite, no
+//! network, no piper in handler tests.
+//!
+//! # Dead-code window (T5 → T7)
+//!
+//! This module's public API is proven in isolation here but is not wired into
+//! the axum app until T7/T8 (per task 005). Until then the trait + row structs
+//! are unreached from `main`, so the bin-crate dead-code analysis flags them.
+//! The allow below is scoped to this module and should be removed once T7
+//! consumes the API.
+#![allow(dead_code)]
+
+use std::path::Path;
+use std::sync::Mutex;
+
+use rusqlite::{types::FromSqlResult, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+
+/// Errors surfaced by the SQLite layer.
+///
+/// Kept small: rusqlite + io are the only sources. Handler code maps these to
+/// HTTP statuses in T7; nothing here knows about HTTP.
+#[derive(Debug, thiserror::Error)]
+pub enum DbError {
+    /// A rusqlite call failed (constraint, bad SQL, conversion, …).
+    #[error("sqlite: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    /// A filesystem error while opening the db file / parent dir.
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// A row of the `books` table — a mirror of bundle `BookMeta`.
+///
+/// Written by the ingest path on upload/import (T6/T8). Integer columns use
+/// `i64` (SQLite's native `INTEGER`); the ingest path casts `u32`/`u64` from
+/// `BookMeta` at the boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookRow {
+    /// Bundle `book.id` (TaleTrek `BookId`).
+    pub id: String,
+    /// Book title.
+    pub title: String,
+    /// Author, if known (`NULL` when absent).
+    pub author: Option<String>,
+    /// `pdf`/`epub`/`mobi`/`txt`/`md`/`unknown`.
+    pub source_format: String,
+    /// Voice id used for (or intended for) synthesis.
+    pub voice_id: String,
+    /// `true` when the bundle carries audio segments.
+    pub audio_present: bool,
+    /// Number of chapters.
+    pub chapter_count: i64,
+    /// Creation time, ms since epoch.
+    pub created_at: i64,
+    /// Last-update time, ms since epoch.
+    pub updated_at: i64,
+}
+
+/// Synth vs. resynth. Stored as lowercase text in the `kind` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JobKind {
+    /// First-time synthesis of a text-only bundle.
+    Synth,
+    /// Re-synthesizing an already-audio bundle under a new voice.
+    Resynth,
+}
+
+/// Job lifecycle state. Stored as lowercase text in the `status` column.
+///
+/// Mirrors the SPA's variant-state pattern (`{ type: 'loading' }` etc.): the
+/// string is the wire format both for the SQLite column and the JSON API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JobStatus {
+    /// Created, waiting for a worker to pick it up.
+    Queued,
+    /// A worker is synthesizing.
+    Running,
+    /// Completed; the bundle now carries audio.
+    Succeeded,
+    /// Terminal failure — see `JobRow.error`.
+    Failed,
+}
+
+/// A row of the `jobs` table — one synth/resynth run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobRow {
+    /// Job id (caller-generated uuid at create time).
+    pub id: String,
+    /// The book this job is synthesizing.
+    pub book_id: String,
+    /// `synth` or `resynth`.
+    pub kind: JobKind,
+    /// Voice id the job runs under.
+    pub voice: String,
+    /// Lifecycle state.
+    pub status: JobStatus,
+    /// Paragraphs completed so far.
+    pub done: i64,
+    /// Total paragraphs to synthesize.
+    pub total: i64,
+    /// Failure message, set when `status == Failed`.
+    pub error: Option<String>,
+    /// Creation time, ms since epoch.
+    pub created_at: i64,
+    /// Last-update time, ms since epoch.
+    pub updated_at: i64,
+}
+
+/// The query surface used by HTTP handlers + the synth runner.
+///
+/// Every method is synchronous — rusqlite is sync. Callers in async contexts
+/// wrap each call in `tokio::task::spawn_blocking` (see the module docs).
+///
+/// `Send + Sync` is required so a `Box<dyn Db>` (or `Arc<dyn Db>`) can be
+/// shared across axum tasks. [`SqliteDb`] achieves it with a `Mutex<Connection>`;
+/// [`test_utils::StubDb`] with a `Mutex<HashMap>`.
+pub trait Db: Send + Sync {
+    /// Insert or replace a book row (idempotent upsert keyed on `id`).
+    fn upsert_book(&self, row: BookRow) -> Result<(), DbError>;
+    /// Fetch one book by id, or `None` if absent.
+    fn get_book(&self, id: &str) -> Result<Option<BookRow>, DbError>;
+    /// List all books, newest-first by `created_at`.
+    fn list_books(&self) -> Result<Vec<BookRow>, DbError>;
+    /// Delete one book by id. Returns `true` if a row was removed.
+    fn delete_book(&self, id: &str) -> Result<bool, DbError>;
+
+    /// Insert a fresh job row (caller supplies the id + initial fields).
+    /// Returns the inserted job's id.
+    fn create_job(&self, row: JobRow) -> Result<String, DbError>;
+    /// Transition a job's status, optionally bumping progress / setting an
+    /// error. `None` for `done`/`total`/`error` means "leave the column
+    /// unchanged". Returns `true` if the row existed.
+    fn update_job_status(
+        &self,
+        id: &str,
+        status: JobStatus,
+        done: Option<i64>,
+        total: Option<i64>,
+        error: Option<&str>,
+    ) -> Result<bool, DbError>;
+    /// Fetch one job by id, or `None` if absent.
+    fn get_job(&self, id: &str) -> Result<Option<JobRow>, DbError>;
+    /// List the `limit` most-recently-updated jobs.
+    fn list_recent_jobs(&self, limit: usize) -> Result<Vec<JobRow>, DbError>;
+}
+
+/// SQLite-backed [`Db`]. Owns a single [`Connection`] guarded by a `Mutex`.
+///
+/// WAL journal mode + `busy_timeout` are set on open so a future read pool
+/// (multiple connections) gets concurrent reads during a synth write "for free".
+/// v1 uses a single connection serialized through the mutex; the PRAGMAs are
+/// forward-looking and persist in the db file.
+pub struct SqliteDb {
+    conn: Mutex<Connection>,
+}
+
+impl SqliteDb {
+    /// Open (or create) the db at `path`, run idempotent migrations, set
+    /// `journal_mode=WAL` + `busy_timeout`.
+    ///
+    /// The parent dir must already exist — boot creates `data_dir` before
+    /// calling this. Re-opening an existing db is safe (migrations use
+    /// `IF NOT EXISTS`).
+    pub fn open(path: &Path) -> Result<Self, DbError> {
+        let conn = Connection::open(path)?;
+        Self::migrate(&conn)?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    /// Run `CREATE TABLE IF NOT EXISTS` + indexes + PRAGMAs. Idempotent.
+    ///
+    /// WAL + `busy_timeout` are forward-looking: v1 uses a single connection
+    /// (serialized through the mutex), but these PRAGMAs persist in the db file
+    /// so a future read pool gets concurrent-reads-during-write "for free".
+    fn migrate(conn: &Connection) -> Result<(), DbError> {
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "busy_timeout", 5_000i64)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS books(
+                id             TEXT PRIMARY KEY,
+                title          TEXT NOT NULL,
+                author         TEXT,
+                source_format  TEXT NOT NULL,
+                voice_id       TEXT NOT NULL,
+                audio_present  INTEGER NOT NULL,
+                chapter_count  INTEGER NOT NULL,
+                created_at     INTEGER NOT NULL,
+                updated_at     INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS jobs(
+                id          TEXT PRIMARY KEY,
+                book_id     TEXT NOT NULL,
+                kind        TEXT NOT NULL,
+                voice       TEXT NOT NULL,
+                status      TEXT NOT NULL,
+                done        INTEGER NOT NULL,
+                total       INTEGER NOT NULL,
+                error       TEXT,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_jobs_book_id ON jobs(book_id);
+            CREATE INDEX IF NOT EXISTS idx_jobs_status  ON jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_books_title  ON books(title);",
+        )?;
+        Ok(())
+    }
+}
+
+impl Db for SqliteDb {
+    fn upsert_book(&self, row: BookRow) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        upsert_book_row(&conn, &row)
+    }
+
+    fn get_book(&self, id: &str) -> Result<Option<BookRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at FROM books WHERE id = ?1")?;
+        let row = stmt.query_row([id], book_from_row).optional()?;
+        Ok(row)
+    }
+
+    fn list_books(&self) -> Result<Vec<BookRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at FROM books ORDER BY created_at DESC")?;
+        let rows = stmt.query_map([], book_from_row)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    fn delete_book(&self, id: &str) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute("DELETE FROM books WHERE id = ?1", [id])?;
+        Ok(n == 1)
+    }
+
+    fn create_job(&self, row: JobRow) -> Result<String, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let id = row.id.clone();
+        conn.execute(
+            "INSERT INTO jobs(id,book_id,kind,voice,status,done,total,error,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            rusqlite::params![
+                row.id,
+                row.book_id,
+                row.kind,
+                row.voice,
+                row.status,
+                row.done,
+                row.total,
+                row.error,
+                row.created_at,
+                row.updated_at,
+            ],
+        )?;
+        Ok(id)
+    }
+
+    fn update_job_status(
+        &self,
+        id: &str,
+        status: JobStatus,
+        done: Option<i64>,
+        total: Option<i64>,
+        error: Option<&str>,
+    ) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        apply_status_update(&conn, id, status, done, total, error)
+    }
+
+    fn get_job(&self, id: &str) -> Result<Option<JobRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id,book_id,kind,voice,status,done,total,error,created_at,updated_at FROM jobs WHERE id = ?1")?;
+        let row = stmt.query_row([id], job_from_row).optional()?;
+        Ok(row)
+    }
+
+    fn list_recent_jobs(&self, limit: usize) -> Result<Vec<JobRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id,book_id,kind,voice,status,done,total,error,created_at,updated_at FROM jobs ORDER BY updated_at DESC LIMIT ?1")?;
+        let rows = stmt.query_map([limit as i64], job_from_row)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+}
+
+// ----- helpers -----
+
+/// Insert-or-replace a [`BookRow`] (keyed on `id`).
+fn upsert_book_row(conn: &Connection, row: &BookRow) -> Result<(), DbError> {
+    conn.execute(
+        "INSERT OR REPLACE INTO books(id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        rusqlite::params![
+            row.id,
+            row.title,
+            row.author,
+            row.source_format,
+            row.voice_id,
+            row.audio_present,
+            row.chapter_count,
+            row.created_at,
+            row.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Map a SELECT row into a [`BookRow`]. Column order matches the SELECT lists.
+fn book_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BookRow> {
+    Ok(BookRow {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        author: row.get(2)?,
+        source_format: row.get(3)?,
+        voice_id: row.get(4)?,
+        audio_present: row.get(5)?,
+        chapter_count: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+/// Map a SELECT row into a [`JobRow`]. Column order matches the SELECT lists.
+fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRow> {
+    Ok(JobRow {
+        id: row.get(0)?,
+        book_id: row.get(1)?,
+        kind: row.get(2)?,
+        voice: row.get(3)?,
+        status: row.get(4)?,
+        done: row.get(5)?,
+        total: row.get(6)?,
+        error: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+    })
+}
+/// Build + run a dynamic UPDATE for `update_job_status`. Only the supplied
+/// (`Some`) columns are written; the rest keep their current values.
+fn apply_status_update(
+    conn: &Connection,
+    id: &str,
+    status: JobStatus,
+    done: Option<i64>,
+    total: Option<i64>,
+    error: Option<&str>,
+) -> Result<bool, DbError> {
+    // Build `SET status=?, updated_at=?, [<col>=?, …] WHERE id=?` with plain `?`
+    // placeholders, auto-numbered by rusqlite to match the param slice order.
+    let mut sql = String::from("UPDATE jobs SET status = ?, updated_at = ?");
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(status), Box::new(now_ms())];
+    if let Some(d) = done {
+        sql.push_str(", done = ?");
+        params.push(Box::new(d));
+    }
+    if let Some(t) = total {
+        sql.push_str(", total = ?");
+        params.push(Box::new(t));
+    }
+    if let Some(e) = error {
+        sql.push_str(", error = ?");
+        params.push(Box::new(e.to_string()));
+    }
+    sql.push_str(" WHERE id = ?");
+    params.push(Box::new(id.to_string()));
+
+    let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+    let n = conn.execute(&sql, refs.as_slice())?;
+    Ok(n == 1)
+}
+/// Wall-clock ms since the unix epoch (i64; clamped to 0 if the clock is
+/// before `UNIX_EPOCH`, which never happens in practice).
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+// ===== ToSql / FromSql for the enums (lowercase text) =====
+
+impl rusqlite::types::ToSql for JobKind {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.as_str().to_sql()
+    }
+}
+impl rusqlite::types::FromSql for JobKind {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "synth" => Ok(Self::Synth),
+            "resynth" => Ok(Self::Resynth),
+            _ => Err(rusqlite::types::FromSqlError::InvalidType),
+        }
+    }
+}
+impl rusqlite::types::ToSql for JobStatus {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.as_str().to_sql()
+    }
+}
+impl rusqlite::types::FromSql for JobStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "queued" => Ok(Self::Queued),
+            "running" => Ok(Self::Running),
+            "succeeded" => Ok(Self::Succeeded),
+            "failed" => Ok(Self::Failed),
+            _ => Err(rusqlite::types::FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl JobKind {
+    /// Lowercase wire string (`"synth"` / `"resynth"`).
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Synth => "synth",
+            Self::Resynth => "resynth",
+        }
+    }
+}
+impl JobStatus {
+    /// Lowercase wire string (`"queued"` / `"running"` / `"succeeded"` / `"failed"`).
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// In-memory test doubles — visible to other modules' tests within this crate
+/// (e.g. the HTTP handler tests in T7).
+#[cfg(test)]
+pub mod test_utils {
+    use super::*;
+
+    /// A `Vec`/`HashMap`-backed [`Db`] stub. No SQLite — for handler unit tests.
+    pub struct StubDb {
+        books: Mutex<std::collections::HashMap<String, BookRow>>,
+        jobs: Mutex<std::collections::HashMap<String, JobRow>>,
+    }
+
+    impl StubDb {
+        /// Empty stub.
+        pub fn new() -> Self {
+            Self {
+                books: Mutex::new(std::collections::HashMap::new()),
+                jobs: Mutex::new(std::collections::HashMap::new()),
+            }
+        }
+    }
+
+    impl Default for StubDb {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Db for StubDb {
+        fn upsert_book(&self, row: BookRow) -> Result<(), DbError> {
+            self.books.lock().unwrap().insert(row.id.clone(), row);
+            Ok(())
+        }
+        fn get_book(&self, id: &str) -> Result<Option<BookRow>, DbError> {
+            Ok(self.books.lock().unwrap().get(id).cloned())
+        }
+        fn list_books(&self) -> Result<Vec<BookRow>, DbError> {
+            let mut v: Vec<BookRow> = self.books.lock().unwrap().values().cloned().collect();
+            v.sort_by_key(|b| std::cmp::Reverse(b.created_at));
+            Ok(v)
+        }
+        fn delete_book(&self, id: &str) -> Result<bool, DbError> {
+            Ok(self.books.lock().unwrap().remove(id).is_some())
+        }
+        fn create_job(&self, row: JobRow) -> Result<String, DbError> {
+            let id = row.id.clone();
+            self.jobs.lock().unwrap().insert(id.clone(), row);
+            Ok(id)
+        }
+        fn update_job_status(
+            &self,
+            id: &str,
+            status: JobStatus,
+            done: Option<i64>,
+            total: Option<i64>,
+            error: Option<&str>,
+        ) -> Result<bool, DbError> {
+            let mut jobs = self.jobs.lock().unwrap();
+            if let Some(j) = jobs.get_mut(id) {
+                j.status = status;
+                if let Some(d) = done {
+                    j.done = d;
+                }
+                if let Some(t) = total {
+                    j.total = t;
+                }
+                if let Some(e) = error {
+                    j.error = Some(e.to_string());
+                }
+                j.updated_at = now_ms();
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        fn get_job(&self, id: &str) -> Result<Option<JobRow>, DbError> {
+            Ok(self.jobs.lock().unwrap().get(id).cloned())
+        }
+        fn list_recent_jobs(&self, limit: usize) -> Result<Vec<JobRow>, DbError> {
+            let mut v: Vec<JobRow> = self.jobs.lock().unwrap().values().cloned().collect();
+            v.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+            v.truncate(limit);
+            Ok(v)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_utils::StubDb;
+
+    // ---- fixtures ----
+
+    fn sample_book(id: &str) -> BookRow {
+        BookRow {
+            id: id.to_string(),
+            title: format!("Title {id}"),
+            author: Some(format!("Author {id}")),
+            source_format: "epub".to_string(),
+            voice_id: "en_US-lessac".to_string(),
+            audio_present: false,
+            chapter_count: 12,
+            created_at: 1_700_000_000_000,
+            updated_at: 1_700_000_000_000,
+        }
+    }
+
+    fn sample_job(id: &str, book_id: &str) -> JobRow {
+        JobRow {
+            id: id.to_string(),
+            book_id: book_id.to_string(),
+            kind: JobKind::Synth,
+            voice: "en_US-lessac".to_string(),
+            status: JobStatus::Queued,
+            done: 0,
+            total: 100,
+            error: None,
+            created_at: 1_700_000_000_000,
+            updated_at: 1_700_000_000_000,
+        }
+    }
+
+    // ---- SqliteDb: migrations ----
+
+    #[test]
+    fn sqlite_migrations_create_tables_and_are_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("taletrek.db");
+        let db = SqliteDb::open(&db_path).expect("open fresh");
+        // Round-trip proves both tables exist.
+        db.upsert_book(sample_book("b1")).unwrap();
+        let got = db.get_book("b1").unwrap();
+        assert!(got.is_some(), "books table works after migrate");
+        drop(db);
+        // Re-open the same file: migrations must not double-create.
+        let db2 = SqliteDb::open(&db_path).expect("reopen existing");
+        assert_eq!(db2.list_books().unwrap().len(), 1, "data persisted");
+    }
+
+    // ---- SqliteDb: books round-trip ----
+
+    #[test]
+    fn sqlite_book_upsert_get_list_delete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = SqliteDb::open(&tmp.path().join("taletrek.db")).unwrap();
+
+        // empty
+        assert!(db.list_books().unwrap().is_empty());
+        assert_eq!(db.get_book("missing").unwrap(), None);
+
+        // insert + get, every field round-trips
+        let mut row = sample_book("b1");
+        row.author = None;
+        row.audio_present = true;
+        db.upsert_book(row.clone()).unwrap();
+        let got = db.get_book("b1").unwrap().unwrap();
+        assert_eq!(got, row);
+        assert_eq!(got.author, None);
+        assert!(got.audio_present);
+
+        // second book, list returns all
+        db.upsert_book(sample_book("b2")).unwrap();
+        let all = db.list_books().unwrap();
+        assert_eq!(all.len(), 2);
+
+        // re-upsert same id updates (idempotent upsert)
+        let mut updated = sample_book("b1");
+        updated.title = "New Title".into();
+        updated.updated_at = row.updated_at + 1000;
+        db.upsert_book(updated.clone()).unwrap();
+        assert_eq!(db.list_books().unwrap().len(), 2, "no new row");
+        assert_eq!(
+            db.get_book("b1").unwrap().unwrap().title,
+            "New Title",
+            "row updated in place"
+        );
+
+        // delete
+        assert!(db.delete_book("b1").unwrap());
+        assert_eq!(db.get_book("b1").unwrap(), None, "deleted is gone");
+        assert!(!db.delete_book("b1").unwrap(), "second delete is false");
+        assert_eq!(db.list_books().unwrap().len(), 1);
+    }
+
+    // ---- SqliteDb: jobs lifecycle ----
+
+    #[test]
+    fn sqlite_job_create_update_transition_get_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = SqliteDb::open(&tmp.path().join("taletrek.db")).unwrap();
+
+        // create
+        let id = db.create_job(sample_job("j1", "b1")).unwrap();
+        assert_eq!(id, "j1");
+
+        // queued → running, set total
+        assert!(db
+            .update_job_status("j1", JobStatus::Running, None, Some(120), None)
+            .unwrap());
+        let running = db.get_job("j1").unwrap().unwrap();
+        assert_eq!(running.status, JobStatus::Running);
+        assert_eq!(running.total, 120);
+        assert_eq!(running.done, 0, "done untouched");
+
+        // running → succeeded, set done = total
+        assert!(db
+            .update_job_status("j1", JobStatus::Succeeded, Some(120), None, None)
+            .unwrap());
+        let ok = db.get_job("j1").unwrap().unwrap();
+        assert_eq!(ok.status, JobStatus::Succeeded);
+        assert_eq!(ok.done, 120);
+
+        // separate failed path with error + paragraph index
+        db.create_job(sample_job("j2", "b1")).unwrap();
+        assert!(db
+            .update_job_status("j2", JobStatus::Failed, Some(47), None, Some("boom"))
+            .unwrap());
+        let fail = db.get_job("j2").unwrap().unwrap();
+        assert_eq!(fail.status, JobStatus::Failed);
+        assert_eq!(fail.done, 47);
+        assert_eq!(fail.error.as_deref(), Some("boom"));
+
+        // update of missing job returns false
+        assert!(!db
+            .update_job_status("nope", JobStatus::Running, None, None, None)
+            .unwrap());
+
+        // list_recent_jobs returns both, newest-updated first
+        let recent = db.list_recent_jobs(10).unwrap();
+        assert_eq!(recent.len(), 2);
+        assert!(recent[0].updated_at >= recent[1].updated_at);
+    }
+
+    // ---- serde wire format ----
+
+    #[test]
+    fn job_status_and_kind_serialize_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&JobStatus::Queued).unwrap(),
+            "\"queued\""
+        );
+        assert_eq!(
+            serde_json::to_string(&JobStatus::Succeeded).unwrap(),
+            "\"succeeded\""
+        );
+        assert_eq!(serde_json::to_string(&JobKind::Synth).unwrap(), "\"synth\"");
+        assert_eq!(
+            serde_json::to_string(&JobKind::Resynth).unwrap(),
+            "\"resynth\""
+        );
+    }
+
+    // ---- StubDb smoke (trait parity) ----
+
+    #[test]
+    fn stub_db_satisfies_trait_and_round_trips_one_query() {
+        let db = StubDb::new();
+        let row = sample_book("sb1");
+        db.upsert_book(row.clone()).unwrap();
+        assert_eq!(db.get_book("sb1").unwrap(), Some(row));
+        assert_eq!(db.list_books().unwrap().len(), 1);
+        assert!(db.delete_book("sb1").unwrap());
+    }
+}
