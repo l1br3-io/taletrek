@@ -18,7 +18,7 @@
 ### Checkpoint: Server boots + health; db + store unit-tested in isolation.
 
 ## Phase 3 — HTTP library API
-- [ ] T7: Router + bearer-token auth middleware + `GET /api/books` + `GET /api/books/:id` (`tasks/007-http-router-auth.md`)
+- [x] T7: Router + bearer-token auth middleware + `GET /api/books` + `GET /api/books/:id` (`tasks/007-http-router-auth.md`)
 - [ ] T8: `POST /api/books` (multipart + ingest) + download + delete (`tasks/008-http-books-crud.md`)
 
 ### Checkpoint: Library loop via curl (auth-gated upload → list → download → delete).

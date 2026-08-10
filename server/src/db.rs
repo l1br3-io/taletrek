@@ -20,13 +20,15 @@
 //! with an in-memory stub ([`test_utils::StubDb`]) — no real SQLite, no
 //! network, no piper in handler tests.
 //!
-//! # Dead-code window (T5 → T7)
+//! # Dead-code window (T5 → T9)
 //!
-//! This module's public API is proven in isolation here but is not wired into
-//! the axum app until T7/T8 (per task 005). Until then the trait + row structs
-//! are unreached from `main`, so the bin-crate dead-code analysis flags them.
-//! The allow below is scoped to this module and should be removed once T7
-//! consumes the API.
+//! The books half of this module's public API is wired into the axum app as of
+//! T7 (`AppState.db` + the read handlers); the jobs half (the [`JobRow`] /
+//! [`JobKind`] / [`JobStatus`] surface + the create/update/list queries) is
+//! proven here in isolation but stays unreached from `main` until T9 wires the
+//! synth runner. Until then the bin-crate dead-code analysis would flag those
+//! job items, so the allow below stays scoped to this module. Remove it once T9
+//! consumes the jobs API.
 #![allow(dead_code)]
 
 use std::path::Path;
