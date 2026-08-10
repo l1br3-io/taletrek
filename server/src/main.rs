@@ -7,6 +7,7 @@
 mod config;
 mod db;
 mod http;
+mod store;
 
 use anyhow::{Context, Result};
 use tokio::net::TcpListener;
