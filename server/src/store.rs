@@ -40,6 +40,21 @@ use taletrek_synth::{
     read_book_bundle, read_library_bundle, write_book_bundle, BookMeta, BundleError,
 };
 
+/// One book ingested from an upload — the bundle's [`BookMeta`] plus the
+/// `audio.present` flag lifted out of its `manifest.audio` (T8's index row needs
+/// `audio_present`, which [`BookMeta`] itself doesn't carry).
+///
+/// [`ingest`] / [`put_bundle`] return this so the HTTP layer can populate the
+/// `books` row without re-reading the bundle. T9/T10 reuse it for the synth /
+/// resynth paths (which set `audio_present = true` on success).
+#[derive(Debug, Clone)]
+pub struct IngestedBook {
+    /// The bundle's parsed book metadata.
+    pub meta: BookMeta,
+    /// `manifest.audio.present` — `true` when the bundle carries audio segments.
+    pub audio_present: bool,
+}
+
 /// Errors surfaced by the store layer.
 ///
 /// Kept small and typed so HTTP handlers (T8) can map [`Self::NotFound`] → 404,
@@ -109,14 +124,19 @@ fn validate_book_id(id: &str) -> Result<(), StoreError> {
 /// file is written — an unparseable bundle never reaches disk. The original
 /// `bytes` are written verbatim (no re-serialization), so a subsequent
 /// [`get_bundle`] returns byte-identical input. Returns the bundle's parsed
-/// [`BookMeta`] so the caller (T8) can upsert the SQLite `books` row.
+/// [`BookMeta`] (plus its `audio.present` flag, as [`IngestedBook`]) so the
+/// caller (T8) can upsert the SQLite `books` row without re-reading the bundle.
 ///
 /// `book_id` is validated by [`validate_book_id`]. The caller is expected to
 /// pass `bundle.manifest.book.id` — see the module docs on the server-keys-by-
 /// bundle-id policy (a deliberate divergence from the SPA's
 /// allocate-new-id-on-collision from effort 3; the server is canonical, so the
 /// id is stable and a re-upload overwrites in place).
-pub fn put_bundle(data_dir: &Path, book_id: &str, bytes: &[u8]) -> Result<BookMeta, StoreError> {
+pub fn put_bundle(
+    data_dir: &Path,
+    book_id: &str,
+    bytes: &[u8],
+) -> Result<IngestedBook, StoreError> {
     validate_book_id(book_id)?;
     let bundle = read_book_bundle(bytes)?;
     let path = bundle_file(data_dir, book_id);
@@ -124,7 +144,10 @@ pub fn put_bundle(data_dir: &Path, book_id: &str, bytes: &[u8]) -> Result<BookMe
         fs::create_dir_all(parent)?;
     }
     fs::write(&path, bytes)?;
-    Ok(bundle.manifest.book)
+    Ok(IngestedBook {
+        audio_present: bundle.manifest.audio.present,
+        meta: bundle.manifest.book,
+    })
 }
 
 /// Read a stored book bundle's bytes back. `NotFound` if absent.
@@ -158,20 +181,21 @@ pub fn delete_bundle(data_dir: &Path, book_id: &str) -> Result<bool, StoreError>
 /// bytes are tried as a library bundle via `read_library_bundle`. Each
 /// constituent book is written via [`put_bundle`] under its own
 /// `manifest.book.id`, overwriting any prior bundle for that id (idempotent
-/// upsert). Returns every stored book's [`BookMeta`] in archive order.
+/// upsert). Returns every stored book's [`IngestedBook`] (meta + audio flag) in
+/// archive order.
 ///
 /// If the bytes parse as neither, [`StoreError::NotLibraryOrBook`] is returned
 /// and nothing is written.
-pub fn ingest(data_dir: &Path, bytes: &[u8]) -> Result<Vec<BookMeta>, StoreError> {
+pub fn ingest(data_dir: &Path, bytes: &[u8]) -> Result<Vec<IngestedBook>, StoreError> {
     match read_book_bundle(bytes) {
         Ok(bundle) => {
             let id = bundle.manifest.book.id.clone();
-            let meta = put_bundle(data_dir, &id, bytes)?;
-            Ok(vec![meta])
+            let ingested = put_bundle(data_dir, &id, bytes)?;
+            Ok(vec![ingested])
         }
         Err(book_err) => match read_library_bundle(bytes) {
             Ok(lib) => {
-                let mut metas = Vec::with_capacity(lib.books.len());
+                let mut out = Vec::with_capacity(lib.books.len());
                 for book in lib.books {
                     let id = book.manifest.book.id.clone();
                     // Re-serialize each nested book; put_bundle re-validates +
@@ -179,9 +203,9 @@ pub fn ingest(data_dir: &Path, bytes: &[u8]) -> Result<Vec<BookMeta>, StoreError
                     let mut cursor = Cursor::new(Vec::new());
                     write_book_bundle(&book, &mut cursor)?;
                     let book_bytes = cursor.into_inner();
-                    metas.push(put_bundle(data_dir, &id, &book_bytes)?);
+                    out.push(put_bundle(data_dir, &id, &book_bytes)?);
                 }
-                Ok(metas)
+                Ok(out)
             }
             Err(lib_err) => Err(StoreError::NotLibraryOrBook {
                 book: book_err,
@@ -209,21 +233,23 @@ mod tests {
     fn ingest_book_round_trips_byte_identical() {
         let tmp = tempfile::tempdir().unwrap();
         let direct = read_book_bundle(BOOK_TEXT_ONLY).unwrap();
-        let metas = ingest(tmp.path(), BOOK_TEXT_ONLY).unwrap();
-        assert_eq!(metas.len(), 1);
-        assert_eq!(metas[0].id, direct.manifest.book.id);
-        assert_eq!(metas[0].title, direct.manifest.book.title);
+        let ingested = ingest(tmp.path(), BOOK_TEXT_ONLY).unwrap();
+        assert_eq!(ingested.len(), 1);
+        assert_eq!(ingested[0].meta.id, direct.manifest.book.id);
+        assert_eq!(ingested[0].meta.title, direct.manifest.book.title);
+        assert!(!ingested[0].audio_present, "text-only fixture has no audio");
         // get_bundle returns byte-identical input (verbatim write, no re-encode).
-        let stored = get_bundle(tmp.path(), &metas[0].id).unwrap();
+        let stored = get_bundle(tmp.path(), &ingested[0].meta.id).unwrap();
         assert_eq!(stored.as_slice(), BOOK_TEXT_ONLY);
     }
 
     #[test]
     fn ingest_full_book_round_trips() {
         let tmp = tempfile::tempdir().unwrap();
-        let metas = ingest(tmp.path(), BOOK_FULL).unwrap();
-        assert_eq!(metas.len(), 1);
-        let stored = get_bundle(tmp.path(), &metas[0].id).unwrap();
+        let ingested = ingest(tmp.path(), BOOK_FULL).unwrap();
+        assert_eq!(ingested.len(), 1);
+        assert!(ingested[0].audio_present, "full fixture carries audio");
+        let stored = get_bundle(tmp.path(), &ingested[0].meta.id).unwrap();
         assert_eq!(stored.as_slice(), BOOK_FULL);
         // The stored bundle still declares audio present.
         let reparsed = read_book_bundle(&stored).unwrap();
@@ -237,15 +263,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let lib = read_library_bundle(LIBRARY).unwrap();
         assert!(!lib.books.is_empty(), "fixture should carry >=1 book");
-        let metas = ingest(tmp.path(), LIBRARY).unwrap();
-        assert_eq!(metas.len(), lib.books.len());
-        for (meta, book) in metas.iter().zip(lib.books.iter()) {
-            assert_eq!(meta.id, book.manifest.book.id);
-            assert_eq!(meta.title, book.manifest.book.title);
-            let stored = get_bundle(tmp.path(), &meta.id).unwrap();
+        let ingested = ingest(tmp.path(), LIBRARY).unwrap();
+        assert_eq!(ingested.len(), lib.books.len());
+        for (book, src) in ingested.iter().zip(lib.books.iter()) {
+            assert_eq!(book.meta.id, src.manifest.book.id);
+            assert_eq!(book.meta.title, src.manifest.book.title);
+            assert_eq!(book.audio_present, src.manifest.audio.present);
+            let stored = get_bundle(tmp.path(), &book.meta.id).unwrap();
             let reparsed = read_book_bundle(&stored).unwrap();
-            assert_eq!(reparsed.manifest.book.id, book.manifest.book.id);
-            assert_eq!(reparsed.manifest.book.title, book.manifest.book.title);
+            assert_eq!(reparsed.manifest.book.id, src.manifest.book.id);
+            assert_eq!(reparsed.manifest.book.title, src.manifest.book.title);
         }
     }
 
@@ -258,7 +285,7 @@ mod tests {
         let second = ingest(tmp.path(), BOOK_TEXT_ONLY).unwrap();
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);
-        assert_eq!(first[0].id, second[0].id);
+        assert_eq!(first[0].meta.id, second[0].meta.id);
         // Exactly one book dir on disk — overwrite, not duplicate.
         let count = fs::read_dir(tmp.path().join("library")).unwrap().count();
         assert_eq!(count, 1);
@@ -269,8 +296,8 @@ mod tests {
     #[test]
     fn delete_bundle_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
-        let metas = ingest(tmp.path(), BOOK_TEXT_ONLY).unwrap();
-        let id = &metas[0].id;
+        let ingested = ingest(tmp.path(), BOOK_TEXT_ONLY).unwrap();
+        let id = &ingested[0].meta.id;
         assert!(
             delete_bundle(tmp.path(), id).unwrap(),
             "first delete removes"

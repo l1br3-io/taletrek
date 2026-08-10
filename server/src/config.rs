@@ -37,6 +37,14 @@ const ENV_JOBS: &str = "TALETREK_JOBS";
 const ENV_PIPER: &str = "TALETREK_PIPER";
 /// Env var: `ffmpeg` binary name/path (`TALETREK_FFMPEG`).
 const ENV_FFMPEG: &str = "TALETREK_FFMPEG";
+/// Env var: max accepted upload body size in bytes (`TALETREK_MAX_BUNDLE_BYTES`).
+const ENV_MAX_BUNDLE_BYTES: &str = "TALETREK_MAX_BUNDLE_BYTES";
+
+/// Default max upload body size: 256 MiB. Generous enough for a single full
+/// bundle (audio segments) or a multi-book `.taletrek-lib`, while bounding the
+/// worst-case memory held during multipart parsing. Mobile whole-book bundles
+/// are capped ~200 MB (G20); this leaves headroom.
+pub(crate) const DEFAULT_MAX_BUNDLE_BYTES: usize = 256 * 1024 * 1024;
 
 /// Resolved server settings.
 ///
@@ -64,6 +72,9 @@ pub struct Settings {
     pub piper: String,
     /// `ffmpeg` binary name or absolute path (default `"ffmpeg"`).
     pub ffmpeg: String,
+    /// Max accepted upload body size in bytes (applied to `POST /api/books` via
+    /// axum's `DefaultBodyLimit`). Oversized uploads are rejected with `413`.
+    pub max_bundle_bytes: usize,
 }
 
 /// Errors surfaced while resolving [`Settings`]. Each carries enough context
@@ -84,6 +95,10 @@ pub enum ConfigError {
     /// `TALETREK_JOBS` was not a positive integer.
     #[error("invalid jobs count {0:?}: {1}")]
     InvalidJobs(String, #[source] std::num::ParseIntError),
+
+    /// `TALETREK_MAX_BUNDLE_BYTES` (or config `max_bundle_bytes`) was not a valid `usize`.
+    #[error("invalid max_bundle_bytes {0:?}: {1}")]
+    InvalidMaxBundleBytes(String, #[source] std::num::ParseIntError),
 
     /// The `TALETREK_CONFIG` file could not be read from disk.
     #[error("reading config file {0}: {1}")]
@@ -111,6 +126,8 @@ struct ConfigFile {
     piper: Option<String>,
     /// Mirrors `TALETREK_FFMPEG`.
     ffmpeg: Option<String>,
+    /// Mirrors `TALETREK_MAX_BUNDLE_BYTES`.
+    max_bundle_bytes: Option<usize>,
 }
 
 impl Settings {
@@ -170,6 +187,13 @@ impl Settings {
             .or(cfg.ffmpeg)
             .unwrap_or_else(|| "ffmpeg".to_string());
 
+        let max_bundle_bytes = match env(ENV_MAX_BUNDLE_BYTES) {
+            Some(raw) => raw
+                .parse()
+                .map_err(|e| ConfigError::InvalidMaxBundleBytes(raw, e))?,
+            None => cfg.max_bundle_bytes.unwrap_or(DEFAULT_MAX_BUNDLE_BYTES),
+        };
+
         Ok(Self {
             data_dir,
             bind,
@@ -178,6 +202,7 @@ impl Settings {
             jobs,
             piper,
             ffmpeg,
+            max_bundle_bytes,
         })
     }
 }
@@ -328,6 +353,47 @@ mod tests {
     }
 
     #[test]
+    fn invalid_max_bundle_bytes_surfaces_error() {
+        let err = Settings::resolve(
+            &|k: &str| match k {
+                ENV_TOKEN => Some("t".into()),
+                ENV_MAX_BUNDLE_BYTES => Some("not-a-number".into()),
+                _ => None,
+            },
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidMaxBundleBytes(..)));
+        assert!(err.to_string().contains("not-a-number"));
+    }
+
+    #[test]
+    fn max_bundle_bytes_defaults_and_env_overrides() {
+        // Default when neither env nor config supplies it.
+        let s = Settings::resolve(
+            &|k: &str| match k {
+                ENV_TOKEN => Some("t".into()),
+                _ => None,
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.max_bundle_bytes, DEFAULT_MAX_BUNDLE_BYTES);
+
+        // Env overrides the default.
+        let s = Settings::resolve(
+            &|k: &str| match k {
+                ENV_TOKEN => Some("t".into()),
+                ENV_MAX_BUNDLE_BYTES => Some("12345".into()),
+                _ => None,
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.max_bundle_bytes, 12345);
+    }
+
+    #[test]
     fn parse_config_file_round_trip() {
         let toml_src = r#"
 token = "abc"
@@ -337,6 +403,7 @@ jobs = 4
 piper = "/opt/piper/piper"
 ffmpeg = "ffmpeg"
 voices_cache_dir = "/var/cache/taletrek/voices"
+max_bundle_bytes = 67108864
 "#;
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(tmp.path(), toml_src).unwrap();
@@ -345,5 +412,6 @@ voices_cache_dir = "/var/cache/taletrek/voices"
         assert_eq!(parsed.bind.as_deref(), Some("127.0.0.1:8080"));
         assert_eq!(parsed.jobs, Some(4));
         assert_eq!(parsed.piper.as_deref(), Some("/opt/piper/piper"));
+        assert_eq!(parsed.max_bundle_bytes, Some(67_108_864));
     }
 }
