@@ -407,7 +407,7 @@ fn apply_status_update(
 }
 /// Wall-clock ms since the unix epoch (i64; clamped to 0 if the clock is
 /// before `UNIX_EPOCH`, which never happens in practice).
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)

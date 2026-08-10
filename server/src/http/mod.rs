@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::middleware::from_fn_with_state;
 use axum::routing::get;
 use tower_http::trace::TraceLayer;
@@ -50,22 +51,26 @@ pub struct AppState {
 
 /// Build the application router.
 ///
-/// `/api/health` is mounted on the outer router (no auth); `/api/books` +
-/// `/api/books/{id}` live on the protected sub-router and inherit
-/// [`auth::require_bearer`]. T8+ `.merge()`/`.route()` further handlers onto
+/// `/api/health` is mounted on the outer router (no auth); every `/api/books`
+/// route lives on the protected sub-router and inherits [`auth::require_bearer`]
+/// as well as the upload body-size limit ([`DefaultBodyLimit`] =
+/// `max_bundle_bytes`). Later tasks (T9/T10) `.route()` further handlers onto
 /// `protected` so they pick up auth for free.
-///
-/// The auth middleware extracts [`State<AppState>`], so the layer is built with
-/// [`from_fn_with_state`] (`from_fn` cannot extract `State`). The same `state`
-/// also finalizes the router via `.with_state(state)` — handlers and middleware
-/// share one `AppState`.
 ///
 /// [`State<AppState>`]: axum::extract::State
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
-        .route("/api/books", get(books::list_books))
-        .route("/api/books/{id}", get(books::get_book))
-        .layer(from_fn_with_state(state.clone(), auth::require_bearer));
+        .route(
+            "/api/books",
+            get(books::list_books).post(books::upload_book),
+        )
+        .route(
+            "/api/books/{id}",
+            get(books::get_book).delete(books::delete_book),
+        )
+        .route("/api/books/{id}/bundle", get(books::download_bundle))
+        .layer(from_fn_with_state(state.clone(), auth::require_bearer))
+        .layer(DefaultBodyLimit::max(state.settings.max_bundle_bytes));
 
     Router::new()
         .route("/api/health", get(health::health))
@@ -122,6 +127,21 @@ mod test_support {
         }
     }
 
+    /// An [`AppState`] with a caller-supplied db + a real `data_dir` (a
+    /// [`tempfile::tempdir`]'s path). For the T8 upload/download/delete tests,
+    /// which exercise the real [`crate::store`] against a throwaway dir.
+    pub(crate) fn app_state_with_data_dir(
+        db: Arc<dyn Db>,
+        data_dir: PathBuf,
+        token: &str,
+    ) -> AppState {
+        AppState {
+            db,
+            data_dir,
+            settings: Arc::new(test_settings(token)),
+        }
+    }
+
     /// Minimal [`Settings`] for handler tests — only `token` is meaningful; the
     /// rest are throwaway defaults that no read handler inspects.
     fn test_settings(token: &str) -> Settings {
@@ -135,6 +155,7 @@ mod test_support {
             jobs: 1,
             piper: "piper".to_string(),
             ffmpeg: "ffmpeg".to_string(),
+            max_bundle_bytes: crate::config::DEFAULT_MAX_BUNDLE_BYTES,
         }
     }
 }
