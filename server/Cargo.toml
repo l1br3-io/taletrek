@@ -23,6 +23,7 @@ serde_json = "1"
 anyhow = "1"
 thiserror = "2"
 toml = "0.8"
+rusqlite = { version = "0.35", features = ["bundled"] }
 taletrek-synth = { path = "../crates/synth" }
 taletrek-worker = { path = "../crates/worker" }
 
