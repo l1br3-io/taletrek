@@ -15,7 +15,7 @@
 //! inside [`tokio::task::spawn_blocking`], never awaited on the async runtime
 //! directly. Voice resolution (`resolve_voice`) is also blocking (HTTP via
 //! `ureq` + file I/O). Both run inside a single `spawn_blocking` closure so the
-//! async runtime is never stalled — see [`run_synth_to_completion`].
+//! async runtime is never stalled — see [`run_job_to_completion`].
 //!
 //! The [`ProgressSink`] impl ([`JobProgress`]) is invoked from rayon worker
 //! threads and writes to the DB synchronously — that's safe because the `Db` is
@@ -49,7 +49,7 @@ use taletrek_synth::{
 use taletrek_worker::voices::{
     find_curated, resolve_voice, ResolveError, ResolveOpts, UreqVoiceSource, DEFAULT_VOICE_ID,
 };
-use taletrek_worker::{refuse_full_input, synth_and_stamp, ProgressSink};
+use taletrek_worker::{refuse_full_input, resynth_and_stamp, synth_and_stamp, ProgressSink};
 
 use crate::db::Db;
 use crate::db::{now_ms, DbError, JobKind, JobRow, JobStatus};
@@ -187,6 +187,11 @@ pub enum SynthTriggerError {
     /// a `failed` job row.
     #[error("voice rejected: {0}")]
     BadVoice(#[from] ResolveError),
+    /// The resynth request omitted `voice` (→ `400`). Synth defaults the voice;
+    /// resynth requires an explicit target voice since the whole point is a
+    /// voice swap.
+    #[error("voice is required for resynth (the new voice to re-voice under)")]
+    MissingVoice,
     /// A blocking call (store read, bundle parse, db write, join) failed during
     /// triggering (→ `500`).
     #[error(transparent)]
@@ -304,12 +309,65 @@ struct PreparedJob {
     total: usize,
 }
 
+/// Which worker stamp function the background job runs. Extracted so
+/// [`run_job_to_completion`] serves both synth and resynth without copy-paste —
+/// the two differ only at the stamp call site (everything else — voice resolve,
+/// status transitions, store write, book-row upsert — is identical).
+///
+/// [`synth_and_stamp`] is text-only-input + guarded by `refuse_full_input` at
+/// trigger; [`resynth_and_stamp`] rewrites `manifest.book.voice_id` to the new
+/// voice first, then re-synthesizes, and accepts both text-only and full input
+/// (stale audio under the old voice is discarded, not merged — see
+/// [`taletrek_worker::resynth_and_stamp`]).
+#[derive(Clone, Copy)]
+enum StampStrategy {
+    /// First-time synth of a text-only bundle.
+    Synth,
+    /// Re-voice under a new voice id (rewrites the manifest first).
+    Resynth,
+}
+
+/// Load + parse + (optionally) refuse-full + count paragraphs. Shared by the
+/// synth and resynth triggers so the store/parse/total logic lives once. The
+/// `refuse_if_full` flag is `true` for synth (already-full → `409`) and `false`
+/// for resynth (re-voicing a full bundle is the whole point).
+fn load_and_prepare(
+    data_dir: &Path,
+    book_id: &str,
+    refuse_if_full: bool,
+) -> Result<PreparedJob, SynthTriggerError> {
+    let bytes = store::get_bundle(data_dir, book_id).map_err(|e| match e {
+        StoreError::NotFound(id) => SynthTriggerError::BookNotFound(id),
+        other => SynthTriggerError::Internal(other.into()),
+    })?;
+    let bundle = read_book_bundle(&bytes).map_err(|e| SynthTriggerError::Internal(e.into()))?;
+    if refuse_if_full {
+        if let Err(full) = refuse_full_input(&bundle, book_id) {
+            let voice = full.voice;
+            let message = format!(
+                "book {book_id} already contains audio (voice `{voice}`); \
+                 use resynth to re-voice it"
+            );
+            return Err(SynthTriggerError::AlreadyFull {
+                book: book_id.to_string(),
+                message,
+            });
+        }
+    }
+    let total = bundle
+        .chapters
+        .iter()
+        .map(|ch| ch.paragraphs.len())
+        .sum::<usize>();
+    Ok(PreparedJob { bundle, total })
+}
+
 /// Trigger a synth job for `book_id`.
 ///
 /// Validates cheaply (book present, text-only, voice id/path plausible), creates
 /// a `queued` job row with `total` = paragraph count, spawns the background
 /// synth, and returns the job id immediately (→ HTTP `202`). The background task
-/// ([`run_synth_to_completion`]) does the expensive work (voice download, rayon
+/// ([`run_job_to_completion`]) does the expensive work (voice download, rayon
 /// pool, store write) and flips the row to `succeeded`/`failed`.
 ///
 /// `voice` defaults to [`DEFAULT_VOICE_ID`] when `None`. `jobs` defaults to
@@ -331,64 +389,27 @@ pub async fn run_synth_job(
     let prep = {
         let data_dir = ctx.data_dir.clone();
         let book_id_check = book_id.clone();
-        tokio::task::spawn_blocking(
-            move || -> Result<PreparedJob, SynthTriggerError> {
-                let bytes = store::get_bundle(&data_dir, &book_id_check).map_err(|e| match e {
-                    StoreError::NotFound(id) => SynthTriggerError::BookNotFound(id),
-                    other => SynthTriggerError::Internal(other.into()),
-                })?;
-                let bundle =
-                    read_book_bundle(&bytes).map_err(|e| SynthTriggerError::Internal(e.into()))?;
-                if let Err(full) = refuse_full_input(&bundle, &book_id_check) {
-                    let voice = full.voice;
-                    let message = format!(
-                        "book {book_id_check} already contains audio (voice `{voice}`); \
-                         use resynth to re-voice it"
-                    );
-                    return Err(SynthTriggerError::AlreadyFull {
-                        book: book_id_check,
-                        message,
-                    });
-                }
-                let total = bundle.chapters.iter().map(|ch| ch.paragraphs.len()).sum::<usize>();
-                Ok(PreparedJob { bundle, total })
-            },
-        )
-        .await
-        .map_err(|e| SynthTriggerError::Internal(SynthInternalError::Join(e.to_string())))??
+        tokio::task::spawn_blocking(move || load_and_prepare(&data_dir, &book_id_check, true))
+            .await
+            .map_err(|e| SynthTriggerError::Internal(SynthInternalError::Join(e.to_string())))??
     };
 
     // 3. Resolve the effective voice id + create the `queued` job row.
     let voice_id = voice.unwrap_or_else(|| DEFAULT_VOICE_ID.to_string());
-    let job_id = new_job_id();
-    let now = now_ms();
-    {
-        let db = ctx.db.clone();
-        let row = JobRow {
-            id: job_id.clone(),
-            book_id: book_id.clone(),
-            kind: JobKind::Synth,
-            voice: voice_id.clone(),
-            status: JobStatus::Queued,
-            done: 0,
-            total: prep.total as i64,
-            error: None,
-            created_at: now,
-            updated_at: now,
-        };
-        tokio::task::spawn_blocking(move || -> Result<(), SynthTriggerError> {
-            db.create_job(row).map_err(|e| SynthTriggerError::Internal(e.into()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| SynthTriggerError::Internal(SynthInternalError::Join(e.to_string())))??;
-    }
+    let job_id = create_job_row(
+        ctx.db.clone(),
+        &book_id,
+        JobKind::Synth,
+        &voice_id,
+        prep.total,
+    )
+    .await?;
 
     // 4. Spawn the detached background synth. A clone of the context carries
     //    every handle it needs; the handler has already returned by the time
     //    this runs.
     let jobs_eff = jobs.unwrap_or(ctx.default_jobs);
-    tokio::spawn(run_synth_to_completion(
+    tokio::spawn(run_job_to_completion(
         ctx,
         job_id.clone(),
         book_id,
@@ -396,17 +417,114 @@ pub async fn run_synth_job(
         voice_path,
         jobs_eff,
         prep.bundle,
+        StampStrategy::Synth,
     ));
 
     Ok(job_id)
 }
 
-/// The background synth runner, spawned (detached) by [`run_synth_job`].
+/// Trigger a resynth job for `book_id` — re-voice the book under `voice`.
 ///
-/// Runs the whole blocking sequence (voice resolve → synth+stamp → store write
+/// Unlike [`run_synth_job`]: `voice` is **required** (the whole point is a
+/// voice swap → `400` when omitted); the input may be text-only OR full (no
+/// `refuse_full_input` guard); the job row is `kind=resynth`; and the
+/// background run calls [`resynth_and_stamp`], which rewrites
+/// `manifest.book.voice_id` to the new voice before re-synthesizing, so the
+/// whole book is re-keyed under the new voice (stale old-voice audio is
+/// discarded — not merged — matching the desktop `resynth` behavior).
+pub async fn run_resynth_job(
+    ctx: SynthContext,
+    book_id: String,
+    voice: Option<String>,
+    voice_path: Option<PathBuf>,
+    jobs: Option<usize>,
+) -> Result<String, SynthTriggerError> {
+    // 1. voice required + cheap pre-flight (no network).
+    let voice_id = voice.ok_or(SynthTriggerError::MissingVoice)?;
+    preflight_voice(Some(&voice_id), voice_path.as_deref())?;
+
+    // 2. Load + parse + count paragraphs. NO refuse-full guard — resynth
+    //    accepts both text-only and full input.
+    let prep = {
+        let data_dir = ctx.data_dir.clone();
+        let book_id_check = book_id.clone();
+        tokio::task::spawn_blocking(move || load_and_prepare(&data_dir, &book_id_check, false))
+            .await
+            .map_err(|e| SynthTriggerError::Internal(SynthInternalError::Join(e.to_string())))??
+    };
+
+    // 3. Create the `queued` resynth job row.
+    let job_id = create_job_row(
+        ctx.db.clone(),
+        &book_id,
+        JobKind::Resynth,
+        &voice_id,
+        prep.total,
+    )
+    .await?;
+
+    // 4. Spawn the detached background resynth.
+    let jobs_eff = jobs.unwrap_or(ctx.default_jobs);
+    tokio::spawn(run_job_to_completion(
+        ctx,
+        job_id.clone(),
+        book_id,
+        voice_id,
+        voice_path,
+        jobs_eff,
+        prep.bundle,
+        StampStrategy::Resynth,
+    ));
+
+    Ok(job_id)
+}
+
+/// Insert a `queued` job row (shared by synth + resynth triggers). Wraps the
+/// blocking `Db::create_job` in `spawn_blocking`. Returns the job id on
+/// success.
+async fn create_job_row(
+    db: Arc<dyn Db>,
+    book_id: &str,
+    kind: JobKind,
+    voice_id: &str,
+    total: usize,
+) -> Result<String, SynthTriggerError> {
+    let job_id = new_job_id();
+    let now = now_ms();
+    let row = JobRow {
+        id: job_id.clone(),
+        book_id: book_id.to_string(),
+        kind,
+        voice: voice_id.to_string(),
+        status: JobStatus::Queued,
+        done: 0,
+        total: total as i64,
+        error: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let job_id_ret = job_id.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), SynthTriggerError> {
+        db.create_job(row).map_err(|e| SynthTriggerError::Internal(e.into()))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| SynthTriggerError::Internal(SynthInternalError::Join(e.to_string())))??;
+    Ok(job_id_ret)
+}
+
+/// The background job runner, spawned (detached) by [`run_synth_job`] /
+/// [`run_resynth_job`].
+///
+/// Runs the whole blocking sequence (voice resolve → stamp → store write
 /// → book-row upsert → status transitions) inside one `spawn_blocking` so the
 /// async runtime is never stalled. Any error (including a panic) flips the job
 /// row to `failed` with a message; success flips it to `succeeded`.
+///
+/// `strategy` selects [`synth_and_stamp`] vs [`resynth_and_stamp`] — the only
+/// step that differs between the two job kinds. Everything else (voice resolve,
+/// status transitions, store write, book-row upsert) is shared, which is why
+/// this is one function rather than two near-identical copies.
 ///
 /// # Why `db` is cloned twice
 ///
@@ -414,7 +532,8 @@ pub async fn run_synth_job(
 /// failure path — which runs *after* the closure returns — we keep a separate
 /// `Arc<dyn Db>` clone + the job id so the error handler can still write the
 /// `failed` row. The panic path (the closure never returns) uses the same clone.
-async fn run_synth_to_completion(
+#[allow(clippy::too_many_arguments)] // 8 args: every one is a distinct, named input the background run needs; bundling would obscure the spawn_blocking contract (mirrors stamp.rs's allow on synth_and_stamp).
+async fn run_job_to_completion(
     ctx: SynthContext,
     job_id: String,
     book_id: String,
@@ -422,6 +541,7 @@ async fn run_synth_to_completion(
     voice_path: Option<PathBuf>,
     jobs: usize,
     mut bundle: BookBundle,
+    strategy: StampStrategy,
 ) {
     // Clone for the post-closure failure / panic handlers (ctx is moved below).
     let db_for_failure = ctx.db.clone();
@@ -444,19 +564,33 @@ async fn run_synth_to_completion(
             //    runner-factory Arc in a closure so it satisfies the worker's
             //    `F: Fn() -> R + Sync` bound (an `Arc<dyn Fn>` is not itself a
             //    closure; the move-closure captures the Arc by value and calls
-            //    it by ref → Fn, not FnOnce).
+            //    it by ref → Fn, not FnOnce). The two stamp functions share an
+            //    identical signature, so only this call branches on strategy.
             let progress = JobProgress { db: ctx.db.clone(), job_id: job_id.clone() };
             let make_runner = ctx.backend.make_runner.clone();
-            synth_and_stamp(
-                &mut bundle,
-                &voice_id,
-                &voice_model,
-                move || make_runner(),
-                &ctx.backend.encoder,
-                jobs,
-                GENERATOR_APP,
-                Some(&progress),
-            )?;
+            let encoder = &ctx.backend.encoder;
+            match strategy {
+                StampStrategy::Synth => synth_and_stamp(
+                    &mut bundle,
+                    &voice_id,
+                    &voice_model,
+                    move || make_runner(),
+                    encoder,
+                    jobs,
+                    GENERATOR_APP,
+                    Some(&progress),
+                ),
+                StampStrategy::Resynth => resynth_and_stamp(
+                    &mut bundle,
+                    &voice_id,
+                    &voice_model,
+                    move || make_runner(),
+                    encoder,
+                    jobs,
+                    GENERATOR_APP,
+                    Some(&progress),
+                ),
+            }?;
 
             // 4. Serialize + store the full bundle (idempotent overwrite).
             let mut buf = Cursor::new(Vec::new());

@@ -25,7 +25,7 @@
 
 ## Phase 4 — Inline synth + resynth
 - [x] T9: Synth job runner + `POST /api/books/:id/synth` (202) + `GET /api/jobs(:id)` (`tasks/009-synth-job.md`)
-- [ ] T10: `POST /api/books/:id/resynth` + voices endpoints (catalog + prefetch) (`tasks/010-resynth-voices.md`)
+- [x] T10: `POST /api/books/:id/resynth` + voices endpoints (catalog + prefetch) (`tasks/010-resynth-voices.md`)
 
 ### Checkpoint: Synth loop closes (stubbed) — upload text-only → synth → poll succeeded → full bundle out; resynth re-keys.
 
