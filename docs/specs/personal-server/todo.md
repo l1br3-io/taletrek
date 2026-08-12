@@ -30,7 +30,7 @@
 ### Checkpoint: Synth loop closes (stubbed) — upload text-only → synth → poll succeeded → full bundle out; resynth re-keys.
 
 ## Phase 5 — UI + Docker + ship
-- [ ] T11: Server-rendered HTML UI — askama (index, book, jobs) (`tasks/011-web-ui.md`)
+- [x] T11: Server-rendered HTML UI — askama (index, book, jobs) (`tasks/011-web-ui.md`)
 - [ ] T12: Dockerfile (multi-stage, debian-slim, piper + ffmpeg) + runbook + final gates (`tasks/012-docker-runbook-gates.md`)
 
 ### Final gates (run @ T12, branch `personal-server`)

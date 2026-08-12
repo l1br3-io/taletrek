@@ -125,10 +125,22 @@ pub async fn upload_book(
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<Vec<BookDto>>), (StatusCode, String)> {
     let bytes = read_bundle_field(&mut multipart).await?;
+    let rows = ingest_bundle_bytes(&state, bytes).await?;
+    let dtos = rows.into_iter().map(BookDto::from).collect();
+    Ok((StatusCode::CREATED, Json(dtos)))
+}
+
+/// Ingest uploaded bundle bytes + upsert every book into the index. Shared by
+/// the JSON upload handler ([`upload_book`]) and the UI upload form
+/// (`ui::upload_book`) so the two paths can't diverge. All blocking work
+/// (`store::ingest` + `Db`) runs in one `spawn_blocking`.
+pub(crate) async fn ingest_bundle_bytes(
+    state: &AppState,
+    bytes: Vec<u8>,
+) -> Result<Vec<BookRow>, (StatusCode, String)> {
     let data_dir = state.data_dir.clone();
     let db = state.db.clone();
-
-    let rows = match tokio::task::spawn_blocking(move || -> Result<Vec<BookRow>, OpError> {
+    match tokio::task::spawn_blocking(move || -> Result<Vec<BookRow>, OpError> {
         let ingested = store::ingest(&data_dir, &bytes)?;
         let mut rows = Vec::with_capacity(ingested.len());
         for book in ingested {
@@ -142,14 +154,11 @@ pub async fn upload_book(
     })
     .await
     {
-        Ok(Ok(rows)) => rows,
-        Ok(Err(OpError::Store(e))) => return Err((store_status(&e), e.to_string())),
-        Ok(Err(OpError::Db(e))) => return Err(internal_error(e)),
-        Err(e) => return Err(internal_error(e)),
-    };
-
-    let dtos = rows.into_iter().map(BookDto::from).collect();
-    Ok((StatusCode::CREATED, Json(dtos)))
+        Ok(Ok(rows)) => Ok(rows),
+        Ok(Err(OpError::Store(e))) => Err((store_status(&e), e.to_string())),
+        Ok(Err(OpError::Db(e))) => Err(internal_error(e)),
+        Err(e) => Err(internal_error(e)),
+    }
 }
 
 /// `GET /api/books/{id}/bundle` — streams the stored bundle bytes back with
@@ -198,16 +207,28 @@ pub async fn delete_book(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    delete_book_id(&state, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete a book's bundle file + index row. Shared by the JSON delete handler
+/// ([`delete_book`]) and the UI delete form (`ui::delete_book`). Idempotent —
+/// both `store::delete_bundle` and `Db::delete_book` treat "absent" as success.
+pub(crate) async fn delete_book_id(
+    state: &AppState,
+    id: &str,
+) -> Result<(), (StatusCode, String)> {
     let data_dir = state.data_dir.clone();
     let db = state.db.clone();
-    let res = tokio::task::spawn_blocking(move || -> Result<(), OpError> {
+    let id = id.to_string();
+    match tokio::task::spawn_blocking(move || -> Result<(), OpError> {
         store::delete_bundle(&data_dir, &id)?;
         db.delete_book(&id)?;
         Ok(())
     })
-    .await;
-    match res {
-        Ok(Ok(())) => Ok(StatusCode::NO_CONTENT),
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
         Ok(Err(OpError::Store(e))) => Err((store_status(&e), e.to_string())),
         Ok(Err(OpError::Db(e))) => Err(internal_error(e)),
         Err(e) => Err(internal_error(e)),
@@ -219,7 +240,10 @@ pub async fn delete_book(
 /// Read the `bundle` field out of a multipart body. Returns `400` (via
 /// [`multipart_err`]) on any parse failure, including a body that overflows the
 /// limit (`413`). Returns `400` if no field named `bundle` is present.
-async fn read_bundle_field(
+///
+/// `pub(crate)` so the UI upload form (`ui::upload_book`) reads the same field
+/// shape — the JSON + UI upload paths stay byte-for-byte identical here.
+pub(crate) async fn read_bundle_field(
     multipart: &mut Multipart,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
     while let Some(field) = multipart.next_field().await.map_err(multipart_err)? {
