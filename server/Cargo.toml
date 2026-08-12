@@ -32,6 +32,11 @@ taletrek-worker = { path = "../crates/worker" }
 tempfile = "3"
 # `ServiceExt::oneshot` for router-level handler/middleware tests (T7+).
 tower = { version = "0.5", features = ["util"] }
+# HTTP client for the `#[ignore]`d binary-subprocess e2e (T12). Already in the
+# workspace dep graph via `taletrek-worker` (voice downloads), so this adds no
+# new vendor tree. Chosen over `reqwest` for the same minimal-footprint reason
+# (ADR-0013). Mirrors desktop's `tests/synth_e2e.rs` gate.
+ureq = "3"
 
 [lints]
 workspace = true

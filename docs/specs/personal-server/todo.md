@@ -31,14 +31,14 @@
 
 ## Phase 5 — UI + Docker + ship
 - [x] T11: Server-rendered HTML UI — askama (index, book, jobs) (`tasks/011-web-ui.md`)
-- [ ] T12: Dockerfile (multi-stage, debian-slim, piper + ffmpeg) + runbook + final gates (`tasks/012-docker-runbook-gates.md`)
+- [x] T12: Dockerfile (multi-stage, debian-slim, piper + ffmpeg) + runbook + final gates (`tasks/012-docker-runbook-gates.md`)
 
 ### Final gates (run @ T12, branch `personal-server`)
-- [ ] `cargo build` (whole workspace) clean
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean
-- [ ] `cargo test --workspace` green (incl. desktop refactor regression + `crates/synth` untouched)
-- [ ] `pnpm verify` green (no `web/` changes)
-- [ ] `docker build -f server/Dockerfile .` succeeds; `docker run` reaches `/api/health`
+- [x] `cargo build` (whole workspace) clean
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` clean
+- [x] `cargo test --workspace` green (incl. desktop refactor regression + `crates/synth` untouched)
+- [x] `pnpm verify` green (no `web/` changes)
+- [x] `docker build -f server/Dockerfile .` succeeds; `docker run` reaches `/api/health`
 - [ ] Manual runbook walkthrough (real piper + ffmpeg + curated voice): upload text-only fixture → synth → poll → download → `manifest.audio.present == true`, Opus `OggS` → import into SPA via T3 → audio plays. Resynth round-trip too. _(Record date + commit here when run.)_
 
 ### Checkpoint: Ready for review
