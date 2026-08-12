@@ -1,22 +1,25 @@
 //! HTTP layer: router composition, shared [`AppState`], and handlers.
 //!
-//! [`router`] is the single entry point wired by `main`. It mounts the
-//! unauthenticated `GET /api/health` on the outer router and every data-bearing
-//! `/api/*` route on a protected sub-router that carries [`auth::require_bearer`].
-//! Later tasks (T8+) add more routes by merging into the protected sub-router —
-//! they inherit the auth layer automatically.
+//! [`router`] is the single entry point wired by `main`. It mounts three
+//! unauthenticated routes on the outer router — `GET /api/health`,
+//! `GET /ui/login`, `POST /ui/login` — and every data-bearing `/api/*` route
+//! plus the operator UI (`/`, `/ui/*`) on a protected sub-router that carries
+//! [`auth::require_auth`]. Later tasks add more routes by merging into the
+//! protected sub-router — they inherit the auth layer automatically.
 //!
 //! # Auth boundary
 //!
-//! GOTCHA: `GET /api/health` is the **only** unauthenticated route. Every other
-//! route sits behind [`auth::require_bearer`]. A new route mounted on the outer
-//! router (outside the layer) is a security bug — see [`auth`] for the
-//! single-user bearer model (ADR-0013).
+//! GOTCHA: `GET /api/health`, `GET /ui/login`, and `POST /ui/login` are the
+//! **only** unauthenticated routes. Every other route sits behind
+//! [`auth::require_auth`] (bearer header for the API, cookie for the UI — see
+//! [`auth`] for the T11 browser-auth tradeoff). A new route mounted on the
+//! outer router (outside the layer) is a security bug.
 
 mod auth;
 mod books;
 mod health;
 mod jobs;
+mod ui;
 mod voices;
 
 use std::path::PathBuf;
@@ -59,11 +62,14 @@ pub struct AppState {
 
 /// Build the application router.
 ///
-/// `/api/health` is mounted on the outer router (no auth); every `/api/books`
-/// route lives on the protected sub-router and inherits [`auth::require_bearer`]
-/// as well as the upload body-size limit ([`DefaultBodyLimit`] =
-/// `max_bundle_bytes`). Later tasks (T9/T10) `.route()` further handlers onto
-/// `protected` so they pick up auth for free.
+/// `/api/health`, `GET /ui/login`, and `POST /ui/login` are mounted on the
+/// outer router (no auth); every `/api/books` route + the operator UI (`/`,
+/// `/ui/*`) lives on the protected sub-router and inherits
+/// [`auth::require_auth`] as well as the upload body-size limit
+/// ([`DefaultBodyLimit`] = `max_bundle_bytes`). The UI POST routes
+/// (`/ui/books`, `/ui/books/{id}/synth`, …) wrap the same cores as the JSON
+/// API and return `303` redirects (Post/Redirect/Get) so plain browser forms
+/// work with no client JS.
 ///
 /// [`State<AppState>`]: axum::extract::State
 pub fn router(state: AppState) -> Router {
@@ -83,11 +89,23 @@ pub fn router(state: AppState) -> Router {
         .route("/api/jobs/{id}", get(jobs::get_job))
         .route("/api/voices", get(voices::list_voices))
         .route("/api/voices/{id}/fetch", post(voices::fetch_voice))
-        .layer(from_fn_with_state(state.clone(), auth::require_bearer))
+        // ----- operator UI (T11) — same auth layer, cookie-friendly -----
+        .route(
+            "/",
+            get(ui::index).post(ui::upload_book),
+        )
+        .route("/ui/", get(ui::index))
+        .route("/ui/books/{id}", get(ui::book_detail))
+        .route("/ui/books/{id}/synth", post(ui::synth_book))
+        .route("/ui/books/{id}/resynth", post(ui::resynth_book))
+        .route("/ui/books/{id}/delete", post(ui::delete_book))
+        .route("/ui/jobs", get(ui::jobs))
+        .layer(from_fn_with_state(state.clone(), auth::require_auth))
         .layer(DefaultBodyLimit::max(state.settings.max_bundle_bytes));
 
     Router::new()
         .route("/api/health", get(health::health))
+        .route("/ui/login", get(auth::login_form).post(auth::login))
         .merge(protected)
         .with_state(state)
         .layer(TraceLayer::new_for_http())

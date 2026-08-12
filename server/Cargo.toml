@@ -24,6 +24,7 @@ anyhow = "1"
 thiserror = "2"
 toml = "0.8"
 rusqlite = { version = "0.35", features = ["bundled"] }
+askama = "0.12"
 taletrek-synth = { path = "../crates/synth" }
 taletrek-worker = { path = "../crates/worker" }
 

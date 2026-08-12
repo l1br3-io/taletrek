@@ -1,0 +1,35 @@
+{% extends "_layout.html" %}
+{% block title %}Jobs — TaleTrek{% endblock %}
+{% block content %}
+
+<h1>Jobs</h1>
+
+<section>
+  {% if jobs.is_empty() %}
+    <p class="dim">No jobs yet.</p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Kind</th><th>Status</th><th>Voice</th><th>Progress</th>
+          <th>Book</th><th>Error</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for j in jobs %}
+        <tr>
+          <td>{{ j.kind }}</td>
+          <td><span class="status {{ j.status }}">{{ j.status }}</span></td>
+          <td class="mono">{{ j.voice }}</td>
+          <td class="mono">{{ j.progress }}</td>
+          <td><a href="/ui/books/{{ j.book_id }}">{{ j.book_id }}</a></td>
+          <td>{% if let Some(e) = j.error %}<span class="err">{{ e }}</span>{% else %}<span class="dim">—</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+  <p class="muted-note">Refresh to poll — there's no live updating.</p>
+</section>
+
+{% endblock %}
