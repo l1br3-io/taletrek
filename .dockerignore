@@ -1,0 +1,54 @@
+# Keep the Docker build context lean: only the Rust workspace is needed to
+# build `taletrek-server`. Everything below is excluded from the context sent
+# to the builder, which speeds up `docker build` and avoids cache-busting on
+# unrelated changes (web/, docs/, node_modules/, local target/ artifacts, …).
+
+# --- Rust build output (the builder produces its own, hermetic copy) ---
+target/
+**/target/
+
+# --- JS / PWA workspace (not built into the server image) ---
+node_modules/
+web/
+web/dist/
+web/.vite/
+web/dev-dist/
+spike/
+pnpm-lock.yaml
+pnpm-workspace.yaml
+package.json
+biome.json
+tsconfig.base.json
+wrangler.jsonc
+
+# --- Docs + planning (not needed at compile time) ---
+docs/
+CHANGELOG.md
+
+# --- VCS + editor + caches ---
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+.ruff_cache/
+opencode.jsonc
+.opencode/
+
+# --- Generated bundle dev artifacts (gitignored; never bake into the image) ---
+*.taletrek
+*.taletrek-lib
+# Keep the committed fixtures OUT of the image too — the runbook uploads them
+# over HTTP at runtime; the binary does not embed them.
+crates/synth/tests/fixtures/
+
+# --- OS / misc ---
+.DS_Store
+Thumbs.db
+*.log
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+LICENSE
+README.md
