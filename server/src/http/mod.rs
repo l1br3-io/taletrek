@@ -16,6 +16,7 @@
 mod auth;
 mod books;
 mod health;
+mod jobs;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,11 +24,12 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::middleware::from_fn_with_state;
-use axum::routing::get;
+use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
 use crate::config::Settings;
 use crate::db::Db;
+use crate::synth::SynthBackend;
 
 /// Shared state injected into every handler + middleware via axum's `State`.
 ///
@@ -39,14 +41,19 @@ pub struct AppState {
     /// SQLite index (trait seam). rusqlite is sync, so handlers wrap every call
     /// in `tokio::task::spawn_blocking` at the call site.
     pub db: Arc<dyn Db>,
-    /// Library root (`<data_dir>/library/<book-id>/…`). Consumed by T8's
-    /// upload/download/delete handlers; carried here so the state shape is
-    /// stable across tasks (no `AppState` reshuffles between T7 and T8).
-    #[allow(dead_code)] // read from T8 on; proven stable here.
+    /// Library root (`<data_dir>/library/<book-id>/…`). Consumed by the
+    /// upload/download/delete handlers + the synth runner (it writes full
+    /// bundles back here on a successful synth).
     pub data_dir: PathBuf,
     /// Resolved boot settings. `settings.token` is the bearer compared by
-    /// [`auth::require_bearer`].
+    /// [`auth::require_bearer`]; `settings.voices_cache_dir` / `jobs` feed the
+    /// synth runner.
     pub settings: Arc<Settings>,
+    /// The configured synth backend (runner factory + encoder). Built once at
+    /// boot from `Settings` (subprocess piper + ffmpeg Opus); tests inject a
+    /// stub backend via [`test_support`]. Cloned cheaply (two `Arc`s) into each
+    /// synth job.
+    pub synth: Arc<SynthBackend>,
 }
 
 /// Build the application router.
@@ -69,6 +76,9 @@ pub fn router(state: AppState) -> Router {
             get(books::get_book).delete(books::delete_book),
         )
         .route("/api/books/{id}/bundle", get(books::download_bundle))
+        .route("/api/books/{id}/synth", post(jobs::trigger_synth))
+        .route("/api/jobs", get(jobs::list_jobs))
+        .route("/api/jobs/{id}", get(jobs::get_job))
         .layer(from_fn_with_state(state.clone(), auth::require_bearer))
         .layer(DefaultBodyLimit::max(state.settings.max_bundle_bytes));
 
@@ -124,21 +134,29 @@ mod test_support {
             db,
             data_dir: PathBuf::from("/nonexistent-taletrek-test"),
             settings: Arc::new(test_settings(token)),
+            synth: Arc::new(crate::synth::test_support::stub_backend()),
         }
     }
 
     /// An [`AppState`] with a caller-supplied db + a real `data_dir` (a
-    /// [`tempfile::tempdir`]'s path). For the T8 upload/download/delete tests,
-    /// which exercise the real [`crate::store`] against a throwaway dir.
+    /// [`tempfile::tempdir`]'s path). The T8 upload/download/delete tests +
+    /// the T9 synth tests (which write bundles + pre-seed the voice cache under
+    /// `<data_dir>/voices`) use this.
     pub(crate) fn app_state_with_data_dir(
         db: Arc<dyn Db>,
         data_dir: PathBuf,
         token: &str,
     ) -> AppState {
+        let mut settings = test_settings(token);
+        // The voice cache lives under the data dir so synth tests can pre-seed
+        // it with a tempdir they already own.
+        settings.data_dir = data_dir.clone();
+        settings.voices_cache_dir = data_dir.join("voices");
         AppState {
             db,
             data_dir,
-            settings: Arc::new(test_settings(token)),
+            settings: Arc::new(settings),
+            synth: Arc::new(crate::synth::test_support::stub_backend()),
         }
     }
 

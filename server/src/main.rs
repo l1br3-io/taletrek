@@ -8,6 +8,7 @@ mod config;
 mod db;
 mod http;
 mod store;
+mod synth;
 
 use std::sync::Arc;
 
@@ -18,6 +19,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::db::SqliteDb;
 use crate::http::AppState;
+use crate::synth::SynthBackend;
 
 /// Boot: init tracing → resolve config → ensure data dir → open db → serve.
 #[tokio::main]
@@ -45,6 +47,10 @@ async fn main() -> Result<()> {
         db: Arc::new(sqlite),
         data_dir: settings.data_dir.clone(),
         settings: settings.clone(),
+        synth: Arc::new(SynthBackend::subprocess(
+            settings.piper.clone(),
+            settings.ffmpeg.clone(),
+        )),
     };
     let app = http::router(state);
 
