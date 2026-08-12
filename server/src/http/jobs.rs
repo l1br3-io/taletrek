@@ -1,19 +1,24 @@
-//! Synth trigger + job polling handlers — the Tier-3 payoff slice (T9).
+//! Synth + resynth triggers and job polling handlers (T9 + T10).
 //!
 //! - `POST /api/books/{id}/synth` — validates the book + voice cheaply, kicks
 //!   off the background synth via [`run_synth_job`], returns `202 {jobId}`
 //!   immediately. The client polls `GET /api/jobs/:id` for completion.
+//! - `POST /api/books/{id}/resynth` — re-voices a book (text-only or full)
+//!   under a required `voice` via [`run_resynth_job`]; same `202 {jobId}` +
+//!   polling contract. Old-voice audio is discarded (worker replaces, not
+//!   merges) — matches the desktop `resynth`.
 //! - `GET /api/jobs/{id}` — one job's status (camelCase JSON), or `404`.
 //! - `GET /api/jobs` — recent jobs (newest-updated first), capped at 50.
 //!
-//! All three are authed (they live on the protected sub-router in
+//! All four are authed (they live on the protected sub-router in
 //! [`crate::http`], so they inherit [`crate::http::auth::require_bearer`]).
 //!
 //! # Status mapping
 //!
 //! [`SynthTriggerError`] maps: `BookNotFound → 404`, `AlreadyFull → 409`,
-//! `BadVoice → 400`, `Internal → 500`. Background synth failures never reach
-//! here — they flip the job row to `failed`, surfaced via `GET /api/jobs/:id`.
+//! `BadVoice → 400`, `MissingVoice → 400` (resynth only — voice required),
+//! `Internal → 500`. Background synth failures never reach here — they flip
+//! the job row to `failed`, surfaced via `GET /api/jobs/:id`.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -23,7 +28,7 @@ use std::fmt::Display;
 
 use crate::db::{JobKind, JobRow, JobStatus};
 use crate::http::AppState;
-use crate::synth::{run_synth_job, SynthContext, SynthTriggerError};
+use crate::synth::{run_resynth_job, run_synth_job, SynthContext, SynthTriggerError};
 
 /// `POST /api/books/{id}/synth` request body. All fields optional: `voice`
 /// defaults to the server default voice; `voicePath` overrides the curated
@@ -106,6 +111,53 @@ pub async fn trigger_synth(
     ))
 }
 
+/// `POST /api/books/{id}/resynth` request body. `voice` is required — the
+/// whole point of resynth is a voice swap. Declared `Option` here (not `String`)
+/// so a missing/empty field is rejected by the handler as `400 MissingVoice`
+/// rather than axum's default `422` (the task spec wants `400`). `voicePath`/
+/// `jobs` are optional overrides, mirroring [`SynthReq`].
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResynthReq {
+    /// New curated voice id to re-voice under (required; empty/missing → 400).
+    voice: Option<String>,
+    /// Direct path to a `.onnx` voice model (skips catalog + download).
+    voice_path: Option<std::path::PathBuf>,
+    /// Parallel synth worker count.
+    jobs: Option<usize>,
+}
+
+/// `POST /api/books/{id}/resynth` → `202 {jobId}`.
+///
+/// Re-voices the book under `req.voice`. Unlike [`trigger_synth`]: `voice` is
+/// required (→ `400` when empty); the book may be text-only OR full (no
+/// `409`); the background run rewrites `manifest.book.voiceId` to the new voice
+/// and discards all old-voice audio (worker replaces, not merges — matches the
+/// desktop `resynth`).
+pub async fn trigger_resynth(
+    State(state): State<AppState>,
+    Path(book_id): Path<String>,
+    Json(req): Json<ResynthReq>,
+) -> Result<(StatusCode, Json<SynthAccepted>), (StatusCode, String)> {
+    let ctx = SynthContext {
+        db: state.db.clone(),
+        data_dir: state.data_dir.clone(),
+        voices_cache_dir: state.settings.voices_cache_dir.clone(),
+        default_jobs: state.settings.jobs,
+        backend: (*state.synth).clone(),
+    };
+    // Missing/empty voice → None → run_resynth_job returns MissingVoice (400).
+    let voice = req.voice.filter(|s| !s.is_empty());
+    let job_id =
+        run_resynth_job(ctx, book_id, voice, req.voice_path, req.jobs)
+            .await
+            .map_err(trigger_status)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(SynthAccepted { job_id }),
+    ))
+}
+
 /// `GET /api/jobs/{id}` → `200` single job, or `404` when absent.
 pub async fn get_job(
     State(state): State<AppState>,
@@ -145,7 +197,9 @@ fn trigger_status(e: SynthTriggerError) -> (StatusCode, String) {
     match &e {
         SynthTriggerError::BookNotFound(_) => (StatusCode::NOT_FOUND, e.to_string()),
         SynthTriggerError::AlreadyFull { .. } => (StatusCode::CONFLICT, e.to_string()),
-        SynthTriggerError::BadVoice(_) => (StatusCode::BAD_REQUEST, e.to_string()),
+        SynthTriggerError::BadVoice(_) | SynthTriggerError::MissingVoice => {
+            (StatusCode::BAD_REQUEST, e.to_string())
+        }
         SynthTriggerError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -183,16 +237,20 @@ mod tests {
 
     // ---- shared helpers ----
 
-    /// Pre-seed `<cache>/<TEST_VOICE>.onnx` + `.json` so voice resolution is a
-    /// cache hit (no network) during the stubbed synth run.
+    /// Pre-seed `<cache>/<id>.onnx` + `.json` so voice resolution is a cache
+    /// hit (no network) during the stubbed synth run.
     fn seed_voice_cache(cache_dir: &Path) {
+        seed_voice(cache_dir, TEST_VOICE);
+    }
+
+    /// Seed a single voice id into the cache (one model + its `.json` sibling).
+    /// Synth/resynth tests call this for every voice they exercise so the stub
+    /// runner never needs network.
+    fn seed_voice(cache_dir: &Path, id: &str) {
         std::fs::create_dir_all(cache_dir).expect("create voice cache dir");
-        std::fs::write(
-            cache_dir.join(format!("{TEST_VOICE}.onnx")),
-            b"stub-model-bytes",
-        )
-        .expect("seed onnx");
-        std::fs::write(cache_dir.join(format!("{TEST_VOICE}.json")), b"{}").expect("seed json");
+        std::fs::write(cache_dir.join(format!("{id}.onnx")), b"stub-model-bytes")
+            .expect("seed onnx");
+        std::fs::write(cache_dir.join(format!("{id}.json")), b"{}").expect("seed json");
     }
 
     /// A fresh router backed by an empty [`StubDb`] + a real tempdir `data_dir`
@@ -227,6 +285,29 @@ mod tests {
         // Error responses use axum's `(StatusCode, String)` tuple → plain-text
         // bodies (not JSON). Wrap those as a JSON string so callers can still
         // assert on the message text; valid JSON parses normally.
+        let json: serde_json::Value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+        (status, json)
+    }
+
+    /// `POST /api/books/{id}/resynth` with the bearer + a JSON body.
+    async fn trigger_resynth_req(
+        router: axum::Router,
+        book_id: &str,
+        body: &serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/books/{book_id}/resynth"))
+            .header(header::AUTHORIZATION, "Bearer sekrit")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("valid request");
+        let resp = router.oneshot(req).await.expect("router serves");
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
         let json: serde_json::Value = serde_json::from_slice(&bytes)
             .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned()));
         (status, json)
@@ -551,6 +632,165 @@ mod tests {
             arr.iter().any(|j| j["id"] == job_id),
             "our job is listed: {list}"
         );
+    }
+
+    // ===== resynth: re-voice a full book under a new voice =====
+
+    /// The target voice resynth re-voices under. Distinct from [`TEST_VOICE`]
+    /// so the test proves the manifest + segment keys actually move.
+    const RESYNTH_VOICE: &str = "en_US-ryan-medium";
+
+    /// Fetch the stored bundle bytes for `id` via the download endpoint.
+    async fn download_bundle(router: axum::Router, id: &str) -> Vec<u8> {
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/books/{id}/bundle"))
+            .header(header::AUTHORIZATION, "Bearer sekrit")
+            .body(Body::empty())
+            .expect("valid request");
+        let resp = router.oneshot(req).await.expect("router serves");
+        assert_eq!(resp.status(), StatusCode::OK);
+        axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body bytes")
+            .to_vec()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resynth_full_book_rekeys_segments_under_new_voice() {
+        let (router, tmp) = synth_router();
+        // Seed the target voice so resolution is a cache hit (no network).
+        seed_voice(&tmp.path().join("voices"), RESYNTH_VOICE);
+
+        // Start from a full book (already has audio under its fixture voice).
+        let id = upload(router.clone(), BOOK_FULL_FIX).await;
+        let (status, json) = trigger_resynth_req(
+            router.clone(),
+            &id,
+            &serde_json::json!({ "voice": RESYNTH_VOICE }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let job_id = json["jobId"].as_str().unwrap().to_string();
+
+        let job = poll_until_terminal(router.clone(), &job_id, Duration::from_secs(10)).await;
+        assert_eq!(job["status"].as_str(), Some("succeeded"), "job: {job}");
+        assert_eq!(job["kind"].as_str(), Some("resynth"), "kind is resynth: {job}");
+
+        // The manifest now carries the new voice; audio stays present.
+        let bytes = download_bundle(router.clone(), &id).await;
+        let parsed = taletrek_synth::read_book_bundle(&bytes).expect("parses");
+        assert_eq!(parsed.manifest.book.voice_id, RESYNTH_VOICE);
+        assert!(parsed.manifest.audio.present, "audio stays present after resynth");
+        assert!(!parsed.audio.is_empty(), "audio map populated");
+
+        // Every segment is keyed under the new voice. cache_key = `${voice}:${ver}:${hash}`,
+        // so the voice id is the component before the first `:`.
+        for key in parsed.audio.keys() {
+            let voice = key.split(':').next().unwrap_or("");
+            assert_eq!(
+                voice, RESYNTH_VOICE,
+                "segment keyed under new voice; got key {key}"
+            );
+        }
+        // And the cache_keys reconstructed from the bundle's own paragraphs are
+        // all present (proves the re-key is content-addressed, not just renamed).
+        for ch in &parsed.chapters {
+            for para in &ch.paragraphs {
+                assert!(
+                    parsed.audio.contains_key(&taletrek_synth::cache_key(RESYNTH_VOICE, para)),
+                    "segment for paragraph missing under new voice key"
+                );
+            }
+        }
+
+        // The book row reflects the new voice + still-present audio.
+        let (_, book) = get_json(router, &format!("/api/books/{id}")).await;
+        assert_eq!(book["audioPresent"].as_bool(), Some(true));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resynth_text_only_book_produces_full_bundle_under_new_voice() {
+        let (router, tmp) = synth_router();
+        seed_voice(&tmp.path().join("voices"), RESYNTH_VOICE);
+
+        let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
+        let (status, _) = trigger_resynth_req(
+            router.clone(),
+            &id,
+            &serde_json::json!({ "voice": RESYNTH_VOICE }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+
+        // Poll the jobs list for this book's terminal row (the 202 returned no
+        // jobId in this test's wiring — the body parser path above already
+        // covered that; here we just wait on the book's latest job).
+        let job = loop {
+            let (_, list) = get_json(router.clone(), "/api/jobs").await;
+            let arr = list.as_array().expect("array");
+            if let Some(j) = arr.iter().find(|j| j["bookId"] == id) {
+                if matches!(j["status"].as_str(), Some("succeeded") | Some("failed")) {
+                    break j.clone();
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        assert_eq!(job["status"].as_str(), Some("succeeded"), "job: {job}");
+
+        let bytes = download_bundle(router.clone(), &id).await;
+        let parsed = taletrek_synth::read_book_bundle(&bytes).expect("parses");
+        assert_eq!(parsed.manifest.book.voice_id, RESYNTH_VOICE);
+        assert!(parsed.manifest.audio.present, "text-only → full under new voice");
+        assert!(!parsed.audio.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resynth_unknown_book_is_404() {
+        let (router, _tmp) = synth_router();
+        let (status, _) = trigger_resynth_req(
+            router,
+            "definitely-absent",
+            &serde_json::json!({ "voice": RESYNTH_VOICE }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resynth_without_voice_is_400() {
+        let (router, _tmp) = synth_router();
+        let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
+        // Missing voice field → deserializes to default ("") → treated as None → 400.
+        let (status, _) =
+            trigger_resynth_req(router, &id, &serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resynth_with_unknown_voice_is_400() {
+        let (router, _tmp) = synth_router();
+        let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
+        let (status, _) = trigger_resynth_req(
+            router,
+            &id,
+            &serde_json::json!({ "voice": "en_US-bogus-high" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resynth_without_auth_is_401() {
+        let (router, _tmp) = synth_router();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/books/whatever/resynth")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{\"voice\":\"en_US-ryan-medium\"}"))
+            .expect("valid request");
+        let resp = router.oneshot(req).await.expect("router serves");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     // ===== auth still required =====

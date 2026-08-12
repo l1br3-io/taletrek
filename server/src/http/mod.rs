@@ -17,6 +17,7 @@ mod auth;
 mod books;
 mod health;
 mod jobs;
+mod voices;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -77,8 +78,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/books/{id}/bundle", get(books::download_bundle))
         .route("/api/books/{id}/synth", post(jobs::trigger_synth))
+        .route("/api/books/{id}/resynth", post(jobs::trigger_resynth))
         .route("/api/jobs", get(jobs::list_jobs))
         .route("/api/jobs/{id}", get(jobs::get_job))
+        .route("/api/voices", get(voices::list_voices))
+        .route("/api/voices/{id}/fetch", post(voices::fetch_voice))
         .layer(from_fn_with_state(state.clone(), auth::require_bearer))
         .layer(DefaultBodyLimit::max(state.settings.max_bundle_bytes));
 
