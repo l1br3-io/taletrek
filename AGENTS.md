@@ -28,9 +28,16 @@ pnpm test                 # vitest run
 pnpm verify               # lint + typecheck + test + build (run before commits)
 pnpm -C spike/piper dev       # Piper spike app on :5174 (throwaway)
 pnpm -C spike/web-audio dev   # Web Audio mobile-engine spike on :5175 (M11 gate)
+
+# Rust (run from repo root) — server + desktop + shared crates
+cargo build --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo test --workspace -- --ignored    # real piper+ffmpeg; needs TALETREK_VOICE_PATH — see docs/testing.md
+docker build -f server/Dockerfile -t taletrek-server .
 ```
 
-Workspace: pnpm, `web/` (the app) + `spike/piper/` + `spike/web-audio/` (throwaway de-risking apps). Node 24, pnpm 10.31.0.
+Workspace: pnpm + cargo. `web/` (the SPA) + `spike/{piper,web-audio}/` (throwaway de-risking apps) on Node 24 / pnpm 10.31.0; `server/` + `desktop/` + `crates/{synth,worker}/` on Rust 1.97.0 (see [`docs/testing.md`](docs/testing.md) for the full test matrix).
 
 ## Layout
 
@@ -51,6 +58,10 @@ web/              the PWA — Vite 8 + React 19 + TS + RR8 + Tailwind v4 + Biome
     lib/            db.ts (idb), storage.ts (persist), media-session.ts,
                     crypto/ (aes.ts, prf.ts — ADR-0007 biometric key caching)
 spike/piper/       throwaway Piper TTS validation app
+server/            the personal server — Rust + axum HTTP server (Docker-first, binary taletrek-server)
+desktop/           the headless synth CLI — Rust + clap (binary taletrek-desktop; synth + resynth)
+crates/synth/      shared pure core: bundle I/O, synth, encode, cache_key (the interchange format)
+crates/worker/     shared host-level: voice acquire + rayon pool + manifest stamping
 ```
 
 ## Conventions
