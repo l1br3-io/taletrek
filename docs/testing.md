@@ -9,14 +9,15 @@
 
 ## Components at a glance
 
-| Component         | Location    | Stack                              | Default test command                | In CI today?      |
+| Component         | Location    | Stack                              | Default test command                | In CI?            |
 | ----------------- | ----------- | ---------------------------------- | ----------------------------------- | ----------------- |
-| SPA / PWA         | `web/`      | Vite 8 + React 19 + TS             | `pnpm test` (vitest)                | yes               |
-| Personal server   | `server/`   | Rust + axum + tokio + rusqlite     | `cargo test -p taletrek-server`     | **no (planned)**  |
-| Desktop CLI       | `desktop/`  | Rust + clap (headless)             | `cargo test -p taletrek-desktop`    | **no (planned)**  |
-| shared `synth`    | `crates/synth`  | Rust (pure core + bundle I/O)  | `cargo test -p taletrek-synth`      | **no (planned)**  |
-| shared `worker`   | `crates/worker` | Rust (voice/synth pool)        | `cargo test -p taletrek-worker`     | **no (planned)**  |
-| server Docker image | `server/Dockerfile` | Docker               | `docker build -f server/Dockerfile` | **no (planned)**  |
+| SPA / PWA         | `web/`      | Vite 8 + React 19 + TS             | `pnpm test` (vitest)                | yes (`web`)       |
+| Personal server   | `server/`   | Rust + axum + tokio + rusqlite     | `cargo test -p taletrek-server`     | yes (`rust`)      |
+| Desktop CLI       | `desktop/`  | Rust + clap (headless)             | `cargo test -p taletrek-desktop`    | yes (`rust`)      |
+| shared `synth`    | `crates/synth`  | Rust (pure core + bundle I/O)  | `cargo test -p taletrek-synth`      | yes (`rust`)      |
+| shared `worker`   | `crates/worker` | Rust (voice/synth pool)        | `cargo test -p taletrek-worker`     | yes (`rust`)      |
+| server Docker image | `server/Dockerfile` | Docker               | `docker build -f server/Dockerfile` | yes (`docker`)    |
+| real-piper e2e (desktop + server) | `#[ignore]`d | cargo `--ignored` | manual or `integration` job | optional (`integration`, non-blocking) |
 
 ## Golden rule
 
@@ -188,11 +189,19 @@ See [`docs/specs/personal-server/runbook.md`](specs/personal-server/runbook.md) 
 
 ## 6. CI matrix
 
-Today [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the **SPA
-only** (`pnpm lint/typecheck/test/build`). The Rust workspace + Docker image
-are **not** in CI yet — that's the next planned step (adds `rust`, `docker`,
-and a non-blocking `integration` job for the `#[ignore]`d tests). When it
-lands, this section becomes the authoritative job map.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs four jobs:
+
+| Job            | Trigger                          | Blocks PR? | What it runs                                                                                              |
+| -------------- | -------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------- |
+| `web`            | push / PR                        | yes        | `pnpm lint && typecheck && test && build`                                                                   |
+| `rust`           | push / PR                        | yes        | `cargo build --workspace --all-targets` + `clippy -- -D warnings` + `cargo test --workspace`                   |
+| `docker`         | push / PR                        | yes        | `docker build -f server/Dockerfile` (build only, no push)                                                   |
+| `integration`    | **`workflow_dispatch` only**     | **no** (`continue-on-error`) | installs piper+ffmpeg+voice, runs `cargo test --workspace -- --ignored` (the `#[ignore]`d e2e tests) |
+
+The `integration` job installs the same `2023.11.14-2` piper tarball and
+`en_US-hfc_female-medium` voice model documented in the runbook, so it mirrors
+the manual gate. The Playwright SPA↔server suite (planned, Phase 3) will hook
+into `integration` too.
 
 ---
 

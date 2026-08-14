@@ -184,7 +184,7 @@ No real piper/ffmpeg/network in CI by default — `#[ignore]`d tests run via the
 **Ask first:**
 - Touching `crates/synth`'s public API (a missing helper should go back as a small patch, not a fork — matches T2's risk note).
 - Changing the `.taletrek` format (`schemaVersion`, entry names).
-- Adding new top-level workspace deps (async/HTTP/DB), or introducing CI for Cargo (none exists today).
+- Adding new top-level workspace deps (async/HTTP/DB). (Cargo CI now exists — `.github/workflows/ci.yml` `rust` + `integration` jobs; updated 2026-08-14.)
 - Server-side storage of AI-transform API keys (deferred — needs a follow-up ADR under ADR-0013, interacting with ADR-0007 wrapped-DEK + ADR-0004 threat model).
 
 **Never do:**
