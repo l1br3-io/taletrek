@@ -65,15 +65,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     continue-on-error: true
-    env:
-      TALETREK_VOICE_PATH: ${{ runner.temp }}/voices/en_US-hfc_female-medium.onnx
-      TALETREK_PIPER_BIN: ${{ runner.temp }}/piper/piper
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97.0"
       - uses: Swatinem/rust-cache@v2
+      - name: Configure paths
+        run: |
+          echo "TALETREK_PIPER_BIN=$RUNNER_TEMP/piper/piper" >> "$GITHUB_ENV"
+          echo "TALETREK_VOICE_PATH=$RUNNER_TEMP/voices/en_US-hfc_female-medium.onnx" >> "$GITHUB_ENV"
 
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
