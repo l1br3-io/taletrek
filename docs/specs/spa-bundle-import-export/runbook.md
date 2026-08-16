@@ -33,7 +33,7 @@ writer, import, export) or the desktop binary's `synth`/`resynth` handlers.
    pnpm dev
    ```
 
-   Open the printed URL (default <http://localhost:5173>) in a real browser
+   Open the printed URL (<http://localhost:8253>) in a real browser
    (Chrome/Firefox/Safari — the one your users will use).
 
 4. **At least one book in the library.** Any source works: upload an EPUB,

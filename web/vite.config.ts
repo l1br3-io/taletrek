@@ -38,6 +38,11 @@ function contentSecurityPolicy(): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   server: {
+    // 8253 spells "TALE" on a phone keypad — unique to this project so it never
+    // collides with other dev servers (Vite default 5173, spikes on 5174/5175).
+    // strictPort: fail loudly on conflict instead of silently hopping ports.
+    port: 8253,
+    strictPort: true,
     allowedHosts: ['lodge-loop-massive-greatest.trycloudflare.com'],
   },
   plugins: [
