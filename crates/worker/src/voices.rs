@@ -372,8 +372,8 @@ pub fn resolve_voice(
         if !onnx.is_file() {
             return Err(ResolveError::VoicePathNotFound { path: onnx.clone() });
         }
-        // Piper loads `<stem>.json` from beside the .onnx; pre-check it so the
-        // failure mode is a clear message, not piper's opaque error.
+        // Synth passes `<stem>.json` to piper via --config; pre-check it so
+        // the failure mode is a clear message, not piper's opaque error.
         let json = onnx.with_extension("json");
         if !json.is_file() {
             return Err(ResolveError::MissingJsonSibling {

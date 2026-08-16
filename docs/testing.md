@@ -24,9 +24,23 @@
 **No real `piper` / `ffmpeg` / network in default CI.** Everything that needs
 them is behind a `#[ignore]`d Rust integration test, gated on
 `TALETREK_VOICE_PATH` (+ optional `TALETREK_PIPER_BIN` / `TALETREK_FFMPEG_BIN`),
-and run either by hand or via a non-blocking `workflow_dispatch` job (planned).
-The SPA has no equivalent gate — its vitest suite is fully hermetic (jsdom +
+and run either by hand or via a non-blocking `workflow_dispatch` job. The SPA
+has no equivalent gate — its vitest suite is fully hermetic (jsdom +
 `fake-indexeddb`).
+
+## Local setup for real-synth work
+
+One command installs the native deps into user caches (no sudo, idempotent):
+
+```
+pnpm setup:native        # = bash scripts/setup-native.sh
+```
+
+Installs piper → `~/.cache/taletrek/piper/`, pre-seeds the default voice
+(`en_US-hfc_female-medium`) → `~/.cache/taletrek/voices/` (the same dir the
+apps' curated auto-download uses), and checks `ffmpeg` (libopus). It prints the
+`PATH` / `TALETREK_VOICE_PATH` exports to use for the `#[ignore]`d tests and
+runbooks.
 
 ---
 
