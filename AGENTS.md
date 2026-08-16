@@ -16,9 +16,11 @@ Live status always lives in the current effort's `spec.md` frontmatter (`status:
 
 ## Commands
 
+`just --list` shows all dev tasks (dev-web / dev-server / synth / docker-server / test-e2e…) — see [`docs/developing.md`](docs/developing.md). Raw equivalents:
+
 ```
 pnpm install              # install all workspace deps
-pnpm dev                  # Vite dev server (web/)
+pnpm dev                  # Vite dev server (web/, :8253)
 pnpm build                # production build → web/dist
 pnpm preview              # serve built dist
 pnpm typecheck            # tsc --noEmit
