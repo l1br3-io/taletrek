@@ -14,10 +14,14 @@
 //!
 //! ## Piper invocation
 //!
-//! [`SubprocessPiperRunner`] runs `piper --model <voice> -f -` (omit
-//! `--output-raw`: Piper's default stdout format is canonical WAV, which is
-//! what [`crate::pcm::concat_wav`] expects; passing `--output-raw` would emit
-//! headerless PCM and break the splice). Text is fed on stdin.
+//! [`SubprocessPiperRunner`] runs `piper --model <voice.onnx> --config
+//! <voice.json> -f -`. `--config` is passed explicitly because Piper's default
+//! appends `.json` to the model path (`<id>.onnx.json`), while TaleTrek's
+//! layouts store the config as the sibling with the extension replaced
+//! (`<id>.json`). `--output-raw` is omitted: Piper's default stdout format is
+//! canonical WAV, which is what [`crate::pcm::concat_wav`] expects; passing
+//! `--output-raw` would emit headerless PCM and break the splice. Text is fed
+//! on stdin.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -130,6 +134,12 @@ impl PiperRunner for SubprocessPiperRunner {
         let mut child = Command::new(&self.piper_bin)
             .arg("--model")
             .arg(voice_model)
+            // Piper's default config path is `<model-path>.json` appended, but
+            // every TaleTrek layout (voice cache, e2e gate, SPA OPFS) stores the
+            // config as the model's sibling with the extension *replaced*:
+            // `<id>.onnx` + `<id>.json`. Point piper at it explicitly.
+            .arg("--config")
+            .arg(voice_model.with_extension("json"))
             // Omit --output-raw: Piper's default stdout is canonical WAV, which
             // concat_wav expects (raw PCM would lack the headers it parses).
             .arg("-f")

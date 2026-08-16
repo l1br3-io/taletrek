@@ -11,6 +11,8 @@ CI. Run it once before declaring effort 2 shipped, and again whenever you touch
 
 ## Prerequisites
 
+**Quick path:** `pnpm setup:native` (i.e. [`scripts/setup-native.sh`](../../../scripts/setup-native.sh)) installs piper to `~/.cache/taletrek/piper/` and pre-seeds the default voice into `~/.cache/taletrek/voices/`, then prints the exports to use. The steps below are the manual equivalent.
+
 1. **`piper` on `PATH`.** Install from
    <https://github.com/rhasspy/piper/releases> (prebuilt binaries) or build
    from source. Verify: `piper --help` prints usage.
@@ -18,15 +20,17 @@ CI. Run it once before declaring effort 2 shipped, and again whenever you touch
    Verify: `ffmpeg -version` lists `--enable-libopus` (most distro builds do).
 3. **A Piper voice model** — at minimum the `.onnx` + sibling `.json`. Two ways:
    - **Recommended (offline, reproducible):** let `taletrek-desktop synth`
-     download the default curated voice on first run into
-     `~/.cache/taletrek/voices/`. Requires network on the first run only.
+      download the default curated voice on first run into
+      `~/.cache/taletrek/voices/`. Requires network on the first run only.
    - **Manual (fully offline):** download both files from HuggingFace and place
-     them side-by-side:
-     ```
-     https://huggingface.co/diffusionstudio/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx
-     https://huggingface.co/diffusionstudio/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.json
-     ```
-     Point `--voice-path` at the `.onnx` (the `.json` is auto-discovered).
+      them side-by-side. Note HF names the config `<voice>.onnx.json` — save it
+      as `<voice>.json` (extension replaced), which is the layout the synth
+      invocation (`--config`) and the e2e gate expect:
+      ```
+      https://huggingface.co/diffusionstudio/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx
+      https://huggingface.co/diffusionstudio/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx.json
+      ```
+      Point `--voice-path` at the `.onnx` (the `.json` is auto-discovered).
 
 ## 1. Synth a text-only bundle → full Opus bundle
 

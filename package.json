@@ -17,6 +17,7 @@
     "lint:fix": "biome check --write",
     "test": "pnpm -C web test",
     "test:watch": "pnpm -C web test:watch",
+    "setup:native": "bash scripts/setup-native.sh",
     "verify": "biome check && pnpm -C web typecheck && pnpm -C web test && pnpm -C web build"
   },
   "devDependencies": {

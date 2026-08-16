@@ -18,6 +18,8 @@ it catches any wiring regression before you spend the human time on §4.
 
 ## Prerequisites
 
+**Quick path:** `pnpm setup:native` (i.e. [`scripts/setup-native.sh`](../../../scripts/setup-native.sh)) installs piper to `~/.cache/taletrek/piper/` and pre-seeds the default voice into `~/.cache/taletrek/voices/`, then prints the exports to use. The steps below are the manual equivalent.
+
 1. **`piper` (rhasspy TTS) resolvable.** This is the neural TTS engine. The
    Debian package named `piper` is the **libratbag mouse-config GUI — wrong
    thing**; the TTS binary ships only via
@@ -46,12 +48,14 @@ it catches any wiring regression before you spend the human time on §4.
      (default `/data/voices` in Docker, `~/.cache/taletrek/voices/` locally).
      Requires network on the first synth only.
    - **Manual (fully offline):** download both files side-by-side from
-     HuggingFace, then pass `voicePath` to the synth request:
+      HuggingFace. Note HF names the config `<voice>.onnx.json` — save it as
+      `<voice>.json` (extension replaced), the layout the synth invocation
+      (`--config`) expects. Then pass `voicePath` to the synth request:
 
-     ```
-     https://huggingface.co/diffusionstudio/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx
-     https://huggingface.co/diffusionstudio/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.json
-     ```
+      ```
+      https://huggingface.co/diffusionstudio/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx
+      https://huggingface.co/diffusionstudio/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx.json
+      ```
 
 4. **`curl`** for the command-line walkthrough below. The server speaks plain
    HTTP/JSON + multipart, so any client works.

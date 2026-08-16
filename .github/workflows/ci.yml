@@ -92,7 +92,8 @@ jobs:
           mkdir -p "$(dirname "$TALETREK_VOICE_PATH")"
           base=https://huggingface.co/diffusionstudio/piper-voices/resolve/main/en/en_US/hfc_female/medium
           curl -fsSL -o "$TALETREK_VOICE_PATH" "$base/en_US-hfc_female-medium.onnx"
-          curl -fsSL -o "${TALETREK_VOICE_PATH%.onnx}.json" "$base/en_US-hfc_female-medium.json"
+          # HF names the config `<voice>.onnx.json`; the e2e gate expects it saved as `<voice>.json`.
+          curl -fsSL -o "${TALETREK_VOICE_PATH%.onnx}.json" "$base/en_US-hfc_female-medium.onnx.json"
           ls -la "$(dirname "$TALETREK_VOICE_PATH")"
 
       - name: Run #[ignore]d integration tests
