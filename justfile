@@ -17,10 +17,13 @@ setup:
 
 # SPA dev server → http://localhost:8253 (unique port; strict — no silent hopping)
 dev-web:
+    @echo "→ TaleTrek SPA: http://localhost:8253"
     pnpm dev
 
 # Personal server (debug build) → http://127.0.0.1:7878 — token: dev-secret (TALETREK_TOKEN to override)
 dev-server:
+    @echo "→ TaleTrek server: http://127.0.0.1:7878  (UI login / bearer token: {{server_token}})"
+    @echo "  health check: curl -fsS http://127.0.0.1:7878/api/health"
     TALETREK_TOKEN={{server_token}} TALETREK_PIPER={{piper_bin}} cargo run -p taletrek-server
 
 # Desktop: synth a text-only bundle → full Opus bundle (voice auto-resolves from the seeded cache)
@@ -37,7 +40,9 @@ synth-fixture:
 
 # Personal server via Docker → http://127.0.0.1:7878 (token: dev-secret; data in tt-data volume)
 docker-server:
+    @echo "→ building taletrek-server image…"
     docker build -f server/Dockerfile -t taletrek-server .
+    @echo "→ TaleTrek server (Docker): http://127.0.0.1:7878  (UI login / bearer token: {{server_token}})"
     docker run --rm -it -p 7878:7878 -e TALETREK_TOKEN={{server_token}} -v tt-data:/data taletrek-server
 
 # SPA tests (vitest)
