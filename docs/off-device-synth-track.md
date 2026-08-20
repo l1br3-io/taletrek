@@ -58,10 +58,10 @@ Content-addressing means audio from *any* source dedups on import for free — a
 | 1 | [`portable-bundle-format`](./specs/portable-bundle-format/spec.md) | Format spec + Rust `crates/synth` crate (clean → Piper → encode + bundle I/O). No app. | ✅ shipped (2026-08-03) |
 | 2 | [`desktop-synth-app`](./specs/desktop-synth-app/spec.md) | Standalone Rust synth tool (text-only bundle in → full bundle out). | ✅ shipped (2026-08-04) → **Tier-2 milestone lands here** |
 | 3 | [`spa-bundle-import-export`](./specs/spa-bundle-import-export/spec.md) | TS bundle reader/writer + UI in the SPA. SPA's only new surface. | ✅ shipped (2026-08-07) → **closes the loop** |
-| 4 | `personal-server` *(spec not yet created)* | Rust Docker library server + worker-mode job queue. | ⏸ queued → **Tier-3 milestone lands here** |
+| 4 | [`personal-server`](./specs/personal-server/spec.md) | Rust Docker library server + inline synth (worker-mode job queue deferred to a follow-up). | 🔨 active (2026-08-09) → **Tier-3 milestone lands here** |
 
 Task-level breakdown for all four: [`specs/portable-bundle-format/tasks/README.md`](./specs/portable-bundle-format/tasks/README.md).
-Next action: Effort 4 `personal-server` — starts at `/spec` (creates `specs/personal-server/{spec,plan,todo}.md`).
+Current status: Effort 4 is built (T1–T12 + machine gates green; runbook walkthrough 2026-08-20 except the human-only SPA audio-plays check) — next `/review` → `/ship`.
 
 ## Locked decisions (from ADR-0013)
 - **Synth jobs live off the SPA** when a desktop/server is available. The SPA is a consumer.

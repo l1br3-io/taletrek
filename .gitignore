@@ -36,6 +36,9 @@ pnpm-debug.log*
 # rust
 target/
 
+# personal-server local dev state (SQLite index + WAL; TALETREK_DATA_DIR=./data default)
+data/
+
 # generated bundle dev artifacts (canonical fixtures are committed under crates/synth/tests/fixtures)
 *.taletrek
 *.taletrek-lib
