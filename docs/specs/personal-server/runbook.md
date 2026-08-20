@@ -66,7 +66,7 @@ it catches any wiring regression before you spend the human time on §4.
 
 ```
 cargo build -p taletrek-server
-export TALETREK_TOKEN=dev-secret          # REQUIRED (single-user bearer — ADR-0013)
+export TALETREK_TOKEN="$(openssl rand -hex 32)"  # REQUIRED (single-user bearer — ADR-0013)
 # Optional overrides (defaults shown):
 # export TALETREK_BIND=127.0.0.1:7878
 # export TALETREK_DATA_DIR=./data
@@ -74,6 +74,14 @@ export TALETREK_TOKEN=dev-secret          # REQUIRED (single-user bearer — ADR
 # export TALETREK_FFMPEG=ffmpeg
 cargo run -p taletrek-server
 ```
+
+> Use a real random token (`openssl rand -hex 32`) for anything reachable
+> beyond loopback — the server's bind default is `0.0.0.0` (Docker needs it),
+> and the token is the entire auth surface. A dev-only throwaway like
+> `dev-secret` is fine solely for loopback hacking (the `just dev-server`
+> task pins the bind to `127.0.0.1` for exactly that reason); failed logins
+> are throttled (10 per 15 min per IP), which is a speed bump, not a
+> substitute for entropy.
 
 You should see a `taletrek-server listening` line with the bind addr, data dir,
 and voices cache. The server boots + serves **without** `piper`/`ffmpeg`
@@ -149,9 +157,11 @@ Confirm:
 - `audio.present` is `true`
 - `audio.codec` is `"opus"`
 - `generator.app` is `"taletrek-server"` (provenance stamp — T1–T3)
-- `book.voiceId` is still the bundle's original voice — `synth` preserves it
-  (only the segment keys carry the synth voice; `resynth` is what flips
-  `book.voiceId`, see (f))
+- `book.voiceId` names the voice actually used — the server rewrites it to the
+  effective synth voice (bundle-format contract: importers compute segment
+  keys from `book.voiceId`, so the manifest must agree with the keys). With
+  the default voice that's `en_US-hfc_female-medium`, regardless of what the
+  text-only input's manifest said
 - every `audio/<key>.opus` segment starts with the OGG magic `OggS`:
 
   ```
@@ -177,11 +187,19 @@ curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
 ```
 docker build -f server/Dockerfile -t taletrek-server .
 docker run -d --name tt \
-  -p 7878:7878 \
+  -p 127.0.0.1:7878:7878 \
   -e TALETREK_TOKEN=$TALETREK_TOKEN \
   -v tt-data:/data \
   taletrek-server
 ```
+
+> `-p 127.0.0.1:7878:7878` keeps the container reachable from the host only.
+> To open it to the LAN (the Tier-3 "synth keeps going" deployment), publish
+> deliberately (`-p 7878:7878`) **and** set `TALETREK_TOKEN` to a long random
+> secret — plain HTTP + a guessable token on a LAN is a read/write library
+> for anyone nearby. The piper tarball downloaded at build time is
+> sha256-verified (`PIPER_SHA256` in the Dockerfile); voice models downloaded
+> at runtime pass a size sanity check before caching.
 
 The `/data` volume holds the library (`library/<book-id>/bundle.taletrek`), the
 SQLite index (`taletrek.db`), **and** the voice-model cache (`voices/`) — one

@@ -20,11 +20,13 @@ dev-web:
     @echo "→ TaleTrek SPA: http://localhost:8253"
     pnpm dev
 
-# Personal server (debug build) → http://127.0.0.1:7878 — token: dev-secret (TALETREK_TOKEN to override)
+# Personal server (debug build) → http://127.0.0.1:7878 — token: dev-secret (TALETREK_TOKEN to override).
+# Binds loopback explicitly: the binary's default is 0.0.0.0 (Docker needs it);
+# a dev token must never answer the LAN.
 dev-server:
     @echo "→ TaleTrek server: http://127.0.0.1:7878  (UI login / bearer token: {{server_token}})"
     @echo "  health check: curl -fsS http://127.0.0.1:7878/api/health"
-    TALETREK_TOKEN={{server_token}} TALETREK_PIPER={{piper_bin}} cargo run -p taletrek-server
+    TALETREK_BIND=127.0.0.1:7878 TALETREK_TOKEN={{server_token}} TALETREK_PIPER={{piper_bin}} cargo run -p taletrek-server
 
 # Desktop: synth a text-only bundle → full Opus bundle (voice auto-resolves from the seeded cache)
 synth INPUT OUTPUT:
@@ -38,12 +40,13 @@ resynth INPUT VOICE OUTPUT:
 synth-fixture:
     @just synth crates/synth/tests/fixtures/book-text-only.taletrek /tmp/book.synth.taletrek
 
-# Personal server via Docker → http://127.0.0.1:7878 (token: dev-secret; data in tt-data volume)
+# Personal server via Docker → http://127.0.0.1:7878 (token: dev-secret; data in tt-data volume).
+# The port maps to loopback only — publish to the LAN deliberately (-p 7878:7878) with a real token.
 docker-server:
     @echo "→ building taletrek-server image…"
     docker build -f server/Dockerfile -t taletrek-server .
     @echo "→ TaleTrek server (Docker): http://127.0.0.1:7878  (UI login / bearer token: {{server_token}})"
-    docker run --rm -it -p 7878:7878 -e TALETREK_TOKEN={{server_token}} -v tt-data:/data taletrek-server
+    docker run --rm -it -p 127.0.0.1:7878:7878 -e TALETREK_TOKEN={{server_token}} -v tt-data:/data taletrek-server
 
 # SPA tests (vitest)
 test-web:

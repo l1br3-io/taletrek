@@ -18,9 +18,10 @@
 //! `write_book_bundle_file` wraps the lib's in-memory writer with a buffered
 //! file write; the server (effort 4, later task) will do its own store write.
 //! Accordingly [`StampError`] has **no** `WriteFile` variant — file errors stay
-//! host-side. The book's `voice_id` is preserved by [`synth_and_stamp`];
-//! [`resynth_and_stamp`] rewrites it first so the stamped manifest and the
-//! content-addressed cache keys agree after a voice swap.
+//! host-side. Both stamp functions write the effective synth voice into
+//! `manifest.book.voiceId` so the stamped manifest and the content-addressed
+//! cache keys always agree (the format's implicit paragraph→audio mapping is
+//! computed from the manifest voice — docs/bundle-format.md).
 
 use std::path::Path;
 
@@ -114,11 +115,18 @@ fn stamp_full_manifest(bundle: &mut BookBundle, codec: AudioCodec, generator_app
 /// `audio` map with the resulting segments, and stamp the manifest as a full
 /// bundle. Pure: no file I/O, no network.
 ///
-/// `voice_id` namespaces the cache keys; the caller ensures it matches the
-/// manifest's `book.voice_id` when that matters (for `resynth`, rewrite
-/// `book.voice_id` first). `make_runner` is called once per paragraph to
-/// produce a fresh, task-owned runner (see [`synth_all_paragraphs`]). The
-/// encoder is shared by `&E` across all tasks.
+/// `voice_id` namespaces the cache keys AND is written to
+/// `manifest.book.voiceId` — the two must agree because the format's
+/// paragraph→audio mapping is implicit: importers compute segment keys from
+/// the manifest's `book.voiceId` (docs/bundle-format.md § audio). A bundle
+/// whose manifest names voice A while its segments are keyed under voice B
+/// is unplayable on import (the lookups miss). `resynth_and_stamp` therefore
+/// only needs to validate the new voice; this function performs the rewrite
+/// for both entry points.
+///
+/// `make_runner` is called once per paragraph to produce a fresh, task-owned
+/// runner (see [`synth_all_paragraphs`]). The encoder is shared by `&E`
+/// across all tasks.
 ///
 /// `generator_app` is stamped into the manifest's `generator.app`; it is a
 /// parameter (not a constant here) so the desktop and server hosts route their
@@ -145,6 +153,10 @@ where
     E: Encoder + Sync,
     F: Fn() -> R + Sync,
 {
+    // Rewrite the manifest's voice FIRST so the stamped manifest and the
+    // content-addressed cache keys agree — see the function docs. This is the
+    // format contract, not a cosmetic choice.
+    bundle.manifest.book.voice_id = voice_id.to_string();
     let segments = synth_all_paragraphs(
         bundle,
         voice_id,
@@ -190,9 +202,8 @@ where
     E: Encoder + Sync,
     F: Fn() -> R + Sync,
 {
-    // Rewrite the manifest's voice FIRST so the stamped manifest and the
-    // content-addressed cache keys agree on the new voice. stamp_full_manifest
-    // preserves this value (it only touches audio.* + generator.*).
+    // Rewrite up front for symmetry with the (now-rewriting) synth_and_stamp;
+    // the inner call rewrites to the same value, keeping one code path.
     bundle.manifest.book.voice_id = new_voice_id.to_string();
     synth_and_stamp(
         bundle,
@@ -367,7 +378,8 @@ mod tests {
         assert_eq!(back.manifest.generator.app, TEST_APP);
         assert_eq!(back.manifest.generator.version, env!("CARGO_PKG_VERSION"));
 
-        // book.voiceId preserved (synth does not rewrite it).
+        // book.voiceId names the voice the segments are keyed under (the
+        // input fixture already used it here, so this is a no-op rewrite).
         assert_eq!(back.manifest.book.voice_id, voice);
 
         // Every distinct paragraph produced the segment keyed by cache_key, and
@@ -384,10 +396,12 @@ mod tests {
     }
 
     #[test]
-    fn synth_and_stamp_preserves_book_voice_id_when_synth_voice_differs() {
-        // synth uses --voice for keying but must NOT rewrite book.voiceId
-        // (that's resynth's job). A mismatch is the user's choice; we keep the
-        // manifest's value verbatim.
+    fn synth_and_stamp_rewrites_manifest_voice_when_synth_voice_differs() {
+        // The format contract: importers compute segment keys from
+        // `book.voiceId`, so the manifest must name the voice the segments are
+        // actually keyed under — even when it differs from the input's voice.
+        // (Preserving a stale voiceId would make the bundle unplayable on
+        // import; the lookups would all miss.)
         let mut b = text_only_bundle(
             "en_US-lessac-medium",
             vec![ChapterText::new("bk_test", 0, "Ch", vec!["Hi.".into()])],
@@ -406,10 +420,11 @@ mod tests {
         .expect("stub runner succeeds");
 
         assert_eq!(
-            b.manifest.book.voice_id, "en_US-lessac-medium",
-            "synth must keep the input book.voiceId"
+            b.manifest.book.voice_id, "en_US-ryan-medium",
+            "manifest must follow the synth voice (format contract)"
         );
-        // Audio is keyed under the synth voice (ryan), not the manifest voice.
+        // Audio is keyed under the synth voice (ryan) — same voice the
+        // manifest now names.
         assert!(b.audio.contains_key(&cache_key("en_US-ryan-medium", "Hi.")));
     }
 

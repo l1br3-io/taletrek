@@ -63,6 +63,8 @@ async fn main() -> Result<()> {
             settings.piper.clone(),
             settings.ffmpeg.clone(),
         )),
+        in_flight: crate::synth::InFlightBooks::default(),
+        login_limiter: crate::http::LoginLimiter::default(),
     };
     let app = http::router(state);
 
@@ -89,6 +91,13 @@ async fn main() -> Result<()> {
         );
     }
 
-    axum::serve(listener, app).await?;
+    // `into_make_service_with_connect_info` threads each connection's socket
+    // addr into handlers — the login throttle keys on it. Without this the
+    // extractor yields None and all attempts share one fallback bucket.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

@@ -82,7 +82,7 @@ The cleaned chapter structure — identical shape to the SPA's `Chapter` type so
 
 ### `audio/<cache-key>.<ext>`
 
-Binary audio for one paragraph, named exactly by the cache key (URL-safe; `:` is preserved on disk and inside ZIP entry names). The codec matches `manifest.audio.codec`. The mapping from paragraph → audio is **implicit**: the importer computes the cache key from `(voiceId, normalizedText)` and looks up the matching entry. This means audio dedups across bundles and across books automatically.
+Binary audio for one paragraph, named exactly by the cache key (URL-safe; `:` is preserved on disk and inside ZIP entry names). The codec matches `manifest.audio.codec`. The mapping from paragraph → audio is **implicit**: the importer computes the cache key from `(voiceId, normalizedText)` and looks up the matching entry. This means audio dedups across bundles and across books automatically. **Producer obligation:** `book.voiceId` must name the voice the segments are actually keyed under — a producer that synthesizes under a different voice rewrites `book.voiceId` to it before stamping (all TaleTrek producers route through `crates/worker::stamp`, which enforces this).
 
 ### `meta/*` (all optional)
 

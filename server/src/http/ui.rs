@@ -390,6 +390,7 @@ fn synth_ctx(state: &AppState) -> SynthContext {
         voices_cache_dir: state.settings.voices_cache_dir.clone(),
         default_jobs: state.settings.jobs,
         backend: (*state.synth).clone(),
+        in_flight: state.in_flight.clone(),
     }
 }
 
@@ -455,6 +456,71 @@ mod tests {
         assert!(
             html.contains(r#"action="/""#) || html.contains("enctype"),
             "upload form: {html}"
+        );
+    }
+
+    // ===== escaping: book metadata is untrusted (stored XSS) =====
+
+    /// Askama's auto-escaping is load-bearing — every interpolation renders
+    /// attacker-influenced strings (titles/authors/ids from uploaded bundles).
+    /// This pins it: a future `|safe` filter or template rewrite that drops
+    /// escaping fails here instead of in the operator's browser.
+    #[test]
+    fn index_escapes_hostile_book_metadata() {
+        let mut hostile = book("b1", false);
+        hostile.title = "<script>alert(1)</script>\"<img src=x onerror=alert(2)>".into();
+        hostile.author = Some("<svg onload=alert(3)>".into());
+        let jobs = vec![];
+        let html = IndexTemplate {
+            books: &[hostile],
+            jobs: &jobs,
+        }
+        .render()
+        .expect("render");
+
+        assert!(
+            !html.contains("<script>"),
+            "raw script tag must not survive: {html}"
+        );
+        assert!(
+            !html.contains("<img src=x"),
+            "raw img must not survive: {html}"
+        );
+        assert!(
+            !html.contains("<svg onload"),
+            "raw svg must not survive: {html}"
+        );
+        assert!(
+            html.contains("&lt;script&gt;"),
+            "escaped form present: {html}"
+        );
+    }
+
+    /// Same pin for the detail page, where the id also lands inside links.
+    #[test]
+    fn book_page_escapes_hostile_book_metadata() {
+        let mut hostile = book("b1", false);
+        hostile.title = "\"><script>alert(1)</script>".into();
+        hostile.author = Some("' onmouseover='alert(2)".into());
+        let voices = voice_options(&hostile.voice_id);
+        let html = BookTemplate {
+            book: &hostile,
+            voices: &voices,
+        }
+        .render()
+        .expect("render");
+
+        assert!(
+            !html.contains("<script>"),
+            "raw script must not survive: {html}"
+        );
+        assert!(
+            !html.contains("' onmouseover='"),
+            "attribute breakout must not survive: {html}"
+        );
+        assert!(
+            html.contains("&lt;script&gt;"),
+            "escaped form present: {html}"
         );
     }
 

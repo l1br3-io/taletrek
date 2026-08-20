@@ -2,6 +2,14 @@
 
 Reverse-chronological history of what shipped. The current effort's spec lives at `docs/specs/<slug>/spec.md`; shipped efforts stay in place under `docs/specs/<slug>/` (the spec.md frontmatter flips to `status: shipped`).
 
+## Off-device synth track · Tier 3 (`personal-server`) · 2026-08-20
+
+Effort 4 ships the **personal server** — `taletrek-server`, a Docker-first Rust/axum library server that turns synthesis into an always-on service ("close every device, synth keeps going"). Books upload as `.taletrek`/`.taletrek-lib` (idempotent upsert by bundle id), synth/resynth run as background jobs with progress polling, full bundles download back to the SPA; a server-rendered, JS-free operator UI (cookie login) covers the same loop in a browser. Shared cores were extracted into `crates/worker` (voices + rayon pool + manifest stamping) so desktop and server stamp through one path. ([`docs/specs/personal-server/`](docs/specs/personal-server/spec.md); ADR-0013)
+
+Ship-hardening landed with it: manifest voice consistency on server synth (the manifest names the voice segments are keyed under — the format's implicit key contract), one-job-per-book + delete-vs-job guards (no mid-job resurrection), atomic uniquely-temp'd writes, login rate-limiting, security headers (CSP/nosniff/DENY/no-referrer), zip decompression caps (256 MiB/entry, 1 GiB/archive — closes the nested-bundle bomb), piper tarball sha256 verification, `.onnx` download size sanity band, and loopback-pinned dev binds.
+
+Tiers now reachable: **(1)** SPA alone · **(2)** SPA + Desktop · **(3)** SPA + personal server (this).
+
 ## Off-device synth track · Tier 2 (SPA ↔ Desktop bundle exchange) · 2026-08-07
 
 The optional, self-hostable companion track ([ADR-0013](docs/adrs/0013-off-device-synth-and-portable-bundles.md)) ships its first user-reachable capability: the closed loop **SPA export → `taletrek-desktop` synth → SPA import**. Books flow between the phone and a standalone Rust app as portable `.taletrek` files; the default offline-first PWA (on-device Piper) is unchanged. Three efforts landed in sequence:

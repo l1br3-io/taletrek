@@ -31,4 +31,23 @@ pub enum BundleError {
     /// An I/O error reading or writing bytes.
     #[error("bundle I/O: {0}")]
     Io(#[from] std::io::Error),
+
+    /// An archive entry's decompressed size exceeded the per-entry cap. The
+    /// compressed archive can be tiny while inflating to gigabytes (deflate
+    /// amplifies ~1000×), so reads are budgeted — see `io::ReadBudget`.
+    #[error("bundle entry {name:?} decompresses beyond the per-entry cap of {limit} bytes")]
+    EntryTooLarge {
+        /// The offending entry's archive name.
+        name: String,
+        /// The per-entry cap that was exceeded.
+        limit: u64,
+    },
+
+    /// The summed decompressed size of an archive's entries exceeded the total
+    /// budget — a crafted (zip-of-zips) archive, or simply an enormous library.
+    #[error("bundle contents decompress beyond the total budget of {limit} bytes")]
+    TotalTooLarge {
+        /// The archive-level budget that was exceeded.
+        limit: u64,
+    },
 }

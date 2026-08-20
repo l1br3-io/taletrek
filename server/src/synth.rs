@@ -33,10 +33,11 @@
 //! the voice cache (dummy `.onnx`/`.json`) so `resolve_voice` short-circuits
 //! with no network — the stub runner ignores the model bytes.
 
+use std::collections::HashSet;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
 use tracing::{error, warn};
@@ -158,6 +159,55 @@ pub struct SynthContext {
     pub default_jobs: usize,
     /// Configured runner factory + encoder.
     pub backend: SynthBackend,
+    /// Book ids with a synth/resynth job currently running. Shared with the
+    /// HTTP delete path so a book can't be deleted (or re-triggered) under a
+    /// running job — see [`InFlightBooks`].
+    pub in_flight: InFlightBooks,
+}
+
+/// Book ids with a synth/resynth job currently running (process-wide).
+///
+/// Coordinates triggers and deletes against in-flight jobs: a second
+/// synth/resynth trigger for the same book → [`SynthTriggerError::JobInProgress`]
+/// (HTTP `409`), and `DELETE` while a job runs → `409` (see
+/// `http::books::delete_book_id`). The background run releases its claim on
+/// every exit path — success, failure, or panic. Belt-and-suspenders for the
+/// claim-vs-delete race: [`run_job_to_completion`] re-checks the bundle still
+/// exists before writing its output back, so a delete that slipped past the
+/// guard can never be resurrected by the job's completion write.
+///
+/// This is process state, not persisted truth — on restart it starts empty
+/// while the boot sweep fails orphaned job rows, so nothing stays blocked.
+#[derive(Clone, Default)]
+pub struct InFlightBooks {
+    inner: Arc<Mutex<HashSet<String>>>,
+}
+
+impl InFlightBooks {
+    /// Claim `book_id` for a new job. Returns `false` (no claim) when a job is
+    /// already running for it.
+    pub fn try_claim(&self, book_id: &str) -> bool {
+        self.inner
+            .lock()
+            .expect("in-flight mutex poisoned")
+            .insert(book_id.to_string())
+    }
+
+    /// Is a job currently running for `book_id`?
+    pub fn contains(&self, book_id: &str) -> bool {
+        self.inner
+            .lock()
+            .expect("in-flight mutex poisoned")
+            .contains(book_id)
+    }
+
+    /// Release a claim (idempotent — safe on every exit path).
+    pub fn release(&self, book_id: &str) {
+        self.inner
+            .lock()
+            .expect("in-flight mutex poisoned")
+            .remove(book_id);
+    }
 }
 
 /// Ceiling for a request-supplied `jobs` override. The value flows into a
@@ -203,6 +253,12 @@ pub enum SynthTriggerError {
     /// voice swap.
     #[error("voice is required for resynth (the new voice to re-voice under)")]
     MissingVoice,
+    /// A synth/resynth job is already running for this book (→ `409`). One job
+    /// per book: two concurrent runs would double the synth work and race the
+    /// final store write; deleting under a run would let the completion write
+    /// resurrect the book.
+    #[error("a synth job is already running for book {0}; poll GET /api/jobs and retry once it finishes")]
+    JobInProgress(String),
     /// A blocking call (store read, bundle parse, db write, join) failed during
     /// triggering (→ `500`).
     #[error(transparent)]
@@ -243,6 +299,11 @@ enum JobRunError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Db(#[from] DbError),
+    /// The book was deleted while the job ran (the delete raced past the
+    /// in-flight guard). The output is discarded instead of written — writing
+    /// it would resurrect the deleted book.
+    #[error("book {0} was deleted while the job was running; output discarded")]
+    BookDeletedMidJob(String),
 }
 
 // ===== progress sink =====
@@ -406,18 +467,31 @@ pub async fn run_synth_job(
             .map_err(|e| SynthTriggerError::Internal(SynthInternalError::Join(e.to_string())))??
     };
 
-    // 3. Resolve the effective voice id + create the `queued` job row.
+    // 3. Claim the book — one job per book (a second concurrent run would
+    //    double the work and race the final store write).
+    if !ctx.in_flight.try_claim(&book_id) {
+        return Err(SynthTriggerError::JobInProgress(book_id));
+    }
+
+    // 4. Resolve the effective voice id + create the `queued` job row.
     let voice_id = voice.unwrap_or_else(|| DEFAULT_VOICE_ID.to_string());
-    let job_id = create_job_row(
+    let job_id = match create_job_row(
         ctx.db.clone(),
         &book_id,
         JobKind::Synth,
         &voice_id,
         prep.total,
     )
-    .await?;
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            ctx.in_flight.release(&book_id);
+            return Err(e);
+        }
+    };
 
-    // 4. Spawn the detached background synth. A clone of the context carries
+    // 5. Spawn the detached background synth. A clone of the context carries
     //    every handle it needs; the handler has already returned by the time
     //    this runs.
     let jobs_eff = clamp_jobs(jobs.unwrap_or(ctx.default_jobs));
@@ -465,17 +539,29 @@ pub async fn run_resynth_job(
             .map_err(|e| SynthTriggerError::Internal(SynthInternalError::Join(e.to_string())))??
     };
 
-    // 3. Create the `queued` resynth job row.
-    let job_id = create_job_row(
+    // 3. Claim the book (same one-job-per-book rule as synth).
+    if !ctx.in_flight.try_claim(&book_id) {
+        return Err(SynthTriggerError::JobInProgress(book_id));
+    }
+
+    // 4. Create the `queued` resynth job row.
+    let job_id = match create_job_row(
         ctx.db.clone(),
         &book_id,
         JobKind::Resynth,
         &voice_id,
         prep.total,
     )
-    .await?;
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            ctx.in_flight.release(&book_id);
+            return Err(e);
+        }
+    };
 
-    // 4. Spawn the detached background resynth.
+    // 5. Spawn the detached background resynth.
     let jobs_eff = clamp_jobs(jobs.unwrap_or(ctx.default_jobs));
     tokio::spawn(run_job_to_completion(
         ctx,
@@ -556,9 +642,11 @@ async fn run_job_to_completion(
     mut bundle: BookBundle,
     strategy: StampStrategy,
 ) {
-    // Clone for the post-closure failure / panic handlers (ctx is moved below).
+    // Clone for the post-closure failure / panic handlers (ctx is moved below)
+    // + the post-join claim release.
     let db_for_failure = ctx.db.clone();
     let job_id_for_failure = job_id.clone();
+    let book_id_for_release = book_id.clone();
 
     let run: tokio::task::JoinHandle<Result<(), JobRunError>> =
         tokio::task::spawn_blocking(move || -> Result<(), JobRunError> {
@@ -585,6 +673,10 @@ async fn run_job_to_completion(
             let make_runner = ctx.backend.make_runner.clone();
             let encoder = &ctx.backend.encoder;
             match strategy {
+                // Both stamp functions write the effective voice into
+                // `manifest.book.voiceId` (worker-level format contract —
+                // importers compute segment keys from the manifest voice), so
+                // the server's stored bundle always plays on import.
                 StampStrategy::Synth => synth_and_stamp(
                     &mut bundle,
                     &voice_id,
@@ -607,22 +699,35 @@ async fn run_job_to_completion(
                 ),
             }?;
 
-            // 4. Serialize + store the full bundle (idempotent overwrite).
+            // 4. Guard against a delete that raced past the in-flight claim:
+            //    if the book vanished while the job ran, discard the output —
+            //    writing it back would resurrect the deleted book. Also clear
+            //    the stale index row (the HTTP delete path normally owns both).
+            if !store::bundle_exists(&ctx.data_dir, &book_id)? {
+                let _ = ctx.db.delete_book(&book_id);
+                return Err(JobRunError::BookDeletedMidJob(book_id.clone()));
+            }
+
+            // 5. Serialize + store the full bundle (idempotent overwrite).
             let mut buf = Cursor::new(Vec::new());
             write_book_bundle(&bundle, &mut buf)?;
             store::put_bundle(&ctx.data_dir, &book_id, &buf.into_inner())?;
 
-            // 5. Reflect audio_present=true in the books index row (created_at
+            // 6. Reflect audio_present=true in the books index row (created_at
             //    preserved across the upsert).
             upsert_book_after_synth(&ctx.db, &book_id, &bundle)?;
 
-            // 6. Terminal success.
+            // 7. Terminal success.
             ctx.db
                 .update_job_status(&job_id, JobStatus::Succeeded, None, None, None)?;
             Ok(())
         });
 
-    match run.await {
+    let result = run.await;
+    // Release the in-flight claim on every exit path — success, failure, or a
+    // panicked task (the JoinError arm below).
+    ctx.in_flight.release(&book_id_for_release);
+    match result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => mark_failed(&db_for_failure, &job_id_for_failure, &e.to_string()).await,
         Err(join_err) => {
@@ -728,6 +833,47 @@ pub(crate) mod test_support {
         SynthBackend {
             make_runner: Arc::new(|| AnyRunner(Box::new(StubRunner))),
             encoder: AnyEncoder::new(WavPassthrough),
+        }
+    }
+
+    /// A backend whose runner blocks in `predict` until [`Gate::open`] is
+    /// called — lets HTTP tests hold a synth job deterministically in
+    /// `running` while they exercise the in-flight guard (second trigger,
+    /// delete) mid-job. After opening, every subsequent `predict` passes.
+    pub(crate) fn gated_backend() -> (SynthBackend, Gate) {
+        type SharedGate = Arc<(Mutex<bool>, std::sync::Condvar)>;
+        struct GatedRunner(SharedGate);
+        impl PiperRunner for GatedRunner {
+            fn predict(&mut self, _voice_model: &Path, _text: &str) -> Result<Vec<u8>, SynthError> {
+                let (lock, cv) = &*self.0;
+                let mut open = lock.lock().expect("gate mutex poisoned");
+                while !*open {
+                    open = cv.wait(open).expect("gate mutex poisoned");
+                }
+                Ok(canonical_wav(&[0x01, 0x02, 0x03, 0x04]))
+            }
+        }
+        let gate: SharedGate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let make_gate = gate.clone();
+        (
+            SynthBackend {
+                make_runner: Arc::new(move || AnyRunner(Box::new(GatedRunner(make_gate.clone())))),
+                encoder: AnyEncoder::new(WavPassthrough),
+            },
+            Gate(gate),
+        )
+    }
+
+    /// The release handle for a [`gated_backend`] run.
+    pub(crate) struct Gate(Arc<(Mutex<bool>, std::sync::Condvar)>);
+
+    impl Gate {
+        /// Let every blocked (and future) `predict` call through.
+        pub(crate) fn open(&self) {
+            let (lock, cv) = &*self.0;
+            let mut open = lock.lock().expect("gate mutex poisoned");
+            *open = true;
+            cv.notify_all();
         }
     }
 }

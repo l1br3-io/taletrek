@@ -7,6 +7,10 @@
 //! [`auth::require_auth`]. Later tasks add more routes by merging into the
 //! protected sub-router — they inherit the auth layer automatically.
 //!
+//! The outer router also stamps security headers on every response (CSP,
+//! nosniff, frame denial, no-referrer) — second line of defense behind
+//! askama's auto-escaping for the UI, free hardening for the API.
+//!
 //! # Auth boundary
 //!
 //! GOTCHA: `GET /api/health`, `GET /ui/login`, and `POST /ui/login` are the
@@ -22,18 +26,22 @@ mod jobs;
 mod ui;
 mod voices;
 
+pub(crate) use auth::LoginLimiter;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::header;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
 use axum::Router;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::config::Settings;
 use crate::db::Db;
-use crate::synth::SynthBackend;
+use crate::synth::{InFlightBooks, SynthBackend};
 
 /// Shared state injected into every handler + middleware via axum's `State`.
 ///
@@ -58,6 +66,12 @@ pub struct AppState {
     /// stub backend via [`test_support`]. Cloned cheaply (two `Arc`s) into each
     /// synth job.
     pub synth: Arc<SynthBackend>,
+    /// Book ids with a running synth/resynth job — the trigger + delete paths
+    /// consult it to enforce one job per book and no delete-under-a-job
+    /// (see [`crate::synth::InFlightBooks`]).
+    pub in_flight: InFlightBooks,
+    /// Failed-login throttle for `POST /ui/login` (see [`auth::LoginLimiter`]).
+    pub login_limiter: LoginLimiter,
 }
 
 /// Build the application router.
@@ -106,6 +120,30 @@ pub fn router(state: AppState) -> Router {
         .merge(protected)
         .with_state(state)
         .layer(TraceLayer::new_for_http())
+        // Security headers on every response (outermost layer). The CSP allows
+        // nothing but the templates' inline `<style>` + same-origin form posts
+        // — no scripts exist in the UI. Defense-in-depth behind askama's
+        // auto-escaping: a future escaping regression must not become script
+        // execution in the operator panel; nosniff + frame denial close
+        // content-type confusion + clickjacking on the destructive forms.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            axum::http::HeaderValue::from_static(
+                "default-src 'none'; base-uri 'none'; form-action 'self'; style-src 'unsafe-inline'",
+            ),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            axum::http::HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_FRAME_OPTIONS,
+            axum::http::HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            axum::http::HeaderValue::from_static("no-referrer"),
+        ))
 }
 
 #[cfg(test)]
@@ -128,6 +166,43 @@ mod tests {
         let resp = app.oneshot(req).await.expect("router serves");
         assert_eq!(resp.status(), StatusCode::OK);
     }
+
+    /// Every response — API and UI, authed or not — carries the security
+    /// headers. Pinned so a future layer reshuffle can't silently drop them.
+    #[tokio::test]
+    async fn responses_carry_security_headers() {
+        let app = router(test_support::app_state("sekrit"));
+        let req = Request::builder()
+            .method("GET")
+            .uri("/")
+            .header(header::COOKIE, "taletrek_token=sekrit")
+            .body(Body::empty())
+            .expect("valid request");
+        let resp = app.oneshot(req).await.expect("router serves");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let h = resp.headers();
+        let csp = h
+            .get(header::CONTENT_SECURITY_POLICY)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            csp.contains("default-src 'none'") && csp.contains("form-action 'self'"),
+            "CSP: {csp}"
+        );
+        assert_eq!(
+            h.get(header::X_CONTENT_TYPE_OPTIONS)
+                .and_then(|v| v.to_str().ok()),
+            Some("nosniff")
+        );
+        assert_eq!(
+            h.get(header::X_FRAME_OPTIONS).and_then(|v| v.to_str().ok()),
+            Some("DENY")
+        );
+        assert_eq!(
+            h.get(header::REFERRER_POLICY).and_then(|v| v.to_str().ok()),
+            Some("no-referrer")
+        );
+    }
 }
 
 /// Test-only helpers shared by `auth`/`books` handler tests.
@@ -149,12 +224,14 @@ mod test_support {
 
     /// An [`AppState`] with a caller-supplied db (for pre-seeding).
     pub(crate) fn app_state_with_db(db: Arc<dyn Db>, token: &str) -> AppState {
-        AppState {
+        data_dir_app_state(
             db,
-            data_dir: PathBuf::from("/nonexistent-taletrek-test"),
-            settings: Arc::new(test_settings(token)),
-            synth: Arc::new(crate::synth::test_support::stub_backend()),
-        }
+            PathBuf::from("/nonexistent-taletrek-test"),
+            token,
+            crate::synth::test_support::stub_backend(),
+            crate::config::DEFAULT_MAX_BUNDLE_BYTES,
+            false,
+        )
     }
 
     /// An [`AppState`] with a caller-supplied db + a real `data_dir` (a
@@ -166,16 +243,80 @@ mod test_support {
         data_dir: PathBuf,
         token: &str,
     ) -> AppState {
+        data_dir_app_state(
+            db,
+            data_dir,
+            token,
+            crate::synth::test_support::stub_backend(),
+            crate::config::DEFAULT_MAX_BUNDLE_BYTES,
+            true,
+        )
+    }
+
+    /// Like [`app_state_with_data_dir`] but with a caller-supplied synth
+    /// backend — the in-flight-guard tests use a gated backend to hold a job
+    /// deterministically in `running`.
+    pub(crate) fn app_state_with_data_dir_and_backend(
+        db: Arc<dyn Db>,
+        data_dir: PathBuf,
+        token: &str,
+        backend: crate::synth::SynthBackend,
+    ) -> AppState {
+        data_dir_app_state(
+            db,
+            data_dir,
+            token,
+            backend,
+            crate::config::DEFAULT_MAX_BUNDLE_BYTES,
+            true,
+        )
+    }
+
+    /// Like [`app_state_with_data_dir`] but with a tiny `max_bundle_bytes` —
+    /// pins the `413` body-limit plumbing (a regression that drops or
+    /// misconfigures the layer must not silently accept unbounded bodies).
+    pub(crate) fn app_state_with_data_dir_and_max_bytes(
+        db: Arc<dyn Db>,
+        data_dir: PathBuf,
+        token: &str,
+        max_bundle_bytes: usize,
+    ) -> AppState {
+        data_dir_app_state(
+            db,
+            data_dir,
+            token,
+            crate::synth::test_support::stub_backend(),
+            max_bundle_bytes,
+            true,
+        )
+    }
+
+    /// The one builder every variant delegates to: wires the voice cache under
+    /// the data dir (`settings.data_dir` is only pointed at a real path when
+    /// `real_data_dir` — non-synth tests keep the throwaway nonexistent dir).
+    fn data_dir_app_state(
+        db: Arc<dyn Db>,
+        data_dir: PathBuf,
+        token: &str,
+        backend: crate::synth::SynthBackend,
+        max_bundle_bytes: usize,
+        real_data_dir: bool,
+    ) -> AppState {
         let mut settings = test_settings(token);
-        // The voice cache lives under the data dir so synth tests can pre-seed
-        // it with a tempdir they already own.
-        settings.data_dir = data_dir.clone();
-        settings.voices_cache_dir = data_dir.join("voices");
+        settings.max_bundle_bytes = max_bundle_bytes;
+        if real_data_dir {
+            // The voice cache lives under the data dir so synth tests can
+            // pre-seed it with a tempdir they already own.
+            settings.data_dir = data_dir.clone();
+            settings.voices_cache_dir = data_dir.join("voices");
+        }
         AppState {
             db,
             data_dir,
             settings: Arc::new(settings),
-            synth: Arc::new(crate::synth::test_support::stub_backend()),
+            synth: Arc::new(backend),
+            in_flight: crate::synth::InFlightBooks::default(),
+            login_limiter: LoginLimiter::default(),
         }
     }
 
