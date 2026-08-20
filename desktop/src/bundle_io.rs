@@ -181,8 +181,8 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    use taletrek_synth::synth::{PiperRunner, SynthError};
     use std::collections::HashMap;
+    use taletrek_synth::synth::{PiperRunner, SynthError};
 
     use taletrek_synth::{
         read_book_bundle, AudioCodec, AudioMeta, BookMeta, ChapterText, Generator, Manifest,

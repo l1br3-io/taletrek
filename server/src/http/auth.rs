@@ -37,11 +37,11 @@
 //! the token is the entire auth surface, so operate only over a trusted LAN or
 //! behind a TLS terminator.
 
-use axum::Form;
 use axum::extract::{Request, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
+use axum::Form;
 use serde::Deserialize;
 
 use crate::http::AppState;
@@ -100,12 +100,11 @@ pub async fn require_auth(
 /// `GET /ui/login` — render the login form. If the request already carries a
 /// valid token (header or cookie), short-circuit to `/` so a logged-in operator
 /// isn't shown the form again.
-pub async fn login_form(
-    State(state): State<AppState>,
-    request: Request,
-) -> Response {
+pub async fn login_form(State(state): State<AppState>, request: Request) -> Response {
     let expected = state.settings.token.as_bytes();
-    let already = bearer_token(&request).map(|t| constant_time_eq(t, expected)).unwrap_or(false)
+    let already = bearer_token(&request)
+        .map(|t| constant_time_eq(t, expected))
+        .unwrap_or(false)
         || cookie_token(&request, TOKEN_COOKIE)
             .map(|t| constant_time_eq(t.as_bytes(), expected))
             .unwrap_or(false);
@@ -119,10 +118,7 @@ pub async fn login_form(
 ///
 /// Form field: `token`. On match → `Set-Cookie` + `303 /`. On mismatch →
 /// re-render the login page with an error message (no cookie set).
-pub async fn login(
-    State(state): State<AppState>,
-    Form(form): Form<LoginForm>,
-) -> Response {
+pub async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Response {
     let expected = state.settings.token.as_bytes();
     if constant_time_eq(form.token.as_bytes(), expected) {
         let cookie = format!(
@@ -187,10 +183,9 @@ fn cookie_decode(v: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(
-                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
-                16,
-            ) {
+            if let Ok(b) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 out.push(b);
                 i += 3;
                 continue;
@@ -262,7 +257,10 @@ mod tests {
 
     #[tokio::test]
     async fn missing_authorization_header_is_401() {
-        assert_eq!(status_with("/api/books", None, None).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            status_with("/api/books", None, None).await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]
@@ -276,13 +274,19 @@ mod tests {
     #[tokio::test]
     async fn correct_token_passes_through() {
         // /api/books is empty [] → 200, proving the middleware let it through.
-        assert_eq!(status_with("/api/books", Some("sekrit"), None).await, StatusCode::OK);
+        assert_eq!(
+            status_with("/api/books", Some("sekrit"), None).await,
+            StatusCode::OK
+        );
     }
 
     #[tokio::test]
     async fn correct_cookie_passes_through() {
         // No bearer header — a valid cookie authorizes the request.
-        assert_eq!(status_with("/api/books", None, Some("sekrit")).await, StatusCode::OK);
+        assert_eq!(
+            status_with("/api/books", None, Some("sekrit")).await,
+            StatusCode::OK
+        );
     }
 
     #[tokio::test]
@@ -367,7 +371,14 @@ mod tests {
             assert_eq!(dec, raw, "round-trip: {raw} (enc={enc})");
         }
         // Reserved chars are actually escaped (not passed through verbatim).
-        assert!(url_encode_cookie("a,b;c").contains("%"), "reserved chars escaped");
-        assert_eq!(url_encode_cookie("sekrit"), "sekrit", "plain token unchanged");
+        assert!(
+            url_encode_cookie("a,b;c").contains("%"),
+            "reserved chars escaped"
+        );
+        assert_eq!(
+            url_encode_cookie("sekrit"),
+            "sekrit",
+            "plain token unchanged"
+        );
     }
 }

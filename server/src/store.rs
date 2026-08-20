@@ -23,14 +23,6 @@
 //! [`validate_book_id`], which rejects ids that are empty, equal `.`/`..`, or
 //! contain path separators / `..` / NUL — a malformed id can never escape
 //! `library/`.
-//!
-//! # Dead-code window (T6 → T8)
-//!
-//! This module's public API is proven in isolation here but is not wired into
-//! the axum app until T8 (the upload handler). Until then the bin-crate
-//! dead-code analysis flags these items; the allow below is scoped to this
-//! module and should be removed once T8 consumes the API.
-#![allow(dead_code)]
 
 use std::fs;
 use std::io::Cursor;
@@ -143,7 +135,14 @@ pub fn put_bundle(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&path, bytes)?;
+    // Temp-then-rename (same dir, so POSIX-atomic): a crash mid-write can
+    // never leave a torn `bundle.taletrek` as the canonical copy — downloads,
+    // re-parses, and the synth-overwrite path only ever see complete bundles.
+    let tmp = path.with_file_name("bundle.taletrek.tmp");
+    if let Err(e) = fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, &path)) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     Ok(IngestedBook {
         audio_present: bundle.manifest.audio.present,
         meta: bundle.manifest.book,
@@ -363,5 +362,32 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let err = get_bundle(tmp.path(), "absent").unwrap_err();
         assert!(matches!(err, StoreError::NotFound(_)), "got: {err}");
+    }
+
+    #[test]
+    fn put_bundle_leaves_no_temp_files_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ingested = ingest(tmp.path(), BOOK_FULL).unwrap();
+        let dir = tmp.path().join("library").join(&ingested[0].meta.id);
+        let mut entries: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec!["bundle.taletrek".to_string()],
+            "the temp file must be renamed away, not left behind"
+        );
+        // Overwrite path is equally clean.
+        ingest(tmp.path(), BOOK_FULL).unwrap();
+        let mut entries: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        assert_eq!(entries, vec!["bundle.taletrek".to_string()]);
     }
 }

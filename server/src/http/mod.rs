@@ -25,10 +25,10 @@ mod voices;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
+use axum::Router;
 use tower_http::trace::TraceLayer;
 
 use crate::config::Settings;
@@ -90,10 +90,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/voices", get(voices::list_voices))
         .route("/api/voices/{id}/fetch", post(voices::fetch_voice))
         // ----- operator UI (T11) — same auth layer, cookie-friendly -----
-        .route(
-            "/",
-            get(ui::index).post(ui::upload_book),
-        )
+        .route("/", get(ui::index).post(ui::upload_book))
         .route("/ui/", get(ui::index))
         .route("/ui/books/{id}", get(ui::book_detail))
         .route("/ui/books/{id}/synth", post(ui::synth_book))
@@ -143,7 +140,7 @@ mod test_support {
     use std::sync::Arc;
 
     use super::*;
-    use crate::db::{Db, test_utils::StubDb};
+    use crate::db::{test_utils::StubDb, Db};
 
     /// An [`AppState`] with an empty stub db + a test token.
     pub(crate) fn app_state(token: &str) -> AppState {
@@ -187,9 +184,7 @@ mod test_support {
     fn test_settings(token: &str) -> Settings {
         Settings {
             data_dir: PathBuf::from("/nonexistent-taletrek-test"),
-            bind: "127.0.0.1:0"
-                .parse()
-                .expect("valid loopback socket addr"),
+            bind: "127.0.0.1:0".parse().expect("valid loopback socket addr"),
             token: token.to_string(),
             voices_cache_dir: PathBuf::from("/nonexistent-taletrek-test"),
             jobs: 1,

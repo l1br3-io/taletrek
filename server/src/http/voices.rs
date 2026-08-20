@@ -11,12 +11,15 @@
 
 use std::fmt::Display;
 
-use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::Json;
 use serde::Serialize;
 
-use taletrek_worker::voices::{find_curated, resolve_voice, ResolveError, ResolveOpts, UreqVoiceSource, VoiceQuality, CURATED_VOICES};
+use taletrek_worker::voices::{
+    find_curated, resolve_voice, ResolveError, ResolveOpts, UreqVoiceSource, VoiceQuality,
+    CURATED_VOICES,
+};
 
 use crate::http::AppState;
 
@@ -106,13 +109,13 @@ fn internal_error<E: Display>(e: E) -> (StatusCode, String) {
 
 #[cfg(test)]
 mod tests {
-    use crate::db::{Db, test_utils::StubDb};
+    use crate::db::{test_utils::StubDb, Db};
     use crate::http::router;
     use crate::http::test_support::app_state_with_data_dir;
 
     use axum::body::Body;
     use axum::extract::Request;
-    use axum::http::{StatusCode, header};
+    use axum::http::{header, StatusCode};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -128,7 +131,11 @@ mod tests {
     fn voices_router() -> (axum::Router, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let db: Arc<dyn Db> = Arc::new(StubDb::new());
-        let r = router(app_state_with_data_dir(db, tmp.path().to_path_buf(), "sekrit"));
+        let r = router(app_state_with_data_dir(
+            db,
+            tmp.path().to_path_buf(),
+            "sekrit",
+        ));
         (r, tmp)
     }
 
@@ -145,8 +152,9 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("body bytes");
-        let json: serde_json::Value = serde_json::from_slice(&bytes)
-            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+            serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned())
+        });
         (status, json)
     }
 
@@ -205,7 +213,10 @@ mod tests {
             .map(|v| v["id"].as_str().expect("id str"))
             .collect();
         let want_ids: Vec<&str> = CURATED_VOICES.iter().map(|v| v.id).collect();
-        assert_eq!(got_ids, want_ids, "catalog order + ids match the worker list");
+        assert_eq!(
+            got_ids, want_ids,
+            "catalog order + ids match the worker list"
+        );
     }
 
     // ===== POST /api/voices/:id/fetch — unknown → 404, cache-hit → 204 =====
@@ -222,9 +233,13 @@ mod tests {
         let (router, tmp) = voices_router();
         // Seed the cache so resolve_voice short-circuits (no network).
         seed_cache(&tmp.path().join("voices"), KNOWN_VOICE);
-        let (status, body) = post_empty(router, format!("/api/voices/{KNOWN_VOICE}/fetch").as_str()).await;
+        let (status, body) =
+            post_empty(router, format!("/api/voices/{KNOWN_VOICE}/fetch").as_str()).await;
         assert_eq!(status, StatusCode::NO_CONTENT, "body: {body}");
-        assert!(body.is_empty() || body == "null", "204 has empty body: {body}");
+        assert!(
+            body.is_empty() || body == "null",
+            "204 has empty body: {body}"
+        );
     }
 
     // ===== auth still required =====

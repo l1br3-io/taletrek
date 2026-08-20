@@ -23,13 +23,7 @@
 //! # Dead-code window (T5 → T9)
 //!
 //! The books half of this module's public API is wired into the axum app as of
-//! T7 (`AppState.db` + the read handlers); the jobs half (the [`JobRow`] /
-//! [`JobKind`] / [`JobStatus`] surface + the create/update/list queries) is
-//! proven here in isolation but stays unreached from `main` until T9 wires the
-//! synth runner. Until then the bin-crate dead-code analysis would flag those
-//! job items, so the allow below stays scoped to this module. Remove it once T9
-//! consumes the jobs API.
-#![allow(dead_code)]
+//! T7 (`AppState.db` + the read handlers).
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -166,6 +160,10 @@ pub trait Db: Send + Sync {
     fn get_job(&self, id: &str) -> Result<Option<JobRow>, DbError>;
     /// List the `limit` most-recently-updated jobs.
     fn list_recent_jobs(&self, limit: usize) -> Result<Vec<JobRow>, DbError>;
+    /// Mark every `queued`/`running` job as `failed` with `error`. The boot
+    /// sweep: jobs orphaned by a crash/restart are owned by no process and
+    /// would otherwise lie `running` forever. Returns the swept count.
+    fn fail_active_jobs(&self, error: &str) -> Result<u64, DbError>;
 }
 
 /// SQLite-backed [`Db`]. Owns a single [`Connection`] guarded by a `Mutex`.
@@ -317,6 +315,16 @@ impl Db for SqliteDb {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    fn fail_active_jobs(&self, error: &str) -> Result<u64, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE jobs SET status = 'failed', error = ?1, updated_at = ?2
+             WHERE status IN ('queued', 'running')",
+            rusqlite::params![error, now_ms()],
+        )?;
+        Ok(n as u64)
     }
 }
 
@@ -552,6 +560,20 @@ pub mod test_utils {
             v.truncate(limit);
             Ok(v)
         }
+        fn fail_active_jobs(&self, error: &str) -> Result<u64, DbError> {
+            let mut jobs = self.jobs.lock().unwrap();
+            let now = now_ms();
+            let mut swept = 0;
+            for j in jobs.values_mut() {
+                if matches!(j.status, JobStatus::Queued | JobStatus::Running) {
+                    j.status = JobStatus::Failed;
+                    j.error = Some(error.to_string());
+                    j.updated_at = now;
+                    swept += 1;
+                }
+            }
+            Ok(swept)
+        }
     }
 }
 
@@ -700,6 +722,53 @@ mod tests {
         let recent = db.list_recent_jobs(10).unwrap();
         assert_eq!(recent.len(), 2);
         assert!(recent[0].updated_at >= recent[1].updated_at);
+    }
+
+    // ---- boot sweep ----
+
+    #[test]
+    fn fail_active_jobs_sweeps_only_unfinished_jobs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = SqliteDb::open(&tmp.path().join("taletrek.db")).unwrap();
+
+        db.create_job(sample_job("j-queued", "b1")).unwrap();
+        let mut running = sample_job("j-running", "b1");
+        running.status = JobStatus::Running;
+        db.create_job(running).unwrap();
+        let mut done = sample_job("j-done", "b1");
+        done.status = JobStatus::Succeeded;
+        db.create_job(done).unwrap();
+
+        let swept = db.fail_active_jobs("server restarted during job").unwrap();
+        assert_eq!(swept, 2);
+        for id in ["j-queued", "j-running"] {
+            let j = db.get_job(id).unwrap().unwrap();
+            assert_eq!(j.status, JobStatus::Failed, "{id} must be swept");
+            assert_eq!(j.error.as_deref(), Some("server restarted during job"));
+        }
+        let untouched = db.get_job("j-done").unwrap().unwrap();
+        assert_eq!(untouched.status, JobStatus::Succeeded);
+        assert_eq!(untouched.error, None);
+
+        // Second sweep is a no-op.
+        assert_eq!(db.fail_active_jobs("again").unwrap(), 0);
+    }
+
+    #[test]
+    fn stub_fail_active_jobs_matches_sqlite_behavior() {
+        let db = StubDb::new();
+        db.create_job(sample_job("s1", "b1")).unwrap();
+        let mut running = sample_job("s2", "b1");
+        running.status = JobStatus::Running;
+        db.create_job(running).unwrap();
+
+        assert_eq!(db.fail_active_jobs("sweep").unwrap(), 2);
+        assert_eq!(db.get_job("s1").unwrap().unwrap().status, JobStatus::Failed);
+        assert_eq!(
+            db.get_job("s2").unwrap().unwrap().error.as_deref(),
+            Some("sweep")
+        );
+        assert_eq!(db.fail_active_jobs("sweep").unwrap(), 0);
     }
 
     // ---- serde wire format ----

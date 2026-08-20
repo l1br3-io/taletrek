@@ -160,6 +160,17 @@ pub struct SynthContext {
     pub backend: SynthBackend,
 }
 
+/// Ceiling for a request-supplied `jobs` override. The value flows into a
+/// per-job rayon pool (`num_threads` → one OS thread + piper subprocess
+/// each), so without a cap an authenticated caller could request thousands
+/// of threads.
+const MAX_REQUESTED_JOBS: usize = 32;
+
+/// Clamp an effective worker count to `[1, MAX_REQUESTED_JOBS]`.
+fn clamp_jobs(jobs: usize) -> usize {
+    jobs.clamp(1, MAX_REQUESTED_JOBS)
+}
+
 // ===== errors =====
 
 /// Errors from the trigger path (before/during job-row creation). The synth
@@ -283,7 +294,9 @@ impl ProgressSink for JobProgress {
 fn preflight_voice(voice: Option<&str>, voice_path: Option<&Path>) -> Result<(), ResolveError> {
     if let Some(onnx) = voice_path {
         if !onnx.is_file() {
-            return Err(ResolveError::VoicePathNotFound { path: onnx.to_path_buf() });
+            return Err(ResolveError::VoicePathNotFound {
+                path: onnx.to_path_buf(),
+            });
         }
         let json = onnx.with_extension("json");
         if !json.is_file() {
@@ -305,7 +318,6 @@ fn preflight_voice(voice: Option<&str>, voice_path: Option<&Path>) -> Result<(),
 /// `spawn_blocking` and handed to the background task so it need not re-read.
 struct PreparedJob {
     bundle: BookBundle,
-    #[allow(dead_code)]
     total: usize,
 }
 
@@ -408,7 +420,7 @@ pub async fn run_synth_job(
     // 4. Spawn the detached background synth. A clone of the context carries
     //    every handle it needs; the handler has already returned by the time
     //    this runs.
-    let jobs_eff = jobs.unwrap_or(ctx.default_jobs);
+    let jobs_eff = clamp_jobs(jobs.unwrap_or(ctx.default_jobs));
     tokio::spawn(run_job_to_completion(
         ctx,
         job_id.clone(),
@@ -464,7 +476,7 @@ pub async fn run_resynth_job(
     .await?;
 
     // 4. Spawn the detached background resynth.
-    let jobs_eff = jobs.unwrap_or(ctx.default_jobs);
+    let jobs_eff = clamp_jobs(jobs.unwrap_or(ctx.default_jobs));
     tokio::spawn(run_job_to_completion(
         ctx,
         job_id.clone(),
@@ -505,7 +517,8 @@ async fn create_job_row(
     };
     let job_id_ret = job_id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), SynthTriggerError> {
-        db.create_job(row).map_err(|e| SynthTriggerError::Internal(e.into()))?;
+        db.create_job(row)
+            .map_err(|e| SynthTriggerError::Internal(e.into()))?;
         Ok(())
     })
     .await
@@ -547,13 +560,12 @@ async fn run_job_to_completion(
     let db_for_failure = ctx.db.clone();
     let job_id_for_failure = job_id.clone();
 
-    let run: tokio::task::JoinHandle<Result<(), JobRunError>> = tokio::task::spawn_blocking(
-        move || -> Result<(), JobRunError> {
+    let run: tokio::task::JoinHandle<Result<(), JobRunError>> =
+        tokio::task::spawn_blocking(move || -> Result<(), JobRunError> {
             // 1. Resolve the voice model (network + cache). Cache hit short-
             //    circuits the download. Download progress is a no-op in v1.
             let opts = ResolveOpts::new(voice_path, ctx.voices_cache_dir.clone());
-            let voice_model =
-                resolve_voice(Some(&voice_id), &opts, &UreqVoiceSource, None)?;
+            let voice_model = resolve_voice(Some(&voice_id), &opts, &UreqVoiceSource, None)?;
 
             // 2. Flip the row to running (voice already recorded at create).
             ctx.db
@@ -566,7 +578,10 @@ async fn run_job_to_completion(
             //    closure; the move-closure captures the Arc by value and calls
             //    it by ref → Fn, not FnOnce). The two stamp functions share an
             //    identical signature, so only this call branches on strategy.
-            let progress = JobProgress { db: ctx.db.clone(), job_id: job_id.clone() };
+            let progress = JobProgress {
+                db: ctx.db.clone(),
+                job_id: job_id.clone(),
+            };
             let make_runner = ctx.backend.make_runner.clone();
             let encoder = &ctx.backend.encoder;
             match strategy {
@@ -605,8 +620,7 @@ async fn run_job_to_completion(
             ctx.db
                 .update_job_status(&job_id, JobStatus::Succeeded, None, None, None)?;
             Ok(())
-        },
-    );
+        });
 
     match run.await {
         Ok(Ok(())) => {}
@@ -715,5 +729,18 @@ pub(crate) mod test_support {
             make_runner: Arc::new(|| AnyRunner(Box::new(StubRunner))),
             encoder: AnyEncoder::new(WavPassthrough),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requested_jobs_is_clamped_to_a_sane_range() {
+        assert_eq!(clamp_jobs(0), 1);
+        assert_eq!(clamp_jobs(1), 1);
+        assert_eq!(clamp_jobs(8), 8);
+        assert_eq!(clamp_jobs(10_000), MAX_REQUESTED_JOBS);
     }
 }
