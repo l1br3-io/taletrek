@@ -20,7 +20,7 @@ use clap::Parser;
 
 use taletrek_synth::{read_book_bundle, OpusEncoder, SubprocessPiperRunner};
 use taletrek_worker::{
-    default_cache_dir, resolve_voice, ResolveOpts, Progress, UreqVoiceSource, DEFAULT_VOICE_ID,
+    default_cache_dir, resolve_voice, Progress, ResolveOpts, UreqVoiceSource, DEFAULT_VOICE_ID,
 };
 
 use crate::bundle_io::{

@@ -23,17 +23,17 @@
 //! (askama_axum 0.4 exposes a helper but no blanket impl, so we wrap).
 
 use askama::Template;
-use axum::Form;
 use axum::extract::{Multipart, Path, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
+use axum::Form;
 use serde::Deserialize;
 
 use taletrek_worker::voices::CURATED_VOICES;
 
 use crate::db::{BookRow, JobRow};
-use crate::http::AppState;
 use crate::http::books::{delete_book_id, ingest_bundle_bytes, read_bundle_field};
+use crate::http::AppState;
 use crate::synth::{run_resynth_job, run_synth_job, SynthContext};
 
 /// Cap on the recent-jobs panel size on the index + jobs pages.
@@ -220,24 +220,43 @@ fn error_page(message: impl Into<String>, back: impl Into<String>) -> Response {
 
 // ===== GET handlers =====
 
+/// Collapse an index-panel query into an empty list, logging why. A db failure
+/// rendering as an empty table would mislead the operator into thinking the
+/// library was wiped — the warn keeps the real cause visible in the logs.
+fn unwrap_or_empty<T>(
+    res: Result<Result<Vec<T>, crate::db::DbError>, tokio::task::JoinError>,
+    panel: &str,
+) -> Vec<T> {
+    match res {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, panel, "index panel query failed");
+            Vec::new()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, panel, "index panel task join failed");
+            Vec::new()
+        }
+    }
+}
+
 /// `GET /` + `GET /ui/` → the index: library table + upload form + jobs panel.
 pub async fn index(State(state): State<AppState>) -> Response {
     let db = state.db.clone();
     let jobs_db = state.db.clone();
     let (books, jobs) = tokio::join!(
         async {
-            tokio::task::spawn_blocking(move || db.list_books())
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .unwrap_or_default()
+            unwrap_or_empty(
+                tokio::task::spawn_blocking(move || db.list_books()).await,
+                "books",
+            )
         },
         async {
-            tokio::task::spawn_blocking(move || jobs_db.list_recent_jobs(JOBS_PANEL_LIMIT))
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .unwrap_or_default()
+            unwrap_or_empty(
+                tokio::task::spawn_blocking(move || jobs_db.list_recent_jobs(JOBS_PANEL_LIMIT))
+                    .await,
+                "jobs",
+            )
         },
     );
     let books: Vec<BookView> = books.into_iter().map(BookView::from).collect();
@@ -294,10 +313,7 @@ pub async fn jobs(State(state): State<AppState>) -> Response {
 /// `POST /` (multipart) — the upload form. Reads the `bundle` field, ingests
 /// via the shared [`ingest_bundle_bytes`], redirects to `/`. On error, renders
 /// an error page (the book simply won't appear in the table).
-pub async fn upload_book(
-    State(state): State<AppState>,
-    mut multipart: Multipart,
-) -> Response {
+pub async fn upload_book(State(state): State<AppState>, mut multipart: Multipart) -> Response {
     let bytes = match read_bundle_field(&mut multipart).await {
         Ok(b) => b,
         Err((_status, msg)) => return error_page(msg, "/"),
@@ -325,7 +341,11 @@ pub async fn synth_book(
     Form(form): Form<VoiceForm>,
 ) -> Response {
     let ctx = synth_ctx(&state);
-    let voice = if form.voice.is_empty() { None } else { Some(form.voice) };
+    let voice = if form.voice.is_empty() {
+        None
+    } else {
+        Some(form.voice)
+    };
     match run_synth_job(ctx, id.clone(), voice, None, None).await {
         Ok(_) => Redirect::to(&format!("/ui/books/{id}")).into_response(),
         Err(e) => error_page(e.to_string(), format!("/ui/books/{id}")),
@@ -340,7 +360,11 @@ pub async fn resynth_book(
     Form(form): Form<VoiceForm>,
 ) -> Response {
     let ctx = synth_ctx(&state);
-    let voice = if form.voice.is_empty() { None } else { Some(form.voice) };
+    let voice = if form.voice.is_empty() {
+        None
+    } else {
+        Some(form.voice)
+    };
     match run_resynth_job(ctx, id.clone(), voice, None, None).await {
         Ok(_) => Redirect::to(&format!("/ui/books/{id}")).into_response(),
         Err(e) => error_page(e.to_string(), format!("/ui/books/{id}")),
@@ -378,7 +402,7 @@ mod tests {
 
     use axum::body::Body;
     use axum::extract::Request;
-    use axum::http::{StatusCode, header};
+    use axum::http::{header, StatusCode};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -428,7 +452,10 @@ mod tests {
         // A job's status appears in the jobs panel.
         assert!(html.contains("succeeded"), "job status in panel: {html}");
         // Upload form posts to / (the index route).
-        assert!(html.contains(r#"action="/""#) || html.contains("enctype"), "upload form: {html}");
+        assert!(
+            html.contains(r#"action="/""#) || html.contains("enctype"),
+            "upload form: {html}"
+        );
     }
 
     #[test]
@@ -446,13 +473,23 @@ mod tests {
         assert!(html.contains("selected"), "one option selected: {html}");
         // Every curated id is an <option>.
         for v in CURATED_VOICES {
-            assert!(html.contains(&format!("value=\"{}\"", v.id)), "voice {}: {html}", v.id);
+            assert!(
+                html.contains(&format!("value=\"{}\"", v.id)),
+                "voice {}: {html}",
+                v.id
+            );
         }
         // Synth + resynth + delete forms + download link are present.
         assert!(html.contains("/ui/books/b1/synth"), "synth form: {html}");
-        assert!(html.contains("/ui/books/b1/resynth"), "resynth form: {html}");
+        assert!(
+            html.contains("/ui/books/b1/resynth"),
+            "resynth form: {html}"
+        );
         assert!(html.contains("/ui/books/b1/delete"), "delete form: {html}");
-        assert!(html.contains("/api/books/b1/bundle"), "download link: {html}");
+        assert!(
+            html.contains("/api/books/b1/bundle"),
+            "download link: {html}"
+        );
     }
 
     #[test]
@@ -476,7 +513,10 @@ mod tests {
         }
         .render()
         .expect("render");
-        assert!(with_err.contains("invalid token"), "error shown: {with_err}");
+        assert!(
+            with_err.contains("invalid token"),
+            "error shown: {with_err}"
+        );
     }
 
     #[test]
@@ -497,7 +537,10 @@ mod tests {
     fn voice_options_falls_back_to_default_when_book_voice_unknown() {
         // A voice id not in the catalog → nothing selected (no panic).
         let opts = voice_options("not-a-curated-id");
-        assert!(opts.iter().all(|o| !o.selected), "none selected for unknown");
+        assert!(
+            opts.iter().all(|o| !o.selected),
+            "none selected for unknown"
+        );
     }
 
     // sanity: the Db-row → view conversions compile + preserve fields.
@@ -556,12 +599,19 @@ mod tests {
         let resp = app.oneshot(req).await.expect("router serves");
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).map(|v| v.to_str().unwrap_or("")),
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .map(|v| v.to_str().unwrap_or("")),
             Some("text/html; charset=utf-8")
         );
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let html = String::from_utf8(bytes.to_vec()).unwrap_or_default();
-        assert!(html.contains("<title>Library"), "library page title: {html}");
+        assert!(
+            html.contains("<title>Library"),
+            "library page title: {html}"
+        );
         assert!(html.contains("TaleTrek"), "brand present: {html}");
         assert!(html.contains("❯~"), "brand mark present: {html}");
     }
@@ -601,7 +651,9 @@ mod tests {
             .expect("valid request");
         let resp = app.oneshot(req).await.expect("router serves");
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let html = String::from_utf8(bytes.to_vec()).unwrap_or_default();
         assert!(html.contains(r#"name="token""#), "token field: {html}");
     }
@@ -620,7 +672,9 @@ mod tests {
         let resp = app.oneshot(req).await.expect("router serves");
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         assert_eq!(
-            resp.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get(header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
             Some("/")
         );
         let set_cookie = resp
@@ -628,9 +682,15 @@ mod tests {
             .get(header::SET_COOKIE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        assert!(set_cookie.contains("taletrek_token=sekrit"), "cookie set: {set_cookie}");
+        assert!(
+            set_cookie.contains("taletrek_token=sekrit"),
+            "cookie set: {set_cookie}"
+        );
         assert!(set_cookie.contains("HttpOnly"), "HttpOnly: {set_cookie}");
-        assert!(set_cookie.contains("SameSite=Lax"), "SameSite=Lax: {set_cookie}");
+        assert!(
+            set_cookie.contains("SameSite=Lax"),
+            "SameSite=Lax: {set_cookie}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -645,8 +705,13 @@ mod tests {
         let resp = app.oneshot(req).await.expect("router serves");
         // Wrong token re-renders the form (200), not a redirect.
         assert_eq!(resp.status(), StatusCode::OK);
-        assert!(resp.headers().get(header::SET_COOKIE).is_none(), "no cookie on failure");
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+        assert!(
+            resp.headers().get(header::SET_COOKIE).is_none(),
+            "no cookie on failure"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let html = String::from_utf8(bytes.to_vec()).unwrap_or_default();
         assert!(html.contains("invalid token"), "error shown: {html}");
     }
@@ -694,7 +759,9 @@ mod tests {
             .expect("valid request");
         let resp = app.oneshot(req).await.expect("router serves");
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let html = String::from_utf8(bytes.to_vec()).unwrap_or_default();
         assert!(html.contains("not found"), "error message: {html}");
     }
@@ -725,9 +792,14 @@ mod tests {
             .expect("valid request");
         let resp = app.oneshot(req).await.expect("router serves");
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let html = String::from_utf8(bytes.to_vec()).unwrap_or_default();
-        assert!(html.contains("HTTP Rendered Book"), "seeded title on page: {html}");
+        assert!(
+            html.contains("HTTP Rendered Book"),
+            "seeded title on page: {html}"
+        );
         assert!(html.contains("/ui/books/bk_http"), "detail link: {html}");
     }
 

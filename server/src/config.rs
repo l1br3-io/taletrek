@@ -3,7 +3,9 @@
 //! [`Settings::from_env`] is the single constructor called at boot. Resolution
 //! precedence per field: `TALETREK_*` env var > `config.toml` value > built-in
 //! default. The bearer token is required (single-user model, ADR-0013) — boot
-//! fails with [`ConfigError::MissingToken`] when no source provides it.
+//! fails with [`ConfigError::MissingToken`] when no source provides it, and
+//! with [`ConfigError::EmptyToken`] when the resolved value is empty or
+//! whitespace (an empty token would authenticate an empty credential).
 //!
 //! # Testability
 //!
@@ -46,6 +48,11 @@ const ENV_MAX_BUNDLE_BYTES: &str = "TALETREK_MAX_BUNDLE_BYTES";
 /// are capped ~200 MB (G20); this leaves headroom.
 pub(crate) const DEFAULT_MAX_BUNDLE_BYTES: usize = 256 * 1024 * 1024;
 
+/// Recommended minimum bearer-token length. Shorter tokens still boot (dev
+/// flows like the justfile's `dev-secret` rely on it) but `main` logs a
+/// warning — brute-forcing a short token over the LAN is trivial.
+pub(crate) const MIN_TOKEN_CHARS: usize = 16;
+
 /// Resolved server settings.
 ///
 /// Built once by [`Settings::from_env`] at boot; fields are final (no builder).
@@ -87,6 +94,16 @@ pub enum ConfigError {
          Set the {ENV_TOKEN} env var or a `token` key in config.toml."
     )]
     MissingToken,
+
+    /// The bearer token resolved to an empty or whitespace-only string (e.g.
+    /// `docker run -e TALETREK_TOKEN` with no value). An empty token would
+    /// authenticate an empty credential — a total bypass — so boot refuses it.
+    #[error(
+        "{ENV_TOKEN} resolved to an empty or whitespace-only value. \
+         An empty token would authenticate an empty credential; set a real secret \
+         (e.g. `openssl rand -hex 32`)."
+    )]
+    EmptyToken,
 
     /// `TALETREK_BIND` (or config `bind`) did not parse as a socket address.
     #[error("invalid bind address {0:?}: {1}")]
@@ -169,6 +186,9 @@ impl Settings {
         let token = env(ENV_TOKEN)
             .or(cfg.token)
             .ok_or(ConfigError::MissingToken)?;
+        if token.trim().is_empty() {
+            return Err(ConfigError::EmptyToken);
+        }
 
         let voices_cache_dir = env(ENV_VOICES_CACHE_DIR)
             .or(cfg.voices_cache_dir)
@@ -243,6 +263,45 @@ mod tests {
         // The message names the env var + ADR so it's actionable.
         assert!(err.to_string().contains(ENV_TOKEN));
         assert!(err.to_string().contains("ADR-0013"));
+    }
+
+    #[test]
+    fn empty_token_is_rejected() {
+        // `docker run -e TALETREK_TOKEN` (no value) must not boot an open
+        // server: constant-time compare treats "" == "" as a match.
+        let err = Settings::resolve(
+            &|k: &str| match k {
+                ENV_TOKEN => Some(String::new()),
+                _ => None,
+            },
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigError::EmptyToken));
+        assert!(err.to_string().contains(ENV_TOKEN));
+    }
+
+    #[test]
+    fn whitespace_only_token_is_rejected() {
+        let err = Settings::resolve(
+            &|k: &str| match k {
+                ENV_TOKEN => Some("   \t".into()),
+                _ => None,
+            },
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigError::EmptyToken));
+    }
+
+    #[test]
+    fn empty_token_from_config_file_is_rejected() {
+        let cfg = ConfigFile {
+            token: Some(String::new()),
+            ..Default::default()
+        };
+        let err = Settings::resolve(&|_| None, Some(&cfg)).unwrap_err();
+        assert!(matches!(err, ConfigError::EmptyToken));
     }
 
     #[test]

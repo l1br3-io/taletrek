@@ -29,14 +29,14 @@
 //! This is a deliberate divergence from the SPA's allocate-new-id-on-collision
 //! (effort 3); do not "fix" it.
 
-use axum::Json;
 use axum::body::Body;
 use axum::extract::{Multipart, Path, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
+use axum::Json;
 use serde::Serialize;
 
-use crate::db::{BookRow, DbError, now_ms};
+use crate::db::{now_ms, BookRow, DbError};
 use crate::http::AppState;
 use crate::store::{self, IngestedBook, StoreError};
 
@@ -161,7 +161,9 @@ pub(crate) async fn ingest_bundle_bytes(
     }
 }
 
-/// `GET /api/books/{id}/bundle` — streams the stored bundle bytes back with
+/// `GET /api/books/{id}/bundle` — returns the stored bundle bytes (buffered in
+/// memory — v1 does not chunk-stream; the size is bounded by the same
+/// `max_bundle_bytes` cap that gated the upload) with
 /// `Content-Type: application/zip` and a `Content-Disposition` attachment
 /// header (`<id>.taletrek`). Unknown id → `404`. The bytes are byte-identical
 /// to what was uploaded ([`store::put_bundle`] writes verbatim, no re-encode).
@@ -214,10 +216,7 @@ pub async fn delete_book(
 /// Delete a book's bundle file + index row. Shared by the JSON delete handler
 /// ([`delete_book`]) and the UI delete form (`ui::delete_book`). Idempotent —
 /// both `store::delete_bundle` and `Db::delete_book` treat "absent" as success.
-pub(crate) async fn delete_book_id(
-    state: &AppState,
-    id: &str,
-) -> Result<(), (StatusCode, String)> {
+pub(crate) async fn delete_book_id(state: &AppState, id: &str) -> Result<(), (StatusCode, String)> {
     let data_dir = state.data_dir.clone();
     let db = state.db.clone();
     let id = id.to_string();
@@ -301,10 +300,7 @@ fn store_status(e: &StoreError) -> StatusCode {
 /// else `500`.
 fn store_not_found_or_internal(e: &StoreError) -> (StatusCode, String) {
     match e {
-        StoreError::NotFound(id) => (
-            StatusCode::NOT_FOUND,
-            format!("book not found: {id}"),
-        ),
+        StoreError::NotFound(id) => (StatusCode::NOT_FOUND, format!("book not found: {id}")),
         other => (store_status(other), other.to_string()),
     }
 }
@@ -338,13 +334,13 @@ impl From<DbError> for OpError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{Db, test_utils::StubDb};
+    use crate::db::{test_utils::StubDb, Db};
     use crate::http::router;
     use crate::http::test_support::{app_state_with_data_dir, app_state_with_db};
 
     use axum::body::Body;
     use axum::extract::Request;
-    use axum::http::{StatusCode, header};
+    use axum::http::{header, StatusCode};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -411,10 +407,7 @@ mod tests {
         assert!(ids.contains(&"b2"));
 
         // Spot-check b1's full camelCase shape — no snake_case leak.
-        let b1 = arr
-            .iter()
-            .find(|v| v["id"] == "b1")
-            .expect("b1 in array");
+        let b1 = arr.iter().find(|v| v["id"] == "b1").expect("b1 in array");
         assert_eq!(b1["title"], "Title b1");
         assert_eq!(b1["author"], "Author b1");
         assert_eq!(b1["sourceFormat"], "epub");
@@ -585,7 +578,11 @@ mod tests {
         assert_eq!(delete(router.clone(), &id).await, StatusCode::NO_CONTENT);
         let (status, list) = get_json(router, "/api/books").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(list.as_array().unwrap().len(), 0, "library empty after delete");
+        assert_eq!(
+            list.as_array().unwrap().len(),
+            0,
+            "library empty after delete"
+        );
     }
 
     // ---- full bundle sets audio_present=true ----

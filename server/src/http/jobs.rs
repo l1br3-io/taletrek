@@ -11,7 +11,7 @@
 //! - `GET /api/jobs` — recent jobs (newest-updated first), capped at 50.
 //!
 //! All four are authed (they live on the protected sub-router in
-//! [`crate::http`], so they inherit [`crate::http::auth::require_bearer`]).
+//! [`crate::http`], so they inherit [`crate::http::auth::require_auth`]).
 //!
 //! # Status mapping
 //!
@@ -20,9 +20,9 @@
 //! `Internal → 500`. Background synth failures never reach here — they flip
 //! the job row to `failed`, surfaced via `GET /api/jobs/:id`.
 
-use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -101,14 +101,10 @@ pub async fn trigger_synth(
         default_jobs: state.settings.jobs,
         backend: (*state.synth).clone(),
     };
-    let job_id =
-        run_synth_job(ctx, book_id, req.voice, req.voice_path, req.jobs)
-            .await
-            .map_err(trigger_status)?;
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(SynthAccepted { job_id }),
-    ))
+    let job_id = run_synth_job(ctx, book_id, req.voice, req.voice_path, req.jobs)
+        .await
+        .map_err(trigger_status)?;
+    Ok((StatusCode::ACCEPTED, Json(SynthAccepted { job_id })))
 }
 
 /// `POST /api/books/{id}/resynth` request body. `voice` is required — the
@@ -148,14 +144,10 @@ pub async fn trigger_resynth(
     };
     // Missing/empty voice → None → run_resynth_job returns MissingVoice (400).
     let voice = req.voice.filter(|s| !s.is_empty());
-    let job_id =
-        run_resynth_job(ctx, book_id, voice, req.voice_path, req.jobs)
-            .await
-            .map_err(trigger_status)?;
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(SynthAccepted { job_id }),
-    ))
+    let job_id = run_resynth_job(ctx, book_id, voice, req.voice_path, req.jobs)
+        .await
+        .map_err(trigger_status)?;
+    Ok((StatusCode::ACCEPTED, Json(SynthAccepted { job_id })))
 }
 
 /// `GET /api/jobs/{id}` → `200` single job, or `404` when absent.
@@ -211,13 +203,13 @@ fn internal_error<E: Display>(e: E) -> (StatusCode, String) {
 
 #[cfg(test)]
 mod tests {
-    use crate::db::{Db, test_utils::StubDb};
+    use crate::db::{test_utils::StubDb, Db};
     use crate::http::router;
     use crate::http::test_support::app_state_with_data_dir;
 
     use axum::body::Body;
     use axum::extract::Request;
-    use axum::http::{StatusCode, header};
+    use axum::http::{header, StatusCode};
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::Arc;
@@ -260,7 +252,11 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         seed_voice_cache(&tmp.path().join("voices"));
         let db: Arc<dyn Db> = Arc::new(StubDb::new());
-        let r = router(app_state_with_data_dir(db, tmp.path().to_path_buf(), "sekrit"));
+        let r = router(app_state_with_data_dir(
+            db,
+            tmp.path().to_path_buf(),
+            "sekrit",
+        ));
         (r, tmp)
     }
 
@@ -285,8 +281,9 @@ mod tests {
         // Error responses use axum's `(StatusCode, String)` tuple → plain-text
         // bodies (not JSON). Wrap those as a JSON string so callers can still
         // assert on the message text; valid JSON parses normally.
-        let json: serde_json::Value = serde_json::from_slice(&bytes)
-            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+            serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned())
+        });
         (status, json)
     }
 
@@ -308,8 +305,9 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("body bytes");
-        let json: serde_json::Value = serde_json::from_slice(&bytes)
-            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+            serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned())
+        });
         (status, json)
     }
 
@@ -327,8 +325,9 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("body bytes");
-        let json: serde_json::Value = serde_json::from_slice(&bytes)
-            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+            serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned())
+        });
         (status, json)
     }
 
@@ -364,10 +363,7 @@ mod tests {
             .await
             .expect("body bytes");
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        json.as_array()
-            .expect("array")
-            .first()
-            .expect("one book")["id"]
+        json.as_array().expect("array").first().expect("one book")["id"]
             .as_str()
             .expect("id string")
             .to_string()
@@ -375,7 +371,11 @@ mod tests {
 
     /// Poll `GET /api/jobs/{id}` until `status` is terminal (`succeeded` /
     /// `failed`), returning the final job JSON. Panics after `timeout`.
-    async fn poll_until_terminal(router: axum::Router, job_id: &str, timeout: Duration) -> serde_json::Value {
+    async fn poll_until_terminal(
+        router: axum::Router,
+        job_id: &str,
+        timeout: Duration,
+    ) -> serde_json::Value {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let (_, json) = get_json(router.clone(), &format!("/api/jobs/{job_id}")).await;
@@ -448,13 +448,9 @@ mod tests {
         let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
 
         // Trigger synth → 202 with a jobId.
-        let (status, json) =
-            trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
+        let (status, json) = trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
         assert_eq!(status, StatusCode::ACCEPTED);
-        let job_id = json["jobId"]
-            .as_str()
-            .expect("jobId present")
-            .to_string();
+        let job_id = json["jobId"].as_str().expect("jobId present").to_string();
 
         // Poll until terminal. The stub runner is fast; 10s is plenty.
         let job = poll_until_terminal(router.clone(), &job_id, Duration::from_secs(10)).await;
@@ -510,8 +506,7 @@ mod tests {
         // progress contract explicit + independent of the audio checks.
         let (router, _tmp) = synth_router();
         let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
-        let (_, json) =
-            trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
+        let (_, json) = trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
         let job_id = json["jobId"].as_str().unwrap().to_string();
         let job = poll_until_terminal(router, &job_id, Duration::from_secs(10)).await;
         assert!(job["total"].as_i64().unwrap() > 0);
@@ -524,13 +519,16 @@ mod tests {
     async fn synth_on_full_book_is_409() {
         let (router, _tmp) = synth_router();
         let id = upload(router.clone(), BOOK_FULL_FIX).await;
-        let (status, json) =
-            trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
+        let (status, json) = trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
         assert_eq!(status, StatusCode::CONFLICT);
         // The body points the user at resynth.
         let body = serde_json::to_string(&json).unwrap_or_default();
         assert!(
-            body.contains("resynth") || json.as_str().map(|s| s.contains("resynth")).unwrap_or(false),
+            body.contains("resynth")
+                || json
+                    .as_str()
+                    .map(|s| s.contains("resynth"))
+                    .unwrap_or(false),
             "409 body should hint at resynth: {json}"
         );
     }
@@ -568,8 +566,7 @@ mod tests {
         let bytes = empty_paragraph_bundle();
         let id = upload(router.clone(), &bytes).await;
 
-        let (status, json) =
-            trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
+        let (status, json) = trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
         assert_eq!(status, StatusCode::ACCEPTED);
         let job_id = json["jobId"].as_str().unwrap().to_string();
 
@@ -593,8 +590,7 @@ mod tests {
     async fn get_job_returns_camelcase_dto_or_404() {
         let (router, _tmp) = synth_router();
         let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
-        let (_, trig) =
-            trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
+        let (_, trig) = trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
         let job_id = trig["jobId"].as_str().unwrap().to_string();
 
         // Wait for the row to exist (the trigger creates it synchronously, but
@@ -618,8 +614,7 @@ mod tests {
     async fn list_jobs_returns_recent_jobs() {
         let (router, _tmp) = synth_router();
         let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
-        let (_, trig) =
-            trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
+        let (_, trig) = trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
         let job_id = trig["jobId"].as_str().unwrap().to_string();
         // Let it finish so the row is stable.
         let _ = poll_until_terminal(router.clone(), &job_id, Duration::from_secs(10)).await;
@@ -675,13 +670,20 @@ mod tests {
 
         let job = poll_until_terminal(router.clone(), &job_id, Duration::from_secs(10)).await;
         assert_eq!(job["status"].as_str(), Some("succeeded"), "job: {job}");
-        assert_eq!(job["kind"].as_str(), Some("resynth"), "kind is resynth: {job}");
+        assert_eq!(
+            job["kind"].as_str(),
+            Some("resynth"),
+            "kind is resynth: {job}"
+        );
 
         // The manifest now carries the new voice; audio stays present.
         let bytes = download_bundle(router.clone(), &id).await;
         let parsed = taletrek_synth::read_book_bundle(&bytes).expect("parses");
         assert_eq!(parsed.manifest.book.voice_id, RESYNTH_VOICE);
-        assert!(parsed.manifest.audio.present, "audio stays present after resynth");
+        assert!(
+            parsed.manifest.audio.present,
+            "audio stays present after resynth"
+        );
         assert!(!parsed.audio.is_empty(), "audio map populated");
 
         // Every segment is keyed under the new voice. cache_key = `${voice}:${ver}:${hash}`,
@@ -698,7 +700,9 @@ mod tests {
         for ch in &parsed.chapters {
             for para in &ch.paragraphs {
                 assert!(
-                    parsed.audio.contains_key(&taletrek_synth::cache_key(RESYNTH_VOICE, para)),
+                    parsed
+                        .audio
+                        .contains_key(&taletrek_synth::cache_key(RESYNTH_VOICE, para)),
                     "segment for paragraph missing under new voice key"
                 );
             }
@@ -741,7 +745,10 @@ mod tests {
         let bytes = download_bundle(router.clone(), &id).await;
         let parsed = taletrek_synth::read_book_bundle(&bytes).expect("parses");
         assert_eq!(parsed.manifest.book.voice_id, RESYNTH_VOICE);
-        assert!(parsed.manifest.audio.present, "text-only → full under new voice");
+        assert!(
+            parsed.manifest.audio.present,
+            "text-only → full under new voice"
+        );
         assert!(!parsed.audio.is_empty());
     }
 
@@ -762,8 +769,7 @@ mod tests {
         let (router, _tmp) = synth_router();
         let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
         // Missing voice field → deserializes to default ("") → treated as None → 400.
-        let (status, _) =
-            trigger_resynth_req(router, &id, &serde_json::json!({})).await;
+        let (status, _) = trigger_resynth_req(router, &id, &serde_json::json!({})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
