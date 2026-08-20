@@ -19,6 +19,7 @@ use std::error::Error;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use thiserror::Error;
 
@@ -412,10 +413,11 @@ pub fn resolve_voice(
     Ok(onnx_path)
 }
 
-/// Fetch `url` via `source` and atomically-ish write the bytes to `dest`.
-/// `progress`, when `Some`, renders download progress lines as bytes arrive.
-/// Failures surface as [`ResolveError::Download`] carrying the failing URL so
-/// the user can verify reachability or fall back to `--voice-path`.
+/// Fetch `url` via `source` and write the bytes to `dest` atomically (see
+/// [`write_atomically`]). `progress`, when `Some`, renders download progress
+/// lines as bytes arrive. Failures surface as [`ResolveError::Download`]
+/// carrying the failing URL so the user can verify reachability or fall back
+/// to `--voice-path`.
 fn download(
     source: &dyn VoiceSource,
     url: &str,
@@ -432,8 +434,36 @@ fn download(
             url: url.to_string(),
             message: e.to_string(),
         })?;
-    let mut file = fs::File::create(dest)?;
-    file.write_all(&bytes)?;
+    write_atomically(dest, &bytes)
+}
+
+/// Write `bytes` to `dest` via a uniquely-named sibling temp file + rename.
+///
+/// The cache-hit check only tests file presence, so a truncated file at
+/// `dest` (interrupted download, or two concurrent first-use downloads
+/// interleaving writes) would poison the cache for every future run with an
+/// opaque piper error. The temp name embeds the pid + a process-local
+/// sequence, so concurrent attempts can't clobber each other's temp file —
+/// last complete rename wins.
+fn write_atomically(dest: &Path, bytes: &[u8]) -> Result<(), ResolveError> {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "voice-file".to_string());
+    let tmp = dest.with_file_name(format!("{name}.{}.{}.tmp", std::process::id(), seq));
+    let written = (|| -> std::io::Result<()> {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&tmp, dest)?;
+        Ok(())
+    })();
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     Ok(())
 }
 
@@ -655,6 +685,28 @@ mod tests {
         // The downloaded bytes round-trip into the cache files.
         assert_eq!(std::fs::read(&onnx_path).unwrap(), onnx_url.as_bytes());
         assert_eq!(std::fs::read(&json_path).unwrap(), json_url.as_bytes());
+    }
+
+    #[test]
+    fn cache_miss_leaves_no_temp_files_behind() {
+        let cache = tempfile::tempdir().unwrap();
+        let id = "en_GB-alan-medium";
+        let opts = ResolveOpts::new(None, cache.path().to_path_buf());
+        let stub = StubSource::default();
+
+        resolve_voice(Some(id), &opts, &stub, None).unwrap();
+
+        let mut entries: Vec<String> = std::fs::read_dir(cache.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec![format!("{id}.json"), format!("{id}.onnx")],
+            "only the two final artifacts may remain — no .tmp files"
+        );
     }
 
     #[test]
