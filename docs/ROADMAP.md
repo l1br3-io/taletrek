@@ -1,7 +1,7 @@
 # Roadmap
 
 > Directional overview — no dates, no calendar. The *what's next*, not the spec.
-> **Current effort:** none active (between phases) — off-device synth track Tier 2 shipped 2026-08-07 (efforts 1–3); next is Effort 4 `personal-server`, starts at `/spec`. Shipped specs live under [`docs/specs/`](./specs/).
+> **Current effort:** `personal-server` (off-device synth track, effort 4 of 4, active since 2026-08-09) — built (T1–T12 + machine gates green), runbook walkthrough passed 2026-08-20 except the human-only SPA audio-plays check; next `/review` → `/ship`. Shipped specs live under [`docs/specs/`](./specs/).
 > Companion: [`VISION.md`](./VISION.md) — the problem and goals.
 
 TaleTrek is a free, open-source **reading companion**: upload any ebook — PDF, EPUB, MOBI, or TXT — and TaleTrek reads it aloud using on-device text-to-speech. It strips links, images, and footnotes so only the story flows, then plays it as background audio that survives screen lock, app switching, and phone closure. You go for a run; your book comes with you. No app store, no subscription, no cloud — just a URL on iOS or Android.
@@ -96,6 +96,6 @@ Four efforts, each shippable on its own:
 | T1 | `portable-bundle-format` — format spec + Rust `crates/synth` crate | ✅ shipped ([spec](./specs/portable-bundle-format/spec.md)) · 2026-08-03 |
 | T2 | `desktop-synth-app` — standalone Rust synth tool (import text-only bundle → export full bundle) | ✅ shipped ([spec](./specs/desktop-synth-app/spec.md)) · 2026-08-04 |
 | T3 | `spa-bundle-import-export` — TS bundle reader/writer + UI in the SPA | ✅ shipped ([spec](./specs/spa-bundle-import-export/spec.md)) · 2026-08-07 |
-| T4 | `personal-server` — Rust Docker library server + worker-mode synth | 🔨 next |
+| T4 | `personal-server` — Rust Docker library server + inline synth (worker-mode deferred to a follow-up) | 🔨 active |
 
 Tiers: **(1)** SPA alone (on-device synth, exists today) · **(2)** SPA + Desktop (off-device synth via bundle exchange) · **(3)** + Server (central library, always-on synth, sharing).

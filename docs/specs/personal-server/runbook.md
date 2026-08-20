@@ -149,7 +149,9 @@ Confirm:
 - `audio.present` is `true`
 - `audio.codec` is `"opus"`
 - `generator.app` is `"taletrek-server"` (provenance stamp — T1–T3)
-- `book.voiceId` is the voice you synth'd under
+- `book.voiceId` is still the bundle's original voice — `synth` preserves it
+  (only the segment keys carry the synth voice; `resynth` is what flips
+  `book.voiceId`, see (f))
 - every `audio/<key>.opus` segment starts with the OGG magic `OggS`:
 
   ```
@@ -265,14 +267,14 @@ committed text-only fixture, so they don't depend on a hand-built `.taletrek`.
 
 Effort 4 is smoke-clean when **all** of:
 
-- [ ] §2 (a)–(e) succeeds against a local `cargo run` server: upload → synth →
+- [x] §2 (a)–(e) succeeds against a local `cargo run` server: upload → synth →
       poll `succeeded` → download → `manifest.audio.present == true` + Opus
-      segments carry `OggS`.
-- [ ] §2 (f) resynth produces a distinct-voiced, `OggS`-valid bundle.
-- [ ] §3 `docker build` + `docker run` reaches `/api/health` → `ok`.
+      segments carry `OggS`. *(2026-08-20 @ `70ec7d9`)*
+- [x] §2 (f) resynth produces a distinct-voiced, `OggS`-valid bundle. *(2026-08-20 @ `70ec7d9`)*
+- [x] §3 `docker build` + `docker run` reaches `/api/health` → `ok`. *(2026-08-20 @ `70ec7d9`)*
 - [ ] §4 the synthesized bundle imports into the SPA and **audio plays**; the
       resynth'd bundle plays with the new voice.
-- [ ] §5 the two `#[ignore]`d integration tests pass.
+- [x] §5 the two `#[ignore]`d integration tests pass. *(2026-08-20 @ `70ec7d9`, re-run after the piper `--config` fix `4725dd0`)*
 
 Record the run **date + commit** in `todo.md` (the "Final gates" block) when
 this passes — that's the Tier-3 sign-off.

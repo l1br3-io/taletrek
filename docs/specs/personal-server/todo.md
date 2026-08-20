@@ -39,7 +39,9 @@
 - [x] `cargo test --workspace` green (incl. desktop refactor regression + `crates/synth` untouched)
 - [x] `pnpm verify` green (no `web/` changes)
 - [x] `docker build -f server/Dockerfile .` succeeds; `docker run` reaches `/api/health`
-- [ ] Manual runbook walkthrough (real piper + ffmpeg + curated voice): upload text-only fixture → synth → poll → download → `manifest.audio.present == true`, Opus `OggS` → import into SPA via T3 → audio plays. Resynth round-trip too. _(Record date + commit here when run.)_
+- [ ] Manual runbook walkthrough (real piper + ffmpeg + curated voice): upload text-only fixture → synth → poll → download → `manifest.audio.present == true`, Opus `OggS` → import into SPA via T3 → audio plays. Resynth round-trip too.
+  - 2026-08-20 @ `70ec7d9`: §2 (a)–(f) + §3 (docker build/run → `/api/health` ok) + §5 (4 `#[ignore]`d e2e green: desktop + server × synth + resynth) all pass, re-verified after the piper `--config` fix (`4725dd0`). Machine gates re-run green: `just verify-rust` + `pnpm verify`.
+  - Remaining (human): §4 — import `/tmp/book.synth.taletrek` (+ `/tmp/book.resynth.taletrek`) into the SPA via the T3 button and confirm audio plays.
 
 ### Checkpoint: Ready for review
 - [ ] All `spec.md` §"Success criteria" checked or explicitly deferred (runbook walkthrough = human-run, above).
