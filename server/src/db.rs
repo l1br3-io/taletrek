@@ -247,8 +247,11 @@ impl Db for SqliteDb {
 
     fn list_books(&self) -> Result<Vec<BookRow>, DbError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at FROM books ORDER BY created_at DESC")?;
+        let mut stmt = conn.prepare(
+            // `id` tiebreaks same-ms created_at stamps (bulk library imports)
+            // so the newest-first order is stable across requests.
+            "SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at FROM books ORDER BY created_at DESC, id DESC",
+        )?;
         let rows = stmt.query_map([], book_from_row)?;
         let mut out = Vec::new();
         for r in rows {

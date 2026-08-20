@@ -348,6 +348,22 @@ pub enum ResolveError {
         /// Underlying error rendered to a string.
         message: String,
     },
+
+    /// The downloaded `.onnx` length fell far outside the catalog's
+    /// `size_bytes` — a truncated transfer or a wrong payload (e.g. an HTML
+    /// error page). Refused before caching so the cache is never poisoned.
+    #[error(
+        "voice model {id} downloaded as {got} bytes but the catalog lists ~{expected}; \
+         refusing to cache a likely-truncated or wrong payload"
+    )]
+    SizeMismatch {
+        /// The curated voice id whose model failed the size sanity band.
+        id: String,
+        /// The catalog's approximate `.onnx` size.
+        expected: u64,
+        /// The fetched byte count.
+        got: u64,
+    },
 }
 
 /// Resolve the effective voice `.onnx` path for a synth/resynth run.
@@ -358,7 +374,9 @@ pub enum ResolveError {
 /// - Otherwise the voice id (`id.unwrap_or(DEFAULT_VOICE_ID)`) is resolved via
 ///   the curated catalog. A cache hit (both `.onnx` and `.json` present under
 ///   `opts.cache_dir`) short-circuits the download. On a miss, both files are
-///   fetched via `source` and written to the cache before returning.
+///   fetched via `source` — the `.onnx` passing a size sanity band against the
+///   catalog's approximate `size_bytes` (see [`verify_onnx_size`]) — and
+///   written to the cache before returning.
 ///
 /// `progress`, when `Some`, renders `voice d.t MiB (pct%)` lines during each
 /// download. `None` is silent (e.g. tests that only assert cache behavior).
@@ -387,8 +405,9 @@ pub fn resolve_voice(
 
     // Path 2: curated-id resolution (cache or download).
     let id = id.unwrap_or(DEFAULT_VOICE_ID);
-    let rel_onnx =
-        curated_rel_onnx_path(id).ok_or_else(|| ResolveError::UnknownCuratedId(id.to_string()))?;
+    let voice = find_curated(id).ok_or_else(|| ResolveError::UnknownCuratedId(id.to_string()))?;
+    let rel_onnx = curated_rel_onnx_path(id)
+        .expect("every CURATED_VOICES id has a PATH_MAP entry (parity-tested)");
     let onnx_path = cache_onnx_path(&opts.cache_dir, id);
     let json_path = onnx_path.with_extension("json");
 
@@ -398,33 +417,33 @@ pub fn resolve_voice(
         return Ok(onnx_path);
     }
 
-    // Cache miss: ensure the dir exists, then fetch both files.
+    // Cache miss: ensure the dir exists, then fetch + verify + write both
+    // files. The `.onnx` passes a size sanity band against the catalog's
+    // (approximate) `size_bytes` BEFORE being cached — a truncated transfer
+    // or an HTML error page must not poison the cache, since the cache-hit
+    // check only tests file presence.
     fs::create_dir_all(&opts.cache_dir)?;
     let rel_json = rel_onnx
         .strip_suffix(".onnx")
         .expect("curated rel path always ends in .onnx");
-    download(source, &hf_url(rel_onnx), &onnx_path, progress)?;
-    download(
-        source,
-        &hf_url(&format!("{rel_json}.json")),
-        &json_path,
-        progress,
-    )?;
+    let onnx_bytes = fetch(source, &hf_url(rel_onnx), progress)?;
+    verify_onnx_size(voice, onnx_bytes.len() as u64)?;
+    write_atomically(&onnx_path, &onnx_bytes)?;
+    let json_bytes = fetch(source, &hf_url(&format!("{rel_json}.json")), progress)?;
+    write_atomically(&json_path, &json_bytes)?;
     Ok(onnx_path)
 }
 
-/// Fetch `url` via `source` and write the bytes to `dest` atomically (see
-/// [`write_atomically`]). `progress`, when `Some`, renders download progress
-/// lines as bytes arrive. Failures surface as [`ResolveError::Download`]
+/// Fetch `url` via `source`, forwarding throttled download progress lines
+/// through `progress` when `Some`. Failures surface as [`ResolveError::Download`]
 /// carrying the failing URL so the user can verify reachability or fall back
 /// to `--voice-path`.
-fn download(
+fn fetch(
     source: &dyn VoiceSource,
     url: &str,
-    dest: &Path,
     progress: Option<&dyn ProgressSink>,
-) -> Result<(), ResolveError> {
-    let bytes = source
+) -> Result<Vec<u8>, ResolveError> {
+    source
         .fetch_with_progress(url, &mut |done, total| {
             if let Some(p) = progress {
                 p.download_step(done, total);
@@ -433,8 +452,24 @@ fn download(
         .map_err(|e| ResolveError::Download {
             url: url.to_string(),
             message: e.to_string(),
-        })?;
-    write_atomically(dest, &bytes)
+        })
+}
+
+/// Sanity band around the catalog's `size_bytes` — documented *approximate*
+/// (it exists for progress UIs), so this is a band, not equality: accept
+/// [25%, 400%] of the listed size. That rejects error pages (tiny) and heavy
+/// truncation without breaking on minor upstream size drift. Deterministic
+/// pinning (sha256 per curated model) is the follow-on if drift ever bites.
+fn verify_onnx_size(voice: &Voice, got: u64) -> Result<(), ResolveError> {
+    let expected = voice.size_bytes;
+    if got * 4 < expected || got > expected.saturating_mul(4) {
+        return Err(ResolveError::SizeMismatch {
+            id: voice.id.to_string(),
+            expected,
+            got,
+        });
+    }
+    Ok(())
 }
 
 /// Write `bytes` to `dest` via a uniquely-named sibling temp file + rename.
@@ -476,9 +511,23 @@ mod tests {
     /// returns the URL itself as the body, so tests can assert call order and
     /// cache contents without going online. Bodies don't need to be valid
     /// Piper bytes — only that the bytes round-trip into the cache files.
+    /// `.onnx` bodies are zero-padded up to the catalog's `size_bytes` so the
+    /// download size sanity band passes (see [`verify_onnx_size`]).
     #[derive(Default)]
     struct StubSource {
         calls: Mutex<Vec<String>>,
+    }
+
+    /// The stub body for a URL: the URL bytes, padded to the catalog's model
+    /// size for `.onnx` fetches so `verify_onnx_size` accepts it.
+    fn stub_body(url: &str) -> Vec<u8> {
+        let mut body = url.as_bytes().to_vec();
+        if let Some(id) = url.rsplit('/').next().unwrap_or("").strip_suffix(".onnx") {
+            if let Some(v) = find_curated(id) {
+                body.resize(v.size_bytes as usize, 0);
+            }
+        }
+        body
     }
 
     impl VoiceSource for StubSource {
@@ -488,7 +537,7 @@ mod tests {
             _progress: &mut dyn FnMut(u64, u64),
         ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
             self.calls.lock().unwrap().push(url.to_string());
-            Ok(url.as_bytes().to_vec())
+            Ok(stub_body(url))
         }
     }
 
@@ -682,9 +731,49 @@ mod tests {
         assert!(calls.contains(&onnx_url), "calls were: {calls:?}");
         assert!(calls.contains(&json_url), "calls were: {calls:?}");
 
-        // The downloaded bytes round-trip into the cache files.
-        assert_eq!(std::fs::read(&onnx_path).unwrap(), onnx_url.as_bytes());
+        // The downloaded bytes round-trip into the cache files (the .onnx
+        // body is the padded stub body).
+        assert_eq!(std::fs::read(&onnx_path).unwrap(), stub_body(&onnx_url));
         assert_eq!(std::fs::read(&json_path).unwrap(), json_url.as_bytes());
+    }
+
+    #[test]
+    fn truncated_onnx_download_is_rejected_and_not_cached() {
+        // A source whose .onnx body is far below the catalog size (as a
+        // truncated transfer or an HTML error page would be) must fail the
+        // size sanity band — and nothing may land in the cache (a poisoned
+        // cache would surface later as an opaque piper error).
+        struct ShortSource;
+        impl VoiceSource for ShortSource {
+            fn fetch_with_progress(
+                &self,
+                _url: &str,
+                _progress: &mut dyn FnMut(u64, u64),
+            ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+                Ok(b"way too short".to_vec())
+            }
+        }
+
+        let cache = tempfile::tempdir().unwrap();
+        let id = "en_US-ryan-medium";
+        let opts = ResolveOpts::new(None, cache.path().to_path_buf());
+
+        let err = resolve_voice(Some(id), &opts, &ShortSource, None).unwrap_err();
+        match err {
+            ResolveError::SizeMismatch {
+                id: bad,
+                expected,
+                got,
+            } => {
+                assert_eq!(bad, id);
+                assert_eq!(expected, find_curated(id).unwrap().size_bytes);
+                assert_eq!(got, b"way too short".len() as u64);
+            }
+            other => panic!("expected SizeMismatch, got {other:?}"),
+        }
+        // No cache files written — the failure happened before the write.
+        assert!(!cache.path().join(format!("{id}.onnx")).exists());
+        assert!(!cache.path().join(format!("{id}.json")).exists());
     }
 
     #[test]
@@ -786,7 +875,7 @@ mod tests {
             let total: u64 = 2 * 1024 * 1024;
             progress(total / 2, total);
             progress(total, total);
-            Ok(url.as_bytes().to_vec())
+            Ok(stub_body(url))
         }
     }
 

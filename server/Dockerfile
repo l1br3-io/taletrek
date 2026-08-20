@@ -54,16 +54,21 @@ RUN cargo build --release --locked -p taletrek-server
 FROM debian:12-slim AS piper
 
 # Pinned to the final release of the (now-archived) rhasspy/piper repo, so this
-# URL is immutable. Bump only after vetting a fork (e.g. dharmab/piper) and
-# updating the SHA fallback.
+# URL is immutable. The tarball's sha256 is pinned below and verified after
+# download — TLS protects the transport, the hash protects the payload (a
+# compromise or takeover of the repo must not become native code in the image).
+# Bump PIPER_VERSION + PIPER_SHA256 together, after vetting a fork
+# (e.g. dharmab/piper).
 ARG PIPER_VERSION=2023.11.14-2
 ARG PIPER_TARBALL=piper_linux_x86_64.tar.gz
+ARG PIPER_SHA256=a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL -o /tmp/piper.tar.gz \
         "https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/${PIPER_TARBALL}" \
+    && echo "${PIPER_SHA256}  /tmp/piper.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/piper.tar.gz -C /opt \
     && rm /tmp/piper.tar.gz \
     && test -x /opt/piper/piper

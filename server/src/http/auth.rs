@@ -37,7 +37,14 @@
 //! the token is the entire auth surface, so operate only over a trusted LAN or
 //! behind a TLS terminator.
 
-use axum::extract::{Request, State};
+use std::collections::{HashMap, VecDeque};
+use std::convert::Infallible;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
+use axum::http::request::Parts;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
@@ -57,6 +64,70 @@ pub(crate) const TOKEN_COOKIE: &str = "taletrek_token";
 /// Cookie lifetime in seconds (30 days). Generous for a single-user operator
 /// panel so reopening the browser doesn't force a re-login every session.
 const COOKIE_MAX_AGE_SECS: u64 = 30 * 24 * 60 * 60;
+
+/// Failed `POST /ui/login` attempts per client IP that trigger throttling.
+const LOGIN_MAX_FAILURES: usize = 10;
+
+/// The window failed attempts are counted within.
+const LOGIN_WINDOW: Duration = Duration::from_secs(15 * 60);
+
+/// Cap on distinct tracked IPs: the failure map is memory an *unauthenticated*
+/// caller can grow, so it is hard-bounded. Clearing it wholesale only resets
+/// attackers' windows (each real source IP requires a completed TCP handshake,
+/// so flooding 4096 distinct sources is already a bigger problem than this map).
+const LOGIN_TRACKED_IPS_CAP: usize = 4096;
+
+/// In-memory throttle for `POST /ui/login` — the one unauthenticated surface
+/// where the token can be brute-forced. Counts *failed* attempts per client IP
+/// inside a rolling [`LOGIN_WINDOW`]; at [`LOGIN_MAX_FAILURES`] the IP gets
+/// `429` before the token comparison runs. A successful login clears the IP's
+/// history (legitimate typos never lock the operator out). Process-local and
+/// best-effort by design: restart resets it, which is acceptable — the window
+/// bounds guessing speed, it doesn't promise lockout.
+#[derive(Clone, Default)]
+pub struct LoginLimiter {
+    failures: Arc<Mutex<HashMap<IpAddr, VecDeque<Instant>>>>,
+}
+
+impl LoginLimiter {
+    /// Is `ip` currently throttled (window failure count reached)?
+    pub(crate) fn is_throttled(&self, ip: IpAddr) -> bool {
+        let mut map = self.lock();
+        Self::prune(&mut map);
+        map.get(&ip)
+            .is_some_and(|ts| ts.len() >= LOGIN_MAX_FAILURES)
+    }
+
+    /// Record a failed attempt for `ip`.
+    pub(crate) fn record_failure(&self, ip: IpAddr) {
+        let mut map = self.lock();
+        Self::prune(&mut map);
+        if map.len() >= LOGIN_TRACKED_IPS_CAP {
+            map.clear();
+        }
+        map.entry(ip).or_default().push_back(Instant::now());
+    }
+
+    /// Clear `ip`'s failure history (successful login).
+    pub(crate) fn clear(&self, ip: IpAddr) {
+        self.lock().remove(&ip);
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<IpAddr, VecDeque<Instant>>> {
+        self.failures.lock().expect("login-limiter mutex poisoned")
+    }
+
+    /// Drop timestamps outside the window + entries left empty by that.
+    fn prune(map: &mut HashMap<IpAddr, VecDeque<Instant>>) {
+        let cutoff = Instant::now()
+            .checked_sub(LOGIN_WINDOW)
+            .unwrap_or_else(Instant::now);
+        for ts in map.values_mut() {
+            ts.retain(|t| *t > cutoff);
+        }
+        map.retain(|_, ts| !ts.is_empty());
+    }
+}
 
 /// Reject any protected request that carries neither a matching
 /// `Authorization: Bearer <token>` header nor a matching `taletrek_token`
@@ -117,10 +188,23 @@ pub async fn login_form(State(state): State<AppState>, request: Request) -> Resp
 /// `POST /ui/login` — validate the submitted token, set the cookie, redirect.
 ///
 /// Form field: `token`. On match → `Set-Cookie` + `303 /`. On mismatch →
-/// re-render the login page with an error message (no cookie set).
-pub async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Response {
+/// re-render the login page with an error message (no cookie set). Throttled
+/// client IPs get `429` before the comparison runs (see [`LoginLimiter`]).
+pub async fn login(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    Form(form): Form<LoginForm>,
+) -> Response {
+    if state.login_limiter.is_throttled(ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many failed login attempts; wait 15 minutes and try again",
+        )
+            .into_response();
+    }
     let expected = state.settings.token.as_bytes();
     if constant_time_eq(form.token.as_bytes(), expected) {
+        state.login_limiter.clear(ip);
         let cookie = format!(
             "{TOKEN_COOKIE}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={COOKIE_MAX_AGE_SECS}",
             url_encode_cookie(&state.settings.token),
@@ -132,7 +216,28 @@ pub async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -
         *resp.status_mut() = StatusCode::SEE_OTHER; // 303 — PRG after a POST
         resp
     } else {
+        state.login_limiter.record_failure(ip);
         crate::http::ui::login_page(Some("invalid token")).into_response()
+    }
+}
+
+/// The client IP for throttling, read from the connection info the listener
+/// injects (`main` serves via `into_make_service_with_connect_info`). Falls
+/// back to the unspecified address when no connection info exists (handler
+/// unit-test requests), bucketing those together — infallible so the login
+/// handler never rejects on extraction.
+pub(crate) struct ClientIp(IpAddr);
+
+impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let ip = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|c| c.0.ip())
+            .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        Ok(ClientIp(ip))
     }
 }
 
@@ -332,6 +437,53 @@ mod tests {
             .expect("valid request");
         let resp = app.oneshot(req).await.expect("router serves");
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ---- login throttling ----
+
+    /// POST a token to `/ui/login` through the real router, returning the
+    /// status. (oneshot requests carry no ConnectInfo, so attempts land in the
+    /// shared "unknown source" bucket — exactly what these tests need.)
+    async fn login_status(app: axum::Router, token: &str) -> StatusCode {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/ui/login")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(format!("token={token}")))
+            .expect("valid request");
+        let resp = app.oneshot(req).await.expect("router serves");
+        resp.status()
+    }
+
+    #[tokio::test]
+    async fn too_many_failed_logins_gets_429_even_with_the_correct_token() {
+        let app = router(app_state("sekrit"));
+        // Failures up to the limit: all re-render (200).
+        for _ in 0..10 {
+            assert_eq!(login_status(app.clone(), "nope").await, StatusCode::OK);
+        }
+        // Every subsequent attempt — including the CORRECT token — is refused
+        // before the comparison runs.
+        assert_eq!(
+            login_status(app.clone(), "sekrit").await,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_login_clears_the_failure_count() {
+        let app = router(app_state("sekrit"));
+        // Failures just under the limit, then succeed (303) — the operator's
+        // own typos must not lock them out.
+        for _ in 0..9 {
+            assert_eq!(login_status(app.clone(), "nope").await, StatusCode::OK);
+        }
+        assert_eq!(
+            login_status(app.clone(), "sekrit").await,
+            StatusCode::SEE_OTHER
+        );
+        // History cleared: another failure is tolerated rather than 429'd.
+        assert_eq!(login_status(app, "nope").await, StatusCode::OK);
     }
 
     // ---- constant_time_eq unit cases ----

@@ -16,6 +16,7 @@
 //! # Status mapping
 //!
 //! [`SynthTriggerError`] maps: `BookNotFound → 404`, `AlreadyFull → 409`,
+//! `JobInProgress → 409` (one job per book — see [`crate::synth::InFlightBooks`]),
 //! `BadVoice → 400`, `MissingVoice → 400` (resynth only — voice required),
 //! `Internal → 500`. Background synth failures never reach here — they flip
 //! the job row to `failed`, surfaced via `GET /api/jobs/:id`.
@@ -100,6 +101,7 @@ pub async fn trigger_synth(
         voices_cache_dir: state.settings.voices_cache_dir.clone(),
         default_jobs: state.settings.jobs,
         backend: (*state.synth).clone(),
+        in_flight: state.in_flight.clone(),
     };
     let job_id = run_synth_job(ctx, book_id, req.voice, req.voice_path, req.jobs)
         .await
@@ -141,6 +143,7 @@ pub async fn trigger_resynth(
         voices_cache_dir: state.settings.voices_cache_dir.clone(),
         default_jobs: state.settings.jobs,
         backend: (*state.synth).clone(),
+        in_flight: state.in_flight.clone(),
     };
     // Missing/empty voice → None → run_resynth_job returns MissingVoice (400).
     let voice = req.voice.filter(|s| !s.is_empty());
@@ -188,7 +191,9 @@ const JOBS_LIST_LIMIT: usize = 50;
 fn trigger_status(e: SynthTriggerError) -> (StatusCode, String) {
     match &e {
         SynthTriggerError::BookNotFound(_) => (StatusCode::NOT_FOUND, e.to_string()),
-        SynthTriggerError::AlreadyFull { .. } => (StatusCode::CONFLICT, e.to_string()),
+        SynthTriggerError::AlreadyFull { .. } | SynthTriggerError::JobInProgress(_) => {
+            (StatusCode::CONFLICT, e.to_string())
+        }
         SynthTriggerError::BadVoice(_) | SynthTriggerError::MissingVoice => {
             (StatusCode::BAD_REQUEST, e.to_string())
         }
@@ -496,6 +501,210 @@ mod tests {
         assert!(parsed.manifest.audio.present, "audio.present==true");
         assert_eq!(parsed.manifest.generator.app, "taletrek-server");
         assert!(!parsed.audio.is_empty(), "audio map populated");
+    }
+
+    // ===== manifest voice consistency (bundle-format contract) =====
+
+    /// The format's paragraph→audio mapping is implicit — importers compute
+    /// cache keys from `manifest.book.voiceId` (docs/bundle-format.md). The
+    /// server is the canonical library, so a synth under any voice must leave
+    /// the manifest naming THAT voice. The text-only fixture's manifest voices
+    /// a non-default voice, so a default-voice synth is exactly the case that
+    /// would drift.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn synth_rewrites_manifest_voice_to_the_effective_voice() {
+        let (router, _tmp) = synth_router();
+        let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
+
+        // The fixture must start on a voice other than the default (and the
+        // test voice), or this test can't detect the drift.
+        let (_, book) = get_json(router.clone(), &format!("/api/books/{id}")).await;
+        let fixture_voice = book["voiceId"].as_str().expect("voiceId").to_string();
+        assert_ne!(
+            fixture_voice, TEST_VOICE,
+            "fixture must not already carry the default voice"
+        );
+
+        // Synth with no body → the server default voice (TEST_VOICE).
+        let (status, json) = trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let job_id = json["jobId"].as_str().unwrap().to_string();
+        let job = poll_until_terminal(router.clone(), &job_id, Duration::from_secs(10)).await;
+        assert_eq!(job["status"].as_str(), Some("succeeded"), "job: {job}");
+
+        // The stored manifest names the voice the segments are keyed under…
+        let bytes = download_bundle(router.clone(), &id).await;
+        let parsed = taletrek_synth::read_book_bundle(&bytes).expect("parses");
+        assert_eq!(
+            parsed.manifest.book.voice_id, TEST_VOICE,
+            "manifest must name the effective synth voice"
+        );
+        // …every segment key carries that voice (keys are `${voice}:${ver}:${hash}`)…
+        assert!(!parsed.audio.is_empty());
+        for key in parsed.audio.keys() {
+            let voice = key.split(':').next().unwrap_or("");
+            assert_eq!(
+                voice, TEST_VOICE,
+                "segment keyed under the synth voice: {key}"
+            );
+        }
+        // …and the keys reconstructed from the bundle's own paragraphs resolve.
+        for ch in &parsed.chapters {
+            for para in &ch.paragraphs {
+                assert!(
+                    parsed
+                        .audio
+                        .contains_key(&taletrek_synth::cache_key(TEST_VOICE, para)),
+                    "paragraph segment missing under the manifest voice"
+                );
+            }
+        }
+
+        // The index row follows the manifest.
+        let (_, book) = get_json(router, &format!("/api/books/{id}")).await;
+        assert_eq!(book["voiceId"].as_str(), Some(TEST_VOICE));
+    }
+
+    // ===== one job per book: the in-flight guard =====
+
+    /// A router whose stub backend blocks inside `predict` until the returned
+    /// [`crate::synth::test_support::Gate`] opens — holds a job
+    /// deterministically in `running` while the test exercises the guard.
+    fn gated_router() -> (
+        axum::Router,
+        tempfile::TempDir,
+        crate::synth::test_support::Gate,
+    ) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        seed_voice_cache(&tmp.path().join("voices"));
+        seed_voice(&tmp.path().join("voices"), RESYNTH_VOICE);
+        let db: Arc<dyn Db> = Arc::new(StubDb::new());
+        let (backend, gate) = crate::synth::test_support::gated_backend();
+        let r = router(
+            crate::http::test_support::app_state_with_data_dir_and_backend(
+                db,
+                tmp.path().to_path_buf(),
+                "sekrit",
+                backend,
+            ),
+        );
+        (r, tmp, gate)
+    }
+
+    /// Poll `GET /api/jobs/{id}` until `status` reaches `want` (terminal or
+    /// not); panics after a timeout.
+    async fn poll_until_status(
+        router: axum::Router,
+        job_id: &str,
+        want: &str,
+        timeout: Duration,
+    ) -> serde_json::Value {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let (_, json) = get_json(router.clone(), &format!("/api/jobs/{job_id}")).await;
+            if json["status"].as_str() == Some(want) {
+                return json;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("job {job_id} never reached {want}: {json}");
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// `DELETE /api/books/{id}` with the bearer token → status.
+    async fn delete(router: axum::Router, id: &str) -> StatusCode {
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/books/{id}"))
+            .header(header::AUTHORIZATION, "Bearer sekrit")
+            .body(Body::empty())
+            .expect("valid request");
+        router.oneshot(req).await.expect("router serves").status()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn second_trigger_and_delete_while_running_are_409_then_release_allows_retrigger() {
+        let (router, tmp, gate) = gated_router();
+        let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
+
+        // First trigger → 202; hold the job mid-run via the gated backend.
+        let (status, json) = trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let job_id = json["jobId"].as_str().unwrap().to_string();
+        let _ =
+            poll_until_status(router.clone(), &job_id, "running", Duration::from_secs(10)).await;
+
+        // A second trigger for the same book → 409 (the book is claimed)…
+        let (status, json) = trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::CONFLICT, "second trigger: {json}");
+
+        // …and so is a delete (the completion write would resurrect it).
+        assert_eq!(delete(router.clone(), &id).await, StatusCode::CONFLICT);
+
+        // Release: the job runs to success and the book survives.
+        gate.open();
+        let job = poll_until_terminal(router.clone(), &job_id, Duration::from_secs(10)).await;
+        assert_eq!(job["status"].as_str(), Some("succeeded"), "job: {job}");
+        let (status, _) = get_json(router.clone(), &format!("/api/books/{id}")).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "book still present after guarded delete"
+        );
+
+        // The claim is released: a resynth trigger is accepted again (synth
+        // itself would now 409 AlreadyFull — the book is full).
+        let (status, json) = trigger_resynth_req(
+            router.clone(),
+            &id,
+            &serde_json::json!({ "voice": RESYNTH_VOICE }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::ACCEPTED,
+            "claim released after terminal: {json}"
+        );
+        let job_id = json["jobId"].as_str().unwrap().to_string();
+        let job = poll_until_terminal(router, &job_id, Duration::from_secs(10)).await;
+        assert_eq!(job["status"].as_str(), Some("succeeded"));
+        let _ = tmp; // keep the tempdir alive for the duration
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn book_deleted_under_a_running_job_is_not_resurrected() {
+        // The guard refuses HTTP deletes mid-job, but a delete could still
+        // race past the claim (checked before insert). Simulate that race by
+        // removing the book's files directly off disk while the job runs: the
+        // job must FAIL (not write its output) and must not re-create the row.
+        let (router, tmp, gate) = gated_router();
+        let id = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
+
+        let (status, json) = trigger_synth_req(router.clone(), &id, &serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let job_id = json["jobId"].as_str().unwrap().to_string();
+        let _ =
+            poll_until_status(router.clone(), &job_id, "running", Duration::from_secs(10)).await;
+
+        // The racing delete: files gone behind the guard's back.
+        std::fs::remove_dir_all(tmp.path().join("library").join(&id))
+            .expect("remove book dir mid-job");
+
+        gate.open();
+        let job = poll_until_terminal(router.clone(), &job_id, Duration::from_secs(10)).await;
+        assert_eq!(job["status"].as_str(), Some("failed"), "job: {job}");
+        let error = job["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("deleted"),
+            "error explains the discard: {error}"
+        );
+
+        // No resurrection: bundle 404 + row 404.
+        let (status, _) = get_json(router.clone(), &format!("/api/books/{id}/bundle")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "bundle stays deleted");
+        let (status, _) = get_json(router, &format!("/api/books/{id}")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "row stays deleted");
     }
 
     // ===== progress advances during a multi-paragraph synth =====

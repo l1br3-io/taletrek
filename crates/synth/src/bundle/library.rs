@@ -1,14 +1,14 @@
 //! Whole-library bundle (`.taletrek-lib`) — a ZIP of a library manifest + N
 //! nested book bundles.
 
-use std::io::{Cursor, Read, Seek, Write};
+use std::io::{Cursor, Write};
 
 use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
 use super::error::BundleError;
-use super::io::{book_bundle_to_bytes, read_book_bundle};
+use super::io::{book_bundle_to_bytes, read_book_bundle, ReadBudget};
 use super::manifest::{Generator, SCHEMA_VERSION};
 use super::BookBundle;
 
@@ -64,7 +64,7 @@ pub struct LibraryEntry {
 /// Serialize a [`LibraryBundle`] to a `.taletrek-lib` ZIP written into `out`.
 pub fn write_library_bundle(
     lib: &LibraryBundle,
-    out: &mut (impl Write + Seek),
+    out: &mut (impl Write + std::io::Seek),
 ) -> Result<(), BundleError> {
     let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
     let opts = SimpleFileOptions::default();
@@ -83,16 +83,28 @@ pub fn write_library_bundle(
     Ok(())
 }
 
-/// Parse a `.taletrek-lib` ZIP from `input` into a [`LibraryBundle`].
+/// Parse a `.taletrek-lib` ZIP from `input` into a [`LibraryBundle`] under
+/// the default [`ReadBudget`].
 pub fn read_library_bundle(input: &[u8]) -> Result<LibraryBundle, BundleError> {
+    read_library_bundle_with_budget(input, ReadBudget::default())
+}
+
+/// Parse a `.taletrek-lib` ZIP under a caller-supplied [`ReadBudget`]. The
+/// budget bounds this archive's entries (manifest + nested-book bytes); each
+/// nested book parse applies its own fresh default budget.
+pub fn read_library_bundle_with_budget(
+    input: &[u8],
+    budget: ReadBudget,
+) -> Result<LibraryBundle, BundleError> {
     let mut archive = ZipArchive::new(Cursor::new(input.to_vec()))?;
+    let mut remaining = budget.total_bytes;
 
     let manifest: LibraryManifest = {
         let mut f = archive
             .by_name(LIBRARY_MANIFEST_ENTRY)
             .map_err(|_| BundleError::MissingEntry("library-manifest.json"))?;
-        let mut buf = Vec::new();
-        f.read_to_end(&mut buf)?;
+        let name = f.name().to_string();
+        let buf = super::io::read_capped(&mut f, &name, budget, &mut remaining)?;
         serde_json::from_slice(&buf)?
     };
     if manifest.schema_version != SCHEMA_VERSION {
@@ -104,22 +116,23 @@ pub fn read_library_bundle(input: &[u8]) -> Result<LibraryBundle, BundleError> {
 
     let mut books = Vec::with_capacity(usize::try_from(manifest.book_count).unwrap_or(0));
     for entry in &manifest.books {
-        let bytes = read_entry(&mut archive, &entry.file)?;
+        let bytes = read_entry(&mut archive, &entry.file, budget, &mut remaining)?;
         books.push(read_book_bundle(&bytes)?);
     }
 
     Ok(LibraryBundle { manifest, books })
 }
 
-/// Read a single archive entry's full bytes by name.
+/// Read a single archive entry's full bytes by name (budget-capped).
 fn read_entry(
     archive: &mut ZipArchive<Cursor<Vec<u8>>>,
     name: &str,
+    budget: ReadBudget,
+    remaining: &mut u64,
 ) -> Result<Vec<u8>, BundleError> {
     let mut f = archive
         .by_name(name)
         .map_err(|_| BundleError::MissingEntry("nested book bundle"))?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
-    Ok(buf)
+    let entry_name = f.name().to_string();
+    super::io::read_capped(&mut f, &entry_name, budget, remaining)
 }

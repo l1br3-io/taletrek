@@ -191,8 +191,19 @@ pub async fn download_bundle(
         HeaderValue::from_static("application/zip"),
     );
     // `<id>` is a validated single path component (store::validate_book_id),
-    // so it is safe to embed in the disposition filename.
-    let cd = format!("attachment; filename=\"{id}.taletrek\"");
+    // so it is safe to embed in the disposition filename — unless it carries
+    // quoting-hostile bytes (`"`), which path validation alone permits. Real
+    // ids (SPA/desktop-generated hex) never do; anything else goes through the
+    // RFC 5987 `filename*` percent-encoded form so the header can't be broken.
+    let cd = if id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        format!("attachment; filename=\"{id}.taletrek\"")
+    } else {
+        let pct: String = id.bytes().map(|b| format!("%{b:02X}")).collect();
+        format!("attachment; filename*=UTF-8''{pct}.taletrek")
+    };
     if let Ok(val) = HeaderValue::from_str(&cd) {
         h.insert(header::CONTENT_DISPOSITION, val);
     }
@@ -216,7 +227,20 @@ pub async fn delete_book(
 /// Delete a book's bundle file + index row. Shared by the JSON delete handler
 /// ([`delete_book`]) and the UI delete form (`ui::delete_book`). Idempotent —
 /// both `store::delete_bundle` and `Db::delete_book` treat "absent" as success.
+///
+/// Refused with `409` while a synth/resynth job runs for the book: the job's
+/// completion would re-write the bundle + re-upsert the row, resurrecting the
+/// "deleted" book. Retry after the job finishes (poll `GET /api/jobs`).
 pub(crate) async fn delete_book_id(state: &AppState, id: &str) -> Result<(), (StatusCode, String)> {
+    if state.in_flight.contains(id) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "a synth job is currently running for book {id}; wait for it to finish \
+                 (GET /api/jobs) before deleting"
+            ),
+        ));
+    }
     let data_dir = state.data_dir.clone();
     let db = state.db.clone();
     let id = id.to_string();
@@ -729,6 +753,32 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         // The StoreError is rendered into the body.
         assert!(json != serde_json::Value::Null || status == StatusCode::BAD_REQUEST);
+    }
+
+    // ---- body-size limit: oversized uploads are 413 ----
+
+    #[tokio::test]
+    async fn upload_over_the_configured_body_limit_is_413() {
+        // A max_bundle_bytes just below the fixture's (multipart-wrapped) size
+        // must be refused by the DefaultBodyLimit plumbing — 413, nothing
+        // written. Pins the layer against a config/regression that silently
+        // drops it (unbounded request memory).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db: Arc<dyn Db> = Arc::new(StubDb::new());
+        let r = router(
+            crate::http::test_support::app_state_with_data_dir_and_max_bytes(
+                db,
+                tmp.path().to_path_buf(),
+                "sekrit",
+                BOOK_TEXT_ONLY_FIX.len() - 1,
+            ),
+        );
+        let (status, _) = upload(r, BOOK_TEXT_ONLY_FIX).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(
+            !tmp.path().join("library").exists(),
+            "oversized upload must not write anything"
+        );
     }
 
     #[tokio::test]

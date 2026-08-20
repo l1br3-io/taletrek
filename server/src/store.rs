@@ -27,10 +27,16 @@
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use taletrek_synth::{
     read_book_bundle, read_library_bundle, write_book_bundle, BookMeta, BundleError,
 };
+
+/// Process-local sequence uniquifying [`put_bundle`]'s temp filenames (with the
+/// pid, unique across processes too — same pattern as the worker's
+/// `write_atomically`).
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// One book ingested from an upload — the bundle's [`BookMeta`] plus the
 /// `audio.present` flag lifted out of its `manifest.audio` (T8's index row needs
@@ -138,7 +144,16 @@ pub fn put_bundle(
     // Temp-then-rename (same dir, so POSIX-atomic): a crash mid-write can
     // never leave a torn `bundle.taletrek` as the canonical copy — downloads,
     // re-parses, and the synth-overwrite path only ever see complete bundles.
-    let tmp = path.with_file_name("bundle.taletrek.tmp");
+    // The temp name embeds pid + seq so concurrent writers (a background synth
+    // job finishing while the same book is re-uploaded) can't interleave
+    // truncate/write on one shared temp file — mirrors the worker's
+    // `write_atomically` rationale.
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(
+        "bundle.taletrek.{}.{}.tmp",
+        std::process::id(),
+        seq
+    ));
     if let Err(e) = fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, &path)) {
         let _ = fs::remove_file(&tmp);
         return Err(e.into());
@@ -160,6 +175,14 @@ pub fn get_bundle(data_dir: &Path, book_id: &str) -> Result<Vec<u8>, StoreError>
         }
         Err(e) => Err(e.into()),
     }
+}
+
+/// Does a stored bundle exist for `book_id`? Cheap existence check used by the
+/// synth runner's pre-write guard (a job whose book vanished mid-run must not
+/// write its output back — that would resurrect the book).
+pub fn bundle_exists(data_dir: &Path, book_id: &str) -> Result<bool, StoreError> {
+    validate_book_id(book_id)?;
+    Ok(bundle_file(data_dir, book_id).is_file())
 }
 
 /// Remove a book's directory. Returns `false` if the book was already absent

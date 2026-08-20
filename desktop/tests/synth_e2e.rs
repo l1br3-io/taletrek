@@ -247,7 +247,10 @@ fn real_synth_produces_full_opus_bundle() {
     assert_eq!(bundle.manifest.audio.segment_count, expected_count);
     assert_eq!(bundle.audio.len(), usize::try_from(expected_count).unwrap());
 
-    // synth preserves the input book.voiceId (resynth is the one that rewrites).
+    // book.voiceId names the voice the segments are keyed under (the fixture's
+    // manifest already carried the default voice, and no --voice was passed,
+    // so the rewrite is a no-op here — the unit suite pins the differing-voice
+    // case).
     assert_eq!(bundle.manifest.book.voice_id, voice_id);
 
     // Every segment carries its key + non-empty OGG/Opus bytes (proves real
