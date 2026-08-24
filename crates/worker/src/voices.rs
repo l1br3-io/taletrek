@@ -423,13 +423,12 @@ pub fn resolve_voice(
     // or an HTML error page must not poison the cache, since the cache-hit
     // check only tests file presence.
     fs::create_dir_all(&opts.cache_dir)?;
-    let rel_json = rel_onnx
-        .strip_suffix(".onnx")
-        .expect("curated rel path always ends in .onnx");
     let onnx_bytes = fetch(source, &hf_url(rel_onnx), progress)?;
     verify_onnx_size(voice, onnx_bytes.len() as u64)?;
     write_atomically(&onnx_path, &onnx_bytes)?;
-    let json_bytes = fetch(source, &hf_url(&format!("{rel_json}.json")), progress)?;
+    // HF hosts the config beside the model as `<voice>.onnx.json` (append to
+    // the full `.onnx` name — NOT a stripped `<voice>.json`, which 404s).
+    let json_bytes = fetch(source, &hf_url(&format!("{rel_onnx}.json")), progress)?;
     write_atomically(&json_path, &json_bytes)?;
     Ok(onnx_path)
 }
@@ -727,7 +726,11 @@ mod tests {
         assert_eq!(calls.len(), 2, "should fetch exactly .onnx + .json");
         let rel = curated_rel_onnx_path(id).unwrap();
         let onnx_url = hf_url(rel);
-        let json_url = hf_url(&rel.replace(".onnx", ".json"));
+        // HF hosts the config beside the model as `<voice>.onnx.json` — NOT
+        // `<voice>.json`. Pinning the exact shape: a URL-builder regression
+        // here 404s every curated cache-miss at runtime while stubbed tests
+        // still pass (found live during the effort-4 ship walkthrough).
+        let json_url = hf_url(&format!("{rel}.json"));
         assert!(calls.contains(&onnx_url), "calls were: {calls:?}");
         assert!(calls.contains(&json_url), "calls were: {calls:?}");
 
