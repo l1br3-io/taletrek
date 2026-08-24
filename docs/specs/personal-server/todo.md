@@ -39,15 +39,15 @@
 - [x] `cargo test --workspace` green (incl. desktop refactor regression)
 - [x] `pnpm verify` green (`web/` changes this effort: `vite.config.ts` dev-port pin only)
 - [x] `docker build -f server/Dockerfile .` succeeds; `docker run` reaches `/api/health`
-- [ ] Manual runbook walkthrough (real piper + ffmpeg + curated voice): upload text-only fixture → synth → poll → download → `manifest.audio.present == true`, Opus `OggS` → import into SPA via T3 → audio plays. Resynth round-trip too.
+- [x] Manual runbook walkthrough (real piper + ffmpeg + curated voice): upload text-only fixture → synth → poll → download → `manifest.audio.present == true`, Opus `OggS` → import into SPA via T3 → audio plays. Resynth round-trip too.
   - 2026-08-20 @ `70ec7d9`: §2 (a)–(f) + §3 (docker build/run → `/api/health` ok) + §5 (4 `#[ignore]`d e2e green: desktop + server × synth + resynth) all pass, re-verified after the piper `--config` fix (`4725dd0`). Machine gates re-run green: `just verify-rust` + `pnpm verify`.
   - 2026-08-20 @ `da0d7d1` (post-`/ship` review): hardening landed — empty-token boot guard, atomic bundle + voice-cache writes (temp+rename), boot orphan-job sweep, `jobs` clamp [1, 32], index error logging; `cargo clippy` + `cargo test --workspace` (197) green.
   - 2026-08-20 (post-`/ship` blockers): manifest-voice contract fixed — server synth now rewrites `book.voiceId` to the effective voice (format: importers key audio from the manifest voice; a `lessac`-manifest fixture synth'd under the default voice was unplayable-by-construction) + regression test. In-flight guard — second synth/resynth trigger and DELETE under a running job are `409`; a delete that races past the guard fails the job instead of resurrecting the book (both tested). Also landed: unique bundle temp names, login rate-limiting (10 fails / 15 min / IP → 429), security headers (CSP/nosniff/DENY/no-referrer), zip decompression caps in `crates/synth` (256 MiB/entry, 1 GiB/archive), piper tarball sha256 verification, `.onnx` download size sanity band, `413` + XSS-escaping pins, dev bind pinned to loopback in the justfile. `cargo clippy` + `cargo test --workspace` (211) green. Runbook §2(e) voiceId expectation updated — re-run §2 before the §4 SPA check.
-  - Remaining (human): §4 — import `/tmp/book.synth.taletrek` (+ `/tmp/book.resynth.taletrek`) into the SPA via the T3 button and confirm audio plays (regenerate both artifacts after the manifest-voice fix).
+  - 2026-08-24 (ship walkthrough): §2 (e)+(f) re-run live post-hardening — manifest-voice rewrite confirmed end-to-end (`lessac → hfc_female`, then ryan resynth). Found + fixed a real blocker: the worker's curated cache-miss download fetched the voice config as `<voice>.json` (404 on HF — it's hosted `<voice>.onnx.json`); masked until now because e2e gates seed the voice cache and the runbook resynth passed `voicePath` (`22508db`, regression test pins the URL shape). §4 SPA audio-plays check done browser-driven (both bundles import "with audio"; playback probes show real durations + auto-advance + "Finished", console clean; ryan/hfc bytes distinct) — human accepted the automated evidence. Effort ships.
 
 ### Checkpoint: Ready for review
-- [ ] All `spec.md` §"Success criteria" checked or explicitly deferred (runbook walkthrough = human-run, above).
-- [ ] `spec.md` `status:` flips `draft → active` on /build checkpoint; flips to `shipped` on the merge commit.
+- [x] All `spec.md` §"Success criteria" checked or explicitly deferred (runbook walkthrough = human-run, above).
+- [x] `spec.md` `status:` flips `draft → active` on /build checkpoint; flips to `shipped` on the merge commit. *(shipped 2026-08-24)*
 
 ## Follow-on (NOT this effort)
 - [ ] Worker-mode job queue (desktop-as-worker connecting to the server) — phase 2 / new effort

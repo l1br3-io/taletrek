@@ -1,6 +1,7 @@
 ---
-status: active
+status: shipped
 started: 2026-08-09
+shipped: 2026-08-24
 ---
 
 # SPEC — Off-device synth track · Effort 4: Personal server

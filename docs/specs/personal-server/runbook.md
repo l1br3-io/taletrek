@@ -290,8 +290,11 @@ Effort 4 is smoke-clean when **all** of:
       segments carry `OggS`. *(2026-08-20 @ `70ec7d9`)*
 - [x] §2 (f) resynth produces a distinct-voiced, `OggS`-valid bundle. *(2026-08-20 @ `70ec7d9`)*
 - [x] §3 `docker build` + `docker run` reaches `/api/health` → `ok`. *(2026-08-20 @ `70ec7d9`)*
-- [ ] §4 the synthesized bundle imports into the SPA and **audio plays**; the
-      resynth'd bundle plays with the new voice.
+- [x] §4 the synthesized bundle imports into the SPA and **audio plays**; the
+      resynth'd bundle plays with the new voice. *(2026-08-24 @ `22508db`,
+      browser-driven: both bundles import "with audio"; `<audio>` playback
+      probes show real segment durations + scheduler auto-advance to
+      "Finished", console clean; ryan/hfc segment bytes verified distinct)*
 - [x] §5 the two `#[ignore]`d integration tests pass. *(2026-08-20 @ `70ec7d9`, re-run after the piper `--config` fix `4725dd0`)*
 
 Record the run **date + commit** in `todo.md` (the "Final gates" block) when
