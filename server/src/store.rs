@@ -30,7 +30,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use taletrek_synth::{
-    read_book_bundle, read_library_bundle, write_book_bundle, BookMeta, BundleError,
+    read_audio_segment, read_book_bundle, read_library_bundle, write_book_bundle, AudioSegment,
+    BookMeta, BundleError,
 };
 
 /// Process-local sequence uniquifying [`put_bundle`]'s temp filenames (with the
@@ -175,6 +176,23 @@ pub fn get_bundle(data_dir: &Path, book_id: &str) -> Result<Vec<u8>, StoreError>
         }
         Err(e) => Err(e.into()),
     }
+}
+
+/// Read exactly one audio segment out of a stored bundle — central-directory
+/// lookup + single-entry read, no full parse (T10's playback path). `Ok(None)`
+/// when the bundle carries no segment for `key` (text-only bundles answer
+/// `None` for every key); `NotFound` when the book has no bundle on disk.
+pub fn get_audio_segment(
+    data_dir: &Path,
+    book_id: &str,
+    key: &str,
+) -> Result<Option<AudioSegment>, StoreError> {
+    validate_book_id(book_id)?;
+    let path = bundle_file(data_dir, book_id);
+    if !path.is_file() {
+        return Err(StoreError::NotFound(book_id.to_string()));
+    }
+    Ok(read_audio_segment(&path, key)?)
 }
 
 /// Does a stored bundle exist for `book_id`? Cheap existence check used by the
@@ -385,6 +403,34 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let err = get_bundle(tmp.path(), "absent").unwrap_err();
         assert!(matches!(err, StoreError::NotFound(_)), "got: {err}");
+    }
+
+    // ---- single-entry audio read (T10) ----
+
+    #[test]
+    fn get_audio_segment_reads_one_entry_without_full_parse() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ingested = ingest(tmp.path(), BOOK_FULL).unwrap();
+        let id = &ingested[0].meta.id;
+        let bundle = read_book_bundle(BOOK_FULL).unwrap();
+        let (key, seg) = bundle.audio.iter().next().expect("fixture has audio");
+        let got = get_audio_segment(tmp.path(), id, key)
+            .unwrap()
+            .expect("segment present");
+        assert_eq!(got.key, *key);
+        assert_eq!(got.bytes, seg.bytes);
+    }
+
+    #[test]
+    fn get_audio_segment_missing_book_or_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No bundle on disk → NotFound.
+        let err = get_audio_segment(tmp.path(), "absent", "v:2:ab").unwrap_err();
+        assert!(matches!(err, StoreError::NotFound(_)), "got: {err}");
+        // Bundle present, key absent → Ok(None).
+        let ingested = ingest(tmp.path(), BOOK_FULL).unwrap();
+        let got = get_audio_segment(tmp.path(), &ingested[0].meta.id, "v:2:deadbeef").unwrap();
+        assert!(got.is_none());
     }
 
     #[test]

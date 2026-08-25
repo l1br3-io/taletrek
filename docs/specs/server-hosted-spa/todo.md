@@ -19,7 +19,7 @@
 - [x] T7: `GET /api/session` (`tasks/007-api-session.md`)
 - [x] T8: Static SPA serving + CSP + panel → `/ui/admin` interim (`tasks/008-static-spa-hosting.md`)
 - [x] T9: Chapters — lazy SQLite explode + endpoint (`tasks/009-api-chapters.md`)
-- [ ] T10: Audio-by-content-key endpoint (`tasks/010-api-audio-by-key.md`)
+- [x] T10: Audio-by-content-key endpoint (`tasks/010-api-audio-by-key.md`)
 - [ ] T11: Progress PATCH + position column (`tasks/011-api-progress.md`)
 - [ ] T12: Dev workflow — Vite proxy + `just dev` (`tasks/012-dev-proxy.md`)
 

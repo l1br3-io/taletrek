@@ -1,6 +1,7 @@
 //! Book-bundle read/write (ZIP container). See `docs/bundle-format.md`.
 
 use std::io::{Cursor, Read, Write};
+use std::path::Path;
 
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
@@ -83,6 +84,77 @@ pub fn write_book_bundle(
     Ok(())
 }
 
+/// Reject content keys that could shape a lookup outside `audio/`.
+///
+/// A content key becomes an entry-name fragment (`audio/<key>.<ext>`), so it
+/// must be a single safe name component — same policy the server applies to
+/// book ids (its `store::validate_book_id`). Colons are legal and expected:
+/// real keys are `${voice}:${NORM_VERSION}:${sha256}`.
+pub fn validate_audio_key(key: &str) -> Result<(), BundleError> {
+    if key.is_empty()
+        || key == "."
+        || key == ".."
+        || key.contains('/')
+        || key.contains('\\')
+        || key.contains("..")
+        || key.contains('\0')
+    {
+        return Err(BundleError::InvalidAudioKey(key.to_string()));
+    }
+    Ok(())
+}
+
+/// Read exactly one audio segment from a `.taletrek` file **on disk** —
+/// central-directory lookup + single-entry decompress, no full unzip and no
+/// whole-file read into memory (the server's per-paragraph playback path).
+///
+/// The entry name is resolved through the manifest's declared codec
+/// (`audio/<key>.<ext>`), mirroring how [`write_book_bundle`] names segments —
+/// all of a bundle's segments share the manifest codec, so this is exact.
+/// Returns `Ok(None)` when the archive carries no segment for `key` (a
+/// text-only bundle answers `None` for every key). The manifest read + entry
+/// decompress are budgeted like every other bundle read (see [`ReadBudget`]).
+pub fn read_audio_segment(
+    bundle_path: &Path,
+    key: &str,
+) -> Result<Option<AudioSegment>, BundleError> {
+    validate_audio_key(key)?;
+    let file = std::fs::File::open(bundle_path)?;
+    let mut archive = ZipArchive::new(std::io::BufReader::new(file))?;
+    let budget = ReadBudget::default();
+    let mut remaining = budget.total_bytes;
+
+    let manifest: Manifest = read_json_entry(
+        &mut archive,
+        MANIFEST_ENTRY,
+        "manifest.json",
+        budget,
+        &mut remaining,
+    )?;
+    if manifest.schema_version != SCHEMA_VERSION {
+        return Err(BundleError::UnknownSchema {
+            found: manifest.schema_version,
+            supported: SCHEMA_VERSION,
+        });
+    }
+    if !manifest.audio.present {
+        return Ok(None);
+    }
+    let name = format!("{AUDIO_PREFIX}{key}.{}", manifest.audio.codec.ext());
+    let mut f = match archive.by_name(&name) {
+        Ok(f) => f,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let entry_name = f.name().to_string();
+    let bytes = read_capped(&mut f, &entry_name, budget, &mut remaining)?;
+    Ok(Some(AudioSegment {
+        key: key.to_string(),
+        codec: manifest.audio.codec,
+        bytes,
+    }))
+}
+
 /// Parse a `.taletrek` ZIP from `input` into a [`BookBundle`] under the
 /// default [`ReadBudget`].
 pub fn read_book_bundle(input: &[u8]) -> Result<BookBundle, BundleError> {
@@ -162,9 +234,12 @@ pub(crate) fn book_bundle_to_bytes(bundle: &BookBundle) -> Result<Vec<u8>, Bundl
     Ok(buf.into_inner())
 }
 
-/// Read + deserialize a JSON entry by name from the archive.
-fn read_json_entry<T: serde::de::DeserializeOwned>(
-    archive: &mut ZipArchive<Cursor<Vec<u8>>>,
+/// Read + deserialize a JSON entry by name from the archive. Generic over the
+/// underlying reader so both the in-memory parse path (`Cursor<Vec<u8>>`) and
+/// the on-disk single-entry path (`BufReader<File>`, [`read_audio_segment`])
+/// share one implementation.
+fn read_json_entry<T: serde::de::DeserializeOwned, R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
     name: &str,
     missing: &'static str,
     budget: ReadBudget,
@@ -315,5 +390,175 @@ mod tests {
         let b = ReadBudget::default();
         assert_eq!(b.max_entry_bytes, DEFAULT_MAX_ENTRY_BYTES);
         assert_eq!(b.total_bytes, DEFAULT_TOTAL_BYTES);
+    }
+
+    // ---- read_audio_segment (single-entry disk read, T10 playback path) ----
+
+    use std::collections::HashMap;
+
+    use crate::bundle::audio::AudioSegment;
+    use crate::bundle::text::ChapterText;
+    use crate::bundle::BookBundle;
+    use crate::cache_key;
+
+    const TEST_VOICE: &str = "en_US-lessac-medium";
+
+    /// A minimal well-formed bundle whose audio map is caller-supplied.
+    /// `manifest.audio` is derived from the map (present/segment_count), with
+    /// the caller-declared codec.
+    fn bundle_with_audio(
+        codec: super::super::audio::AudioCodec,
+        audio: HashMap<String, AudioSegment>,
+    ) -> BookBundle {
+        BookBundle {
+            manifest: Manifest {
+                schema_version: SCHEMA_VERSION,
+                kind: ManifestKind::Book,
+                book: BookMeta {
+                    id: "bk_audio".into(),
+                    title: "Audio".into(),
+                    author: None,
+                    source_format: "txt".into(),
+                    chapter_count: 1,
+                    voice_id: TEST_VOICE.into(),
+                    created_at: 0,
+                    updated_at: 0,
+                    progress_fraction: None,
+                },
+                audio: AudioMeta {
+                    present: !audio.is_empty(),
+                    codec,
+                    norm_version: NORM_VERSION.parse().unwrap(),
+                    segment_count: audio.len() as u32,
+                },
+                generator: Generator {
+                    app: "taletrek-test".into(),
+                    version: "0.0.0".into(),
+                },
+            },
+            chapters: vec![ChapterText::new(
+                "bk_audio",
+                0,
+                "Ch",
+                vec!["Hello world.".into(), "Second paragraph.".into()],
+            )],
+            audio,
+        }
+    }
+
+    /// Serialize `bundle` to a temp `.taletrek` file on disk; returns the
+    /// kept-alive tempdir + the file's path.
+    fn bundle_on_disk(bundle: &BookBundle) -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bundle.taletrek");
+        let mut buf = Cursor::new(Vec::new());
+        write_book_bundle(bundle, &mut buf).unwrap();
+        std::fs::write(&path, buf.into_inner()).unwrap();
+        (tmp, path)
+    }
+
+    /// An audio-present bundle with two opus segments carrying `OggS`-magic
+    /// bytes (the shape the server's playback endpoint serves).
+    fn opus_bundle_on_disk() -> (tempfile::TempDir, std::path::PathBuf, [String; 2]) {
+        let keys = [
+            cache_key(TEST_VOICE, "Hello world."),
+            cache_key(TEST_VOICE, "Second paragraph."),
+        ];
+        let audio = keys
+            .iter()
+            .cloned()
+            .map(|key| {
+                let bytes = format!("OggS-fake-frame-for-{key}");
+                (
+                    key.clone(),
+                    AudioSegment {
+                        key,
+                        codec: AudioCodec::Opus,
+                        bytes: bytes.into_bytes(),
+                    },
+                )
+            })
+            .collect();
+        let (tmp, path) = bundle_on_disk(&bundle_with_audio(AudioCodec::Opus, audio));
+        (tmp, path, keys)
+    }
+
+    #[test]
+    fn read_audio_segment_returns_the_one_entry_bytes() {
+        let (_tmp, path, keys) = opus_bundle_on_disk();
+        let seg = read_audio_segment(&path, &keys[0])
+            .expect("read")
+            .expect("segment present");
+        assert_eq!(seg.key, keys[0]);
+        assert_eq!(seg.codec, AudioCodec::Opus);
+        assert_eq!(
+            seg.bytes,
+            format!("OggS-fake-frame-for-{}", keys[0]).as_bytes()
+        );
+    }
+
+    #[test]
+    fn read_audio_segment_missing_key_is_none() {
+        let (_tmp, path, _) = opus_bundle_on_disk();
+        let absent = cache_key(TEST_VOICE, "A paragraph that was never synthesized.");
+        assert!(read_audio_segment(&path, &absent).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_audio_segment_text_only_bundle_is_none_for_any_key() {
+        let (tmp, path) = bundle_on_disk(&bundle_with_audio(AudioCodec::Opus, HashMap::new()));
+        let _ = tmp; // kept alive
+        let key = cache_key(TEST_VOICE, "Hello world.");
+        assert!(read_audio_segment(&path, &key).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_audio_segment_resolves_the_manifest_codec_extension() {
+        // A wav-codec bundle stores `audio/<key>.wav` — the lookup must follow
+        // the manifest's declared codec, not assume `.opus`.
+        let key = cache_key(TEST_VOICE, "Hello world.");
+        let mut audio = HashMap::new();
+        audio.insert(
+            key.clone(),
+            AudioSegment {
+                key: key.clone(),
+                codec: AudioCodec::Wav,
+                bytes: b"RIFFfake-wav".to_vec(),
+            },
+        );
+        let (_tmp, path) = bundle_on_disk(&bundle_with_audio(AudioCodec::Wav, audio));
+        let seg = read_audio_segment(&path, &key)
+            .unwrap()
+            .expect("wav segment");
+        assert_eq!(seg.codec, AudioCodec::Wav);
+        assert_eq!(seg.bytes, b"RIFFfake-wav");
+    }
+
+    #[test]
+    fn read_audio_segment_missing_file_is_io_error() {
+        let err = read_audio_segment(
+            std::path::Path::new("/nonexistent-taletrek-test/bundle.taletrek"),
+            "v:2:ab",
+        )
+        .unwrap_err();
+        assert!(matches!(err, BundleError::Io(_)), "got: {err}");
+    }
+
+    #[test]
+    fn traversal_shaped_keys_are_rejected_before_any_lookup() {
+        for bad in ["", ".", "..", "../evil", "a/b", "a\\b", "a..b", "x\0y"] {
+            let err = validate_audio_key(bad).unwrap_err();
+            assert!(
+                matches!(err, BundleError::InvalidAudioKey(_)),
+                "key {bad:?} should be rejected; got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn colons_in_keys_are_legal() {
+        // Real keys are `${voice}:${NORM_VERSION}:${sha256}` — colons must pass.
+        let key = cache_key(TEST_VOICE, "Hello world.");
+        assert!(validate_audio_key(&key).is_ok());
     }
 }
