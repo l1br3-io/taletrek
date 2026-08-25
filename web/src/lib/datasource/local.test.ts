@@ -3,6 +3,8 @@ import type { AudioCacheRecord, Book, BookId, Chapter } from '../../types'
 import { newBookId, newChapterId, voiceId } from '../../types'
 import type { AppliedProcessing } from '../ai/types'
 import { audioCacheKey } from '../audio-cache'
+import { putSegment } from '../audio-segment-cache'
+import { parseManifest } from '../backup'
 import { type BookAudio, putBookAudio } from '../book-audio'
 import { _clearDBForTests, _resetDBForTests, putAudioCacheEntry, putBookFile } from '../db'
 import type { ParseResult } from '../parse/types'
@@ -284,6 +286,60 @@ describe('localDatasource — library parity', () => {
     expect(await localDatasource.getBookAudio(book.id)).toBeDefined()
     await localDatasource.deleteBookAudio(book.id)
     expect(await localDatasource.getBookAudio(book.id)).toBeUndefined()
+  })
+})
+
+describe('localDatasource — storage management + backup parity', () => {
+  it('audio-cache size, evict-to-budget, and clear report counts through the facade', async () => {
+    const book = makeBook('Storage')
+    await localDatasource.putBook(book)
+    const key = await audioCacheKey(TEST_VOICE, 'Hello world.')
+    await putAudioCacheEntry(makeAudioCacheRecord(key, book.id))
+    expect(await localDatasource.getAudioCacheSize()).toBe(3)
+
+    expect(await localDatasource.evictAudioCacheToBudget(2)).toBe(1)
+    expect(await localDatasource.getAudioCacheSize()).toBe(0)
+
+    const otherKey = await audioCacheKey(TEST_VOICE, 'Second paragraph.')
+    await putAudioCacheEntry(makeAudioCacheRecord(otherKey, book.id))
+    expect(await localDatasource.clearAudioCache()).toBe(1)
+    expect(await localDatasource.getAudioCacheSize()).toBe(0)
+  })
+
+  it('clearSegmentCache empties the segment store', async () => {
+    await putSegment('seg-key', new Blob(['seg']), 1, { voiceId: TEST_VOICE })
+    expect(await localDatasource.clearSegmentCache()).toBe(1)
+    expect(await localDatasource.clearSegmentCache()).toBe(0)
+  })
+
+  it('clearAllStores wipes every datasource-owned store', async () => {
+    const book = makeBook('Wipe')
+    await localDatasource.putBook(book)
+    await putAudioCacheEntry(
+      makeAudioCacheRecord(await audioCacheKey(TEST_VOICE, 'Hello world.'), book.id),
+    )
+    await putSegment('seg-key', new Blob(['seg']), 1, { voiceId: TEST_VOICE })
+
+    await localDatasource.clearAllStores()
+
+    expect(await localDatasource.getAllBooks()).toEqual([])
+    expect(await localDatasource.getAudioCacheSize()).toBe(0)
+    expect(await localDatasource.clearSegmentCache()).toBe(0)
+  })
+
+  it('exportBackup then importBackup round-trips: manifest carries the book, re-import skips it', async () => {
+    const book = makeBook('Backup')
+    await localDatasource.putBook(book)
+    await localDatasource.putChapters(makeChapters(book.id))
+
+    const blob = await localDatasource.exportBackup()
+    const manifest = parseManifest(await blob.text())
+    expect(manifest.books.map((b) => b.id)).toEqual([book.id])
+
+    const report = await localDatasource.importBackup(blob)
+    expect(report.booksSkipped).toBe(1)
+    expect(report.booksImported).toBe(0)
+    expect(await localDatasource.getBook(book.id)).toEqual(book)
   })
 })
 

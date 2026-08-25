@@ -23,12 +23,22 @@
 
 import type { Book, BookFile, BookId, BookPosition, Chapter, ChapterId, VoiceId } from '../../types'
 import type { AiSettings, AppliedProcessing, TransformDefinition } from '../ai/types'
+import type { ImportOptions, ImportReport } from '../backup'
 import type { BookAudio } from '../book-audio'
 import type { IngestResult } from '../ingest'
 import type { BookTransformState, TransformJobSpec } from '../transform/manager'
 import type { JobSpec, JobState } from '../upload/manager'
 
-export type { BookAudio, BookTransformState, IngestResult, JobSpec, JobState, TransformJobSpec }
+export type {
+  BookAudio,
+  BookTransformState,
+  ImportOptions,
+  ImportReport,
+  IngestResult,
+  JobSpec,
+  JobState,
+  TransformJobSpec,
+}
 
 /**
  * Discriminated result of cancelling whatever a pipeline is running for a
@@ -114,6 +124,38 @@ export interface LibraryDatasource {
   deleteAudioCacheKeys(keys: string[]): Promise<number>
   /** Drop the book's whole-book audio record (invalidated by text changes). */
   deleteBookAudio(bookId: BookId): Promise<void>
+
+  // --- storage management (Settings) ---
+  /** Total bytes currently held in the audio cache. */
+  getAudioCacheSize(): Promise<number>
+  /** Delete every audio-cache entry. Returns the count removed. */
+  clearAudioCache(): Promise<number>
+  /** Delete every audio-segment cache entry. Returns the count removed. */
+  clearSegmentCache(): Promise<number>
+  /**
+   * Evict least-recently-used audio-cache entries until the total is at or
+   * under `budgetBytes`. Returns the count evicted.
+   */
+  evictAudioCacheToBudget(budgetBytes: number): Promise<number>
+  /**
+   * Wipe every datasource-owned store (books, chapters, files, audio cache,
+   * segments, …) in one pass. The Settings device-wipe flow calls this
+   * alongside clearing voices/SW/caches/web-storage, then reloads.
+   */
+  clearAllStores(): Promise<void>
+
+  // --- backup & transfer (Settings) ---
+  /**
+   * Full data export (settings + books + chapters + files; audio cache
+   * excluded — it regenerates) as a JSON `Blob`.
+   */
+  exportBackup(): Promise<Blob>
+  /**
+   * Import a backup blob. Non-destructive per book (existing ids skipped);
+   * settings overwritten by default. Throws `CorruptBackupError` /
+   * `BackupTooLargeError` (re-exported from `lib/datasource`).
+   */
+  importBackup(blob: Blob, opts?: ImportOptions): Promise<ImportReport>
 }
 
 /**
