@@ -16,7 +16,7 @@
 ### Checkpoint: Refactor fence — `pnpm verify` green, standalone PWA identical, UI off `lib/db` (allowlist: settings, secureKeyring).
 
 ## Phase 2 — Server hosts SPA + completes API
-- [ ] T7: `GET /api/session` (`tasks/007-api-session.md`)
+- [x] T7: `GET /api/session` (`tasks/007-api-session.md`)
 - [ ] T8: Static SPA serving + CSP + panel → `/ui/admin` interim (`tasks/008-static-spa-hosting.md`)
 - [ ] T9: Chapters — lazy SQLite explode + endpoint (`tasks/009-api-chapters.md`)
 - [ ] T10: Audio-by-content-key endpoint (`tasks/010-api-audio-by-key.md`)
