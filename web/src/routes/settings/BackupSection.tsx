@@ -3,10 +3,9 @@ import { useState } from 'react'
 import {
   BackupTooLargeError,
   CorruptBackupError,
-  exportBackup,
   type ImportReport,
-  importBackup,
-} from '../../lib/backup'
+  localDatasource,
+} from '../../lib/datasource'
 
 type BackupStatus =
   | { type: 'idle' }
@@ -29,7 +28,7 @@ export function BackupSection({ onImported }: { onImported: () => void }) {
   const handleExport = async () => {
     setStatus({ type: 'busy', label: 'Preparing backup…' })
     try {
-      const blob = await exportBackup()
+      const blob = await localDatasource.exportBackup()
       const date = new Date().toISOString().slice(0, 10)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -58,7 +57,7 @@ export function BackupSection({ onImported }: { onImported: () => void }) {
     }
     setStatus({ type: 'busy', label: 'Importing…' })
     try {
-      const report = await importBackup(file)
+      const report = await localDatasource.importBackup(file)
       onImported()
       setStatus({ type: 'done', message: formatReport(report) })
     } catch (err) {

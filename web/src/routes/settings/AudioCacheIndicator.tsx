@@ -1,5 +1,5 @@
 import { Trash2 } from 'lucide-react'
-import { AUDIO_CACHE_BUDGET_BYTES } from '../../lib/db'
+import { AUDIO_CACHE_BUDGET_BYTES } from '../../lib/datasource'
 
 interface AudioCacheIndicatorProps {
   /** Current cache size in bytes, or null while loading / on error. */

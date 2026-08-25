@@ -1,4 +1,4 @@
-import { clearAllStores } from '../../lib/db'
+import { localDatasource } from '../../lib/datasource'
 import { ttsClient } from '../../lib/tts/client'
 
 /**
@@ -12,7 +12,7 @@ import { ttsClient } from '../../lib/tts/client'
  */
 export async function clearAllData(): Promise<void> {
   await Promise.allSettled([
-    clearAllStores(),
+    localDatasource.clearAllStores(),
     ttsClient.clearAllStored(),
     clearServiceWorkers(),
     clearCaches(),

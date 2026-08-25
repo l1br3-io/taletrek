@@ -9,12 +9,18 @@
  */
 
 import { getCachedParagraphIds } from '../audio-cache'
+import { exportBackup, importBackup } from '../backup'
 import { deleteBookAudio, getBookAudio } from '../book-audio'
 import {
+  clearAllStores,
+  clearAudioCache,
+  clearSegmentCache,
   deleteAudioCacheKeys,
   deleteBookCascade,
+  evictAudioCacheToBudget,
   getAllBooks,
   getAudioCacheKeysByBook,
+  getAudioCacheSize,
   getBook,
   getBookFile,
   getChaptersByBook,
@@ -32,18 +38,27 @@ import { bookTransformManager } from '../transform/manager'
 import { uploadManager } from '../upload/manager'
 import type { LibraryDatasource, SynthPipeline } from './types'
 
+export { AUDIO_CACHE_BUDGET_BYTES } from '../db'
+
 export const localDatasource: LibraryDatasource = {
+  clearAllStores,
+  clearAudioCache,
+  clearSegmentCache,
   deleteAudioCacheKeys,
   deleteBookAudio,
   deleteBookCascade,
+  evictAudioCacheToBudget,
+  exportBackup,
   getAllBooks,
   getAudioCacheKeysByBook,
+  getAudioCacheSize,
   getBook,
   getBookAudio,
   getBookFile,
   getCachedParagraphIds,
   getChaptersByBook,
   getMostRecentBook,
+  importBackup,
   putBook,
   putChapters,
   replaceBookChapters,

@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useOnline } from '../../hooks/useOnline'
-import {
-  clearAudioCache,
-  clearSegmentCache,
-  evictAudioCacheToBudget,
-  getAllBooks,
-} from '../../lib/db'
+import { localDatasource } from '../../lib/datasource'
 import { ttsClient } from '../../lib/tts/client'
 import { CURATED_VOICES } from '../../lib/tts/voices'
 import type { VoiceId } from '../../types'
@@ -47,7 +42,7 @@ export function useSettingsPageState({
   useEffect(() => {
     void refreshStored()
     void (async () => {
-      const books = await getAllBooks()
+      const books = await localDatasource.getAllBooks()
       setBooksCount(books.length)
     })()
   }, [refreshStored])
@@ -74,8 +69,8 @@ export function useSettingsPageState({
   const handleClearCache = useCallback(async () => {
     setClearingCache(true)
     try {
-      await clearAudioCache()
-      await clearSegmentCache()
+      await localDatasource.clearAudioCache()
+      await localDatasource.clearSegmentCache()
       await cacheStats.refresh()
       await storageEstimate.refresh()
     } finally {
@@ -88,7 +83,7 @@ export function useSettingsPageState({
       const prevMb = audioCacheBudgetMb
       setAudioCacheBudgetMb(mb)
       if (mb < prevMb) {
-        await evictAudioCacheToBudget(mb * 1024 * 1024)
+        await localDatasource.evictAudioCacheToBudget(mb * 1024 * 1024)
         await cacheStats.refresh()
       }
     },

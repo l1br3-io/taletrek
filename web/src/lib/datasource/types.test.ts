@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { getCachedParagraphIds } from '../audio-cache'
+import { exportBackup, importBackup } from '../backup'
 import { deleteBookAudio, getBookAudio } from '../book-audio'
 import {
+  clearAllStores,
+  clearAudioCache,
+  clearSegmentCache,
   deleteAudioCacheKeys,
   deleteBookCascade,
+  evictAudioCacheToBudget,
   getAllBooks,
   getAudioCacheKeysByBook,
+  getAudioCacheSize,
   getBook,
   getBookFile,
   getChaptersByBook,
@@ -35,17 +41,24 @@ import type {
 
 /** The exact library surface — pinned so interface growth is a deliberate act. */
 const libraryKeys = [
+  'clearAllStores',
+  'clearAudioCache',
+  'clearSegmentCache',
   'deleteAudioCacheKeys',
   'deleteBookAudio',
   'deleteBookCascade',
+  'evictAudioCacheToBudget',
+  'exportBackup',
   'getAllBooks',
   'getAudioCacheKeysByBook',
+  'getAudioCacheSize',
   'getBook',
   'getBookAudio',
   'getBookFile',
   'getCachedParagraphIds',
   'getChaptersByBook',
   'getMostRecentBook',
+  'importBackup',
   'putBook',
   'putChapters',
   'replaceBookChapters',
@@ -86,17 +99,24 @@ type TransformSlice = Pick<SynthPipeline, (typeof transformKeys)[number]>
 describe('datasource types — LibraryDatasource', () => {
   it('is implementable by pure delegation to lib/db + audio helpers', () => {
     const local: LibraryDatasource = {
+      clearAllStores,
+      clearAudioCache,
+      clearSegmentCache,
       deleteAudioCacheKeys,
       deleteBookAudio,
       deleteBookCascade,
+      evictAudioCacheToBudget,
+      exportBackup,
       getAllBooks,
       getAudioCacheKeysByBook,
+      getAudioCacheSize,
       getBook,
       getBookAudio,
       getBookFile,
       getChaptersByBook,
       getCachedParagraphIds,
       getMostRecentBook,
+      importBackup,
       putBook,
       putChapters,
       replaceBookChapters,
