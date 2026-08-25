@@ -29,6 +29,7 @@
 //! for the API, cookie for browsers). A new route mounted on the outer router
 //! (outside the auth layer) is a security bug.
 
+mod audio;
 mod auth;
 mod books;
 mod chapters;
@@ -120,6 +121,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/books/{id}/bundle", get(books::download_bundle))
         .route("/api/books/{id}/chapters", get(chapters::get_chapters))
+        .route(
+            "/api/books/{id}/audio/{contentKey}",
+            get(audio::get_audio),
+        )
         .route("/api/books/{id}/synth", post(jobs::trigger_synth))
         .route("/api/books/{id}/resynth", post(jobs::trigger_resynth))
         .route("/api/jobs", get(jobs::list_jobs))

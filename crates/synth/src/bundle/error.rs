@@ -43,6 +43,15 @@ pub enum BundleError {
         limit: u64,
     },
 
+    /// An audio content key is not a safe single name component (empty, `.`,
+    /// `..`, contains a path separator, `..`, or NUL) — rejected before any
+    /// archive lookup so a crafted key can never probe outside `audio/`.
+    /// Real keys are `${voice}:${NORM_VERSION}:${sha256}` and always pass.
+    #[error(
+        "invalid audio key {0:?}: must be non-empty and must not contain path separators, '..', or NUL"
+    )]
+    InvalidAudioKey(String),
+
     /// The summed decompressed size of an archive's entries exceeded the total
     /// budget — a crafted (zip-of-zips) archive, or simply an enormous library.
     #[error("bundle contents decompress beyond the total budget of {limit} bytes")]
