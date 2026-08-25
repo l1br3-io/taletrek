@@ -108,6 +108,7 @@ Full detail lives in [`docs/gotchas.md`](docs/gotchas.md) — **read the relevan
 26. **Whole-book streaming transform — in-place, resume mirrors uploadJob** — [`G26`](docs/gotchas.md#g26)
 27. **Bundle import loads whole archive into memory (jszip); huge bundles pressure mobile RAM** — [`G27`](docs/gotchas.md#g27)
 28. **`sourceFormat: "unknown"` maps to `'txt'` on SPA import** — [`G28`](docs/gotchas.md#g28)
+29. **Hosted-SPA CSP: document-only headers; Google Fonts link already dead in prod; manifest behind cookie auth** — [`G29`](docs/gotchas.md#g29)
 
 ## How to resume (in a new session)
 

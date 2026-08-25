@@ -22,7 +22,7 @@
           <td><span class="status {{ j.status }}">{{ j.status }}</span></td>
           <td class="mono">{{ j.voice }}</td>
           <td class="mono">{{ j.progress }}</td>
-          <td><a href="/ui/books/{{ j.book_id }}">{{ j.book_id }}</a></td>
+          <td><a href="/ui/admin/books/{{ j.book_id }}">{{ j.book_id }}</a></td>
           <td>{% if let Some(e) = j.error %}<span class="err">{{ e }}</span>{% else %}<span class="dim">—</span>{% endif %}</td>
         </tr>
       {% endfor %}

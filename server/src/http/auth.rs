@@ -10,9 +10,10 @@
 //!    browser/UI path, since plain HTML `<form>` submits cannot attach a bearer
 //!    header.
 //!
-//! On failure, `/api/*` requests get `401` (the existing API contract); UI
-//! requests (`/` or `/ui/*`) get a `302` redirect to `/ui/login` so a browser
-//! lands on the login form instead of a bare 401.
+//! On failure, `/api/*` requests get `401` (the existing API contract); every
+//! other path (the SPA at `/` + its client routes/assets, the `/ui/*` panel)
+//! gets a `302` redirect to `/ui/login` so a browser lands on the login form
+//! instead of a bare 401.
 //!
 //! # The browser-auth tradeoff (T11)
 //!
@@ -135,7 +136,7 @@ impl LoginLimiter {
 ///
 /// Mounted as an `axum::middleware::from_fn` layer around the protected routes
 /// in [`crate::http::router`]. `/api/health` + `/ui/login` sit outside this
-/// layer. On failure, `/api/*` → `401`; `/` + `/ui/*` → `302 /ui/login`.
+/// layer. On failure, `/api/*` → `401`; every non-API path → `302 /ui/login`.
 ///
 /// # Constant-time compare
 ///
@@ -256,11 +257,14 @@ fn bearer_token(request: &Request) -> Option<&[u8]> {
         .and_then(|h| h.strip_prefix(BEARER_PREFIX).map(str::as_bytes))
 }
 
-/// Is `path` a browser/UI route (vs a JSON `/api` route)? Used to decide 401 vs
-/// redirect-to-login on auth failure. `/api/health` is excluded from this (it's
-/// unauthenticated anyway, so the question never arises for it).
+/// Is `path` a browser/UI surface (vs a JSON `/api` route)? Used to decide 401
+/// vs redirect-to-login on auth failure. Since T8 the SPA owns every non-API
+/// path (`/`, client routes, assets) alongside the panel — anything outside
+/// `/api/*` redirects so a deep-linked browser lands on the login form.
+/// `/api/health` is excluded from this (it's unauthenticated anyway, so the
+/// question never arises for it).
 fn is_ui_path(path: &str) -> bool {
-    path == "/" || path.starts_with("/ui")
+    !path.starts_with("/api")
 }
 
 /// Read a named cookie's value off the `Cookie` header. Returns `None` when the

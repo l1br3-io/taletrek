@@ -41,6 +41,9 @@ const ENV_PIPER: &str = "TALETREK_PIPER";
 const ENV_FFMPEG: &str = "TALETREK_FFMPEG";
 /// Env var: max accepted upload body size in bytes (`TALETREK_MAX_BUNDLE_BYTES`).
 const ENV_MAX_BUNDLE_BYTES: &str = "TALETREK_MAX_BUNDLE_BYTES";
+/// Env var: directory holding the built SPA to serve at `/`
+/// (`TALETREK_STATIC_DIR`, default `./web-dist`).
+const ENV_STATIC_DIR: &str = "TALETREK_STATIC_DIR";
 
 /// Default max upload body size: 256 MiB. Generous enough for a single full
 /// bundle (audio segments) or a multi-book `.taletrek-lib`, while bounding the
@@ -82,6 +85,11 @@ pub struct Settings {
     /// Max accepted upload body size in bytes (applied to `POST /api/books` via
     /// axum's `DefaultBodyLimit`). Oversized uploads are rejected with `413`.
     pub max_bundle_bytes: usize,
+    /// Directory holding the built SPA (`web/dist` after `pnpm build`) served
+    /// at `/` with SPA history fallback (T8). Not required to exist: a
+    /// missing/empty dir logs a boot warning and the server keeps running
+    /// headless (API + `/ui/admin` panel still work).
+    pub static_dir: PathBuf,
 }
 
 /// Errors surfaced while resolving [`Settings`]. Each carries enough context
@@ -145,6 +153,8 @@ struct ConfigFile {
     ffmpeg: Option<String>,
     /// Mirrors `TALETREK_MAX_BUNDLE_BYTES`.
     max_bundle_bytes: Option<usize>,
+    /// Mirrors `TALETREK_STATIC_DIR`.
+    static_dir: Option<String>,
 }
 
 impl Settings {
@@ -214,6 +224,11 @@ impl Settings {
             None => cfg.max_bundle_bytes.unwrap_or(DEFAULT_MAX_BUNDLE_BYTES),
         };
 
+        let static_dir = env(ENV_STATIC_DIR)
+            .or(cfg.static_dir)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("./web-dist"));
+
         Ok(Self {
             data_dir,
             bind,
@@ -223,6 +238,7 @@ impl Settings {
             piper,
             ffmpeg,
             max_bundle_bytes,
+            static_dir,
         })
     }
 }
@@ -453,6 +469,43 @@ mod tests {
     }
 
     #[test]
+    fn static_dir_defaults_to_web_dist() {
+        let s = Settings::resolve(
+            &|k: &str| match k {
+                ENV_TOKEN => Some("t".into()),
+                _ => None,
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.static_dir, PathBuf::from("./web-dist"));
+    }
+
+    #[test]
+    fn static_dir_env_and_config_overrides() {
+        // Env wins.
+        let s = Settings::resolve(
+            &|k: &str| match k {
+                ENV_TOKEN => Some("t".into()),
+                ENV_STATIC_DIR => Some("/srv/spa".into()),
+                _ => None,
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.static_dir, PathBuf::from("/srv/spa"));
+
+        // Config file supplies it when env is silent.
+        let cfg = ConfigFile {
+            token: Some("t".into()),
+            static_dir: Some("/opt/web".into()),
+            ..Default::default()
+        };
+        let s = Settings::resolve(&|_| None, Some(&cfg)).unwrap();
+        assert_eq!(s.static_dir, PathBuf::from("/opt/web"));
+    }
+
+    #[test]
     fn parse_config_file_round_trip() {
         let toml_src = r#"
 token = "abc"
@@ -463,6 +516,7 @@ piper = "/opt/piper/piper"
 ffmpeg = "ffmpeg"
 voices_cache_dir = "/var/cache/taletrek/voices"
 max_bundle_bytes = 67108864
+static_dir = "/srv/taletrek/web-dist"
 "#;
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(tmp.path(), toml_src).unwrap();
@@ -472,5 +526,6 @@ max_bundle_bytes = 67108864
         assert_eq!(parsed.jobs, Some(4));
         assert_eq!(parsed.piper.as_deref(), Some("/opt/piper/piper"));
         assert_eq!(parsed.max_bundle_bytes, Some(67_108_864));
+        assert_eq!(parsed.static_dir.as_deref(), Some("/srv/taletrek/web-dist"));
     }
 }

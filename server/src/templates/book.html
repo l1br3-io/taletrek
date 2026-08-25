@@ -22,7 +22,7 @@
   <h2>Synthesize</h2>
   {# synth refuses a full bundle (409); show it only for text-only books #}
   {% if !book.audio_present %}
-    <form action="/ui/books/{{ book.id }}/synth" method="post">
+    <form action="/ui/admin/books/{{ book.id }}/synth" method="post">
       <div class="row">
         <label for="voice">Voice</label>
         <select id="voice" name="voice">
@@ -31,7 +31,7 @@
         <button type="submit">Synthesize</button>
       </div>
     </form>
-    <p class="muted-note">First-time synth for this book. Runs in the background; check <a href="/ui/jobs">Jobs</a>.</p>
+    <p class="muted-note">First-time synth for this book. Runs in the background; check <a href="/ui/admin/jobs">Jobs</a>.</p>
   {% else %}
     <p class="dim">This book already has audio. Use <strong>Re-voice</strong> to change the voice.</p>
   {% endif %}
@@ -39,7 +39,7 @@
 
 <section>
   <h2>Re-voice (resynth)</h2>
-  <form action="/ui/books/{{ book.id }}/resynth" method="post">
+  <form action="/ui/admin/books/{{ book.id }}/resynth" method="post">
     <div class="row">
       <label for="rvoice">New voice</label>
       <select id="rvoice" name="voice">
@@ -53,12 +53,12 @@
 
 <section>
   <h2>Danger</h2>
-  <form class="inline" action="/ui/books/{{ book.id }}/delete" method="post">
+  <form class="inline" action="/ui/admin/books/{{ book.id }}/delete" method="post">
     <button class="danger" type="submit">Delete book</button>
   </form>
   <p class="muted-note">Removes the stored bundle + index row. Re-uploading restores it.</p>
 </section>
 
-<p class="muted-note"><a href="/">‹ Back to library</a></p>
+<p class="muted-note"><a href="/ui/admin">‹ Back to library</a></p>
 
 {% endblock %}

@@ -240,7 +240,8 @@ fn unwrap_or_empty<T>(
     }
 }
 
-/// `GET /` + `GET /ui/` → the index: library table + upload form + jobs panel.
+/// `GET /ui/admin` + `GET /ui/admin/` → the index: library table + upload form
+/// + jobs panel.
 pub async fn index(State(state): State<AppState>) -> Response {
     let db = state.db.clone();
     let jobs_db = state.db.clone();
@@ -268,7 +269,7 @@ pub async fn index(State(state): State<AppState>) -> Response {
     .into_response()
 }
 
-/// `GET /ui/books/{id}` → book detail: metadata + synth form (voice `<select>`)
+/// `GET /ui/admin/books/{id}` → book detail: metadata + synth form (voice `<select>`)
 /// + resynth form + download link + delete form. Unknown id → error page.
 pub async fn book_detail(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let db = state.db.clone();
@@ -290,13 +291,13 @@ pub async fn book_detail(State(state): State<AppState>, Path(id): Path<String>) 
         }
         None => Html(ErrorTemplate {
             message: format!("book {id} not found"),
-            back: "/".to_string(),
+            back: "/ui/admin".to_string(),
         })
         .into_response(),
     }
 }
 
-/// `GET /ui/jobs` → recent jobs table (poll = refresh the page; no live updates).
+/// `GET /ui/admin/jobs` → recent jobs table (poll = refresh the page; no live updates).
 pub async fn jobs(State(state): State<AppState>) -> Response {
     let db = state.db.clone();
     let rows = tokio::task::spawn_blocking(move || db.list_recent_jobs(JOBS_PANEL_LIMIT))
@@ -310,17 +311,17 @@ pub async fn jobs(State(state): State<AppState>) -> Response {
 
 // ===== POST handlers (Post/Redirect/Get, reuse the JSON-API cores) =====
 
-/// `POST /` (multipart) — the upload form. Reads the `bundle` field, ingests
-/// via the shared [`ingest_bundle_bytes`], redirects to `/`. On error, renders
-/// an error page (the book simply won't appear in the table).
+/// `POST /ui/admin` (multipart) — the upload form. Reads the `bundle` field,
+/// ingests via the shared [`ingest_bundle_bytes`], redirects to `/ui/admin`.
+/// On error, renders an error page (the book simply won't appear in the table).
 pub async fn upload_book(State(state): State<AppState>, mut multipart: Multipart) -> Response {
     let bytes = match read_bundle_field(&mut multipart).await {
         Ok(b) => b,
-        Err((_status, msg)) => return error_page(msg, "/"),
+        Err((_status, msg)) => return error_page(msg, "/ui/admin"),
     };
     match ingest_bundle_bytes(&state, bytes).await {
-        Ok(_) => Redirect::to("/").into_response(),
-        Err((_status, msg)) => error_page(msg, "/"),
+        Ok(_) => Redirect::to("/ui/admin").into_response(),
+        Err((_status, msg)) => error_page(msg, "/ui/admin"),
     }
 }
 
@@ -332,7 +333,7 @@ pub(crate) struct VoiceForm {
     voice: String,
 }
 
-/// `POST /ui/books/{id}/synth` — synth form. Runs [`run_synth_job`] under the
+/// `POST /ui/admin/books/{id}/synth` — synth form. Runs [`run_synth_job`] under the
 /// selected voice, redirects back to the book page. Trigger errors (404/409/…)
 /// surface as an error page.
 pub async fn synth_book(
@@ -347,12 +348,12 @@ pub async fn synth_book(
         Some(form.voice)
     };
     match run_synth_job(ctx, id.clone(), voice, None, None).await {
-        Ok(_) => Redirect::to(&format!("/ui/books/{id}")).into_response(),
-        Err(e) => error_page(e.to_string(), format!("/ui/books/{id}")),
+        Ok(_) => Redirect::to(&format!("/ui/admin/books/{id}")).into_response(),
+        Err(e) => error_page(e.to_string(), format!("/ui/admin/books/{id}")),
     }
 }
 
-/// `POST /ui/books/{id}/resynth` — resynth form. Runs [`run_resynth_job`] under
+/// `POST /ui/admin/books/{id}/resynth` — resynth form. Runs [`run_resynth_job`] under
 /// the selected (required) voice, redirects to the book page.
 pub async fn resynth_book(
     State(state): State<AppState>,
@@ -366,17 +367,18 @@ pub async fn resynth_book(
         Some(form.voice)
     };
     match run_resynth_job(ctx, id.clone(), voice, None, None).await {
-        Ok(_) => Redirect::to(&format!("/ui/books/{id}")).into_response(),
-        Err(e) => error_page(e.to_string(), format!("/ui/books/{id}")),
+        Ok(_) => Redirect::to(&format!("/ui/admin/books/{id}")).into_response(),
+        Err(e) => error_page(e.to_string(), format!("/ui/admin/books/{id}")),
     }
 }
 
-/// `POST /ui/books/{id}/delete` — delete form. Runs the shared
-/// [`delete_book_id`], redirects to `/` (idempotent — a missing book is fine).
+/// `POST /ui/admin/books/{id}/delete` — delete form. Runs the shared
+/// [`delete_book_id`], redirects to `/ui/admin` (idempotent — a missing book
+/// is fine).
 pub async fn delete_book(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match delete_book_id(&state, &id).await {
-        Ok(()) => Redirect::to("/").into_response(),
-        Err((_status, msg)) => error_page(msg, "/"),
+        Ok(()) => Redirect::to("/ui/admin").into_response(),
+        Err((_status, msg)) => error_page(msg, "/ui/admin"),
     }
 }
 
@@ -446,15 +448,15 @@ mod tests {
 
         // Book titles + ids appear (the detail link carries the id).
         assert!(html.contains("Title b1"), "title b1 in index: {html}");
-        assert!(html.contains("/ui/books/b1"), "detail link: {html}");
+        assert!(html.contains("/ui/admin/books/b1"), "detail link: {html}");
         // Audio badge reflects audio_present.
         assert!(html.contains("audio"), "audio badge present: {html}");
         assert!(html.contains("text-only"), "text-only badge: {html}");
         // A job's status appears in the jobs panel.
         assert!(html.contains("succeeded"), "job status in panel: {html}");
-        // Upload form posts to / (the index route).
+        // Upload form posts to the admin index route.
         assert!(
-            html.contains(r#"action="/""#) || html.contains("enctype"),
+            html.contains(r#"action="/ui/admin""#),
             "upload form: {html}"
         );
     }
@@ -546,12 +548,18 @@ mod tests {
             );
         }
         // Synth + resynth + delete forms + download link are present.
-        assert!(html.contains("/ui/books/b1/synth"), "synth form: {html}");
         assert!(
-            html.contains("/ui/books/b1/resynth"),
+            html.contains("/ui/admin/books/b1/synth"),
+            "synth form: {html}"
+        );
+        assert!(
+            html.contains("/ui/admin/books/b1/resynth"),
             "resynth form: {html}"
         );
-        assert!(html.contains("/ui/books/b1/delete"), "delete form: {html}");
+        assert!(
+            html.contains("/ui/admin/books/b1/delete"),
+            "delete form: {html}"
+        );
         assert!(
             html.contains("/api/books/b1/bundle"),
             "download link: {html}"
@@ -652,13 +660,13 @@ mod tests {
 
     // ===== HTTP-level wiring (cookie auth + login flow + page serving) =====
 
-    /// `GET /` with a valid cookie → 200 + the rendered library page.
+    /// `GET /ui/admin` with a valid cookie → 200 + the rendered library page.
     #[tokio::test(flavor = "multi_thread")]
-    async fn get_index_with_cookie_renders_library() {
+    async fn get_admin_with_cookie_renders_library() {
         let app = router(app_state("sekrit"));
         let req = Request::builder()
             .method("GET")
-            .uri("/")
+            .uri("/ui/admin")
             .header(header::COOKIE, "taletrek_token=sekrit")
             .body(Body::empty())
             .expect("valid request");
@@ -682,14 +690,14 @@ mod tests {
         assert!(html.contains("❯~"), "brand mark present: {html}");
     }
 
-    /// `GET /` without auth → redirect to the login page (cookie-login model;
-    /// UI paths redirect rather than 401 so a browser lands on the form).
+    /// `GET /ui/admin` without auth → redirect to the login page (cookie-login
+    /// model; UI paths redirect rather than 401 so a browser lands on the form).
     #[tokio::test(flavor = "multi_thread")]
-    async fn get_index_without_auth_redirects_to_login() {
+    async fn get_admin_without_auth_redirects_to_login() {
         let app = router(app_state("sekrit"));
         let req = Request::builder()
             .method("GET")
-            .uri("/")
+            .uri("/ui/admin")
             .body(Body::empty())
             .expect("valid request");
         let resp = app.oneshot(req).await.expect("router serves");
@@ -782,13 +790,13 @@ mod tests {
         assert!(html.contains("invalid token"), "error shown: {html}");
     }
 
-    /// `GET /ui/jobs` with a cookie → 200 jobs page.
+    /// `GET /ui/admin/jobs` with a cookie → 200 jobs page.
     #[tokio::test(flavor = "multi_thread")]
     async fn get_jobs_with_cookie_renders() {
         let app = router(app_state("sekrit"));
         let req = Request::builder()
             .method("GET")
-            .uri("/ui/jobs")
+            .uri("/ui/admin/jobs")
             .header(header::COOKIE, "taletrek_token=sekrit")
             .body(Body::empty())
             .expect("valid request");
@@ -796,15 +804,15 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    /// `GET /` with a bearer header (API-style auth) also authorizes the UI —
-    /// the middleware accepts either credential, so the bearer path still works
-    /// for non-browser clients hitting the pages.
+    /// `GET /ui/admin` with a bearer header (API-style auth) also authorizes the
+    /// UI — the middleware accepts either credential, so the bearer path still
+    /// works for non-browser clients hitting the pages.
     #[tokio::test(flavor = "multi_thread")]
-    async fn get_index_with_bearer_header_renders() {
+    async fn get_admin_with_bearer_header_renders() {
         let app = router(app_state("sekrit"));
         let req = Request::builder()
             .method("GET")
-            .uri("/")
+            .uri("/ui/admin")
             .header(header::AUTHORIZATION, "Bearer sekrit")
             .body(Body::empty())
             .expect("valid request");
@@ -812,14 +820,14 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    /// `GET /ui/books/:id` for an unknown id → 200 error page (not a raw 404),
-    /// so the operator gets a friendly message + back link.
+    /// `GET /ui/admin/books/:id` for an unknown id → 200 error page (not a raw
+    /// 404), so the operator gets a friendly message + back link.
     #[tokio::test(flavor = "multi_thread")]
     async fn book_detail_unknown_renders_error_page() {
         let app = router(app_state("sekrit"));
         let req = Request::builder()
             .method("GET")
-            .uri("/ui/books/nope")
+            .uri("/ui/admin/books/nope")
             .header(header::COOKIE, "taletrek_token=sekrit")
             .body(Body::empty())
             .expect("valid request");
@@ -852,7 +860,7 @@ mod tests {
         let app = router(app_state_with_db_with_tmp(Arc::new(db)));
         let req = Request::builder()
             .method("GET")
-            .uri("/")
+            .uri("/ui/admin")
             .header(header::COOKIE, "taletrek_token=sekrit")
             .body(Body::empty())
             .expect("valid request");
@@ -866,7 +874,7 @@ mod tests {
             html.contains("HTTP Rendered Book"),
             "seeded title on page: {html}"
         );
-        assert!(html.contains("/ui/books/bk_http"), "detail link: {html}");
+        assert!(html.contains("/ui/admin/books/bk_http"), "detail link: {html}");
     }
 
     /// Build an AppState from a stub db reusing the shared test_support (token

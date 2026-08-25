@@ -22,11 +22,12 @@ dev-web:
 
 # Personal server (debug build) → http://127.0.0.1:7878 — token: dev-secret (TALETREK_TOKEN to override).
 # Binds loopback explicitly: the binary's default is 0.0.0.0 (Docker needs it);
-# a dev token must never answer the LAN.
+# a dev token must never answer the LAN. Serves the SPA at / from web/dist
+# when it's built (pnpm build) — missing dist just logs a warning.
 dev-server:
     @echo "→ TaleTrek server: http://127.0.0.1:7878  (UI login / bearer token: {{server_token}})"
     @echo "  health check: curl -fsS http://127.0.0.1:7878/api/health"
-    TALETREK_BIND=127.0.0.1:7878 TALETREK_TOKEN={{server_token}} TALETREK_PIPER={{piper_bin}} cargo run -p taletrek-server
+    TALETREK_BIND=127.0.0.1:7878 TALETREK_TOKEN={{server_token}} TALETREK_PIPER={{piper_bin}} TALETREK_STATIC_DIR=web/dist cargo run -p taletrek-server
 
 # Desktop: synth a text-only bundle → full Opus bundle (voice auto-resolves from the seeded cache)
 synth INPUT OUTPUT:
