@@ -780,6 +780,10 @@ fn upsert_book_after_synth(
         chapter_count: bundle.chapters.len() as i64,
         created_at,
         updated_at: now_ms(),
+        // `None` resets the explode marker: the bundle was just rewritten, so
+        // the next `GET .../chapters` re-explodes (compare-on-request, no
+        // coupling — see http::chapters).
+        exploded_at: None,
     })
 }
 

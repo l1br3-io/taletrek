@@ -70,6 +70,26 @@ pub struct BookRow {
     pub created_at: i64,
     /// Last-update time, ms since epoch.
     pub updated_at: i64,
+    /// The `updated_at` this book's chapters were exploded from (T9), or
+    /// `None` when not (yet) exploded. A re-ingest or post-synth upsert
+    /// constructs the row fresh (`None`) with a bumped `updated_at`, so the
+    /// next `GET .../chapters` re-explodes — compare-on-request freshness with
+    /// no coupling into the synth runner.
+    pub exploded_at: Option<i64>,
+}
+
+/// One exploded chapter row (T9) — a `text.json` chapter flattened into
+/// SQLite. `paragraphs` lives as a JSON array in its column (the SPA `Chapter`
+/// shape); the wire `id` is derived (`ch_<bookId>_<idx>`) at serve time, so no
+/// id column exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChapterRow {
+    /// Zero-based chapter index.
+    pub idx: i64,
+    /// Chapter title.
+    pub title: String,
+    /// Cleaned paragraph strings.
+    pub paragraphs: Vec<String>,
 }
 
 /// Synth vs. resynth. Stored as lowercase text in the `kind` column.
@@ -133,14 +153,32 @@ pub struct JobRow {
 /// shared across axum tasks. [`SqliteDb`] achieves it with a `Mutex<Connection>`;
 /// [`test_utils::StubDb`] with a `Mutex<HashMap>`.
 pub trait Db: Send + Sync {
-    /// Insert or replace a book row (idempotent upsert keyed on `id`).
+    /// Insert or replace a book row (idempotent upsert keyed on `id`). The
+    /// row's `exploded_at` is written verbatim — ingest/synth callers pass
+    /// `None`, which is exactly the "re-explode on next read" reset.
     fn upsert_book(&self, row: BookRow) -> Result<(), DbError>;
     /// Fetch one book by id, or `None` if absent.
     fn get_book(&self, id: &str) -> Result<Option<BookRow>, DbError>;
     /// List all books, newest-first by `created_at`.
     fn list_books(&self) -> Result<Vec<BookRow>, DbError>;
-    /// Delete one book by id. Returns `true` if a row was removed.
+    /// Delete one book by id **including its exploded chapter rows** (T9
+    /// cascade — chapters must not outlive their book). Returns `true` if a
+    /// row was removed.
     fn delete_book(&self, id: &str) -> Result<bool, DbError>;
+
+    /// Atomically replace a book's exploded chapter rows and stamp
+    /// `exploded_at = marker` on the book (T9). Idempotent upsert — rows are
+    /// deterministic from the same bundle, so concurrent first-hits are
+    /// last-writer-wins with no visible double-explode.
+    fn replace_chapters(
+        &self,
+        book_id: &str,
+        rows: Vec<ChapterRow>,
+        marker: i64,
+    ) -> Result<(), DbError>;
+    /// A book's chapter rows ordered by `idx` (empty when none). Serviced from
+    /// SQLite — no bundle read involved.
+    fn list_chapters(&self, book_id: &str) -> Result<Vec<ChapterRow>, DbError>;
 
     /// Insert a fresh job row (caller supplies the id + initial fields).
     /// Returns the inserted job's id.
@@ -196,6 +234,10 @@ impl SqliteDb {
     /// WAL + `busy_timeout` are forward-looking: v1 uses a single connection
     /// (serialized through the mutex), but these PRAGMAs persist in the db file
     /// so a future read pool gets concurrent-reads-during-write "for free".
+    ///
+    /// T9 adds the `chapters` table + `books.exploded_at`. Fresh dbs get both
+    /// in the CREATE batch; pre-T9 db files are upgraded with a guarded
+    /// `ALTER TABLE` (checked via `pragma_table_info` so re-opens stay no-ops).
     fn migrate(conn: &Connection) -> Result<(), DbError> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", 5_000i64)?;
@@ -209,7 +251,15 @@ impl SqliteDb {
                 audio_present  INTEGER NOT NULL,
                 chapter_count  INTEGER NOT NULL,
                 created_at     INTEGER NOT NULL,
-                updated_at     INTEGER NOT NULL
+                updated_at     INTEGER NOT NULL,
+                exploded_at    INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS chapters(
+                book_id     TEXT NOT NULL,
+                idx         INTEGER NOT NULL,
+                title       TEXT NOT NULL,
+                paragraphs  TEXT NOT NULL,
+                PRIMARY KEY (book_id, idx)
             );
             CREATE TABLE IF NOT EXISTS jobs(
                 id          TEXT PRIMARY KEY,
@@ -227,6 +277,15 @@ impl SqliteDb {
             CREATE INDEX IF NOT EXISTS idx_jobs_status  ON jobs(status);
             CREATE INDEX IF NOT EXISTS idx_books_title  ON books(title);",
         )?;
+        // Effort-4-era db files predate `books.exploded_at` — add it in place.
+        let has_exploded_at: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name = 'exploded_at'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_exploded_at == 0 {
+            conn.execute("ALTER TABLE books ADD COLUMN exploded_at INTEGER", [])?;
+        }
         Ok(())
     }
 }
@@ -239,8 +298,9 @@ impl Db for SqliteDb {
 
     fn get_book(&self, id: &str) -> Result<Option<BookRow>, DbError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at FROM books WHERE id = ?1")?;
+        let mut stmt = conn.prepare(
+            "SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at,exploded_at FROM books WHERE id = ?1",
+        )?;
         let row = stmt.query_row([id], book_from_row).optional()?;
         Ok(row)
     }
@@ -250,7 +310,7 @@ impl Db for SqliteDb {
         let mut stmt = conn.prepare(
             // `id` tiebreaks same-ms created_at stamps (bulk library imports)
             // so the newest-first order is stable across requests.
-            "SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at FROM books ORDER BY created_at DESC, id DESC",
+            "SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at,exploded_at FROM books ORDER BY created_at DESC, id DESC",
         )?;
         let rows = stmt.query_map([], book_from_row)?;
         let mut out = Vec::new();
@@ -262,8 +322,51 @@ impl Db for SqliteDb {
 
     fn delete_book(&self, id: &str) -> Result<bool, DbError> {
         let conn = self.conn.lock().unwrap();
-        let n = conn.execute("DELETE FROM books WHERE id = ?1", [id])?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM chapters WHERE book_id = ?1", [id])?;
+        let n = tx.execute("DELETE FROM books WHERE id = ?1", [id])?;
+        tx.commit()?;
         Ok(n == 1)
+    }
+
+    fn replace_chapters(
+        &self,
+        book_id: &str,
+        rows: Vec<ChapterRow>,
+        marker: i64,
+    ) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM chapters WHERE book_id = ?1", [book_id])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO chapters(book_id,idx,title,paragraphs) VALUES (?1,?2,?3,?4)",
+            )?;
+            for row in &rows {
+                let paragraphs = serde_json::to_string(&row.paragraphs)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                stmt.execute(rusqlite::params![book_id, row.idx, row.title, paragraphs])?;
+            }
+        }
+        tx.execute(
+            "UPDATE books SET exploded_at = ?2 WHERE id = ?1",
+            rusqlite::params![book_id, marker],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn list_chapters(&self, book_id: &str) -> Result<Vec<ChapterRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT idx,title,paragraphs FROM chapters WHERE book_id = ?1 ORDER BY idx ASC",
+        )?;
+        let rows = stmt.query_map([book_id], chapter_from_row)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     fn create_job(&self, row: JobRow) -> Result<String, DbError> {
@@ -336,8 +439,8 @@ impl Db for SqliteDb {
 /// Insert-or-replace a [`BookRow`] (keyed on `id`).
 fn upsert_book_row(conn: &Connection, row: &BookRow) -> Result<(), DbError> {
     conn.execute(
-        "INSERT OR REPLACE INTO books(id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        "INSERT OR REPLACE INTO books(id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at,exploded_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         rusqlite::params![
             row.id,
             row.title,
@@ -348,6 +451,7 @@ fn upsert_book_row(conn: &Connection, row: &BookRow) -> Result<(), DbError> {
             row.chapter_count,
             row.created_at,
             row.updated_at,
+            row.exploded_at,
         ],
     )?;
     Ok(())
@@ -365,6 +469,21 @@ fn book_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BookRow> {
         chapter_count: row.get(6)?,
         created_at: row.get(7)?,
         updated_at: row.get(8)?,
+        exploded_at: row.get(9)?,
+    })
+}
+
+/// Map a SELECT row into a [`ChapterRow`]. Column order matches the SELECT
+/// list; `paragraphs` is the JSON array stored by [`Db::replace_chapters`].
+fn chapter_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChapterRow> {
+    let paragraphs_json: String = row.get(2)?;
+    let paragraphs = serde_json::from_str(&paragraphs_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    Ok(ChapterRow {
+        idx: row.get(0)?,
+        title: row.get(1)?,
+        paragraphs,
     })
 }
 
@@ -489,6 +608,7 @@ pub mod test_utils {
     pub struct StubDb {
         books: Mutex<std::collections::HashMap<String, BookRow>>,
         jobs: Mutex<std::collections::HashMap<String, JobRow>>,
+        chapters: Mutex<std::collections::HashMap<String, Vec<ChapterRow>>>,
     }
 
     impl StubDb {
@@ -497,6 +617,7 @@ pub mod test_utils {
             Self {
                 books: Mutex::new(std::collections::HashMap::new()),
                 jobs: Mutex::new(std::collections::HashMap::new()),
+                chapters: Mutex::new(std::collections::HashMap::new()),
             }
         }
     }
@@ -521,7 +642,34 @@ pub mod test_utils {
             Ok(v)
         }
         fn delete_book(&self, id: &str) -> Result<bool, DbError> {
-            Ok(self.books.lock().unwrap().remove(id).is_some())
+            let removed = self.books.lock().unwrap().remove(id).is_some();
+            self.chapters.lock().unwrap().remove(id);
+            Ok(removed)
+        }
+        fn replace_chapters(
+            &self,
+            book_id: &str,
+            mut rows: Vec<ChapterRow>,
+            marker: i64,
+        ) -> Result<(), DbError> {
+            rows.sort_by_key(|r| r.idx);
+            self.chapters
+                .lock()
+                .unwrap()
+                .insert(book_id.to_string(), rows);
+            if let Some(b) = self.books.lock().unwrap().get_mut(book_id) {
+                b.exploded_at = Some(marker);
+            }
+            Ok(())
+        }
+        fn list_chapters(&self, book_id: &str) -> Result<Vec<ChapterRow>, DbError> {
+            Ok(self
+                .chapters
+                .lock()
+                .unwrap()
+                .get(book_id)
+                .cloned()
+                .unwrap_or_default())
         }
         fn create_job(&self, row: JobRow) -> Result<String, DbError> {
             let id = row.id.clone();
@@ -598,6 +746,7 @@ mod tests {
             chapter_count: 12,
             created_at: 1_700_000_000_000,
             updated_at: 1_700_000_000_000,
+            exploded_at: None,
         }
     }
 
@@ -803,5 +952,172 @@ mod tests {
         assert_eq!(db.get_book("sb1").unwrap(), Some(row));
         assert_eq!(db.list_books().unwrap().len(), 1);
         assert!(db.delete_book("sb1").unwrap());
+    }
+
+    // ===== T9: chapters table + exploded_at marker =====
+
+    fn chapter_row(idx: i64, title: &str, paragraphs: &[&str]) -> ChapterRow {
+        ChapterRow {
+            idx,
+            title: title.to_string(),
+            paragraphs: paragraphs.iter().map(|p| p.to_string()).collect(),
+        }
+    }
+
+    /// A pre-T9 db file (books table without `exploded_at`, no `chapters`
+    /// table) migrates in place on open — the effort-4-library upgrade path.
+    #[test]
+    fn sqlite_migration_adds_chapters_surface_to_existing_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("taletrek.db");
+        {
+            let legacy = Connection::open(&db_path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE books(
+                        id             TEXT PRIMARY KEY,
+                        title          TEXT NOT NULL,
+                        author         TEXT,
+                        source_format  TEXT NOT NULL,
+                        voice_id       TEXT NOT NULL,
+                        audio_present  INTEGER NOT NULL,
+                        chapter_count  INTEGER NOT NULL,
+                        created_at     INTEGER NOT NULL,
+                        updated_at     INTEGER NOT NULL
+                    );",
+                )
+                .unwrap();
+            legacy
+                .execute(
+                    "INSERT INTO books VALUES('b1','T',NULL,'txt','v',0,1,1,1)",
+                    [],
+                )
+                .unwrap();
+        }
+        // Open through SqliteDb — migration must add the column + table.
+        let db = SqliteDb::open(&db_path).expect("migrates legacy db");
+        let book = db.get_book("b1").unwrap().expect("row survived");
+        assert_eq!(book.exploded_at, None, "legacy row starts un-exploded");
+        // The chapters surface round-trips on the migrated file.
+        db.replace_chapters("b1", vec![chapter_row(0, "One", &["a."])], book.updated_at)
+            .unwrap();
+        assert_eq!(
+            db.get_book("b1").unwrap().unwrap().exploded_at,
+            Some(book.updated_at),
+            "marker set"
+        );
+        assert_eq!(db.list_chapters("b1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sqlite_replace_and_list_chapters_round_trip_ordered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = SqliteDb::open(&tmp.path().join("taletrek.db")).unwrap();
+        db.upsert_book(sample_book("b1")).unwrap();
+
+        // Insert out of order — list must come back by idx.
+        let rows = vec![
+            chapter_row(2, "Two", &["x.", "y."]),
+            chapter_row(0, "Zero", &[]),
+            chapter_row(1, "One", &["hello"]),
+        ];
+        db.replace_chapters("b1", rows, 42).unwrap();
+
+        let listed = db.list_chapters("b1").unwrap();
+        assert_eq!(
+            listed,
+            vec![
+                chapter_row(0, "Zero", &[]),
+                chapter_row(1, "One", &["hello"]),
+                chapter_row(2, "Two", &["x.", "y."]),
+            ],
+            "idx order + paragraphs round-trip"
+        );
+        assert_eq!(
+            db.get_book("b1").unwrap().unwrap().exploded_at,
+            Some(42),
+            "marker stamped"
+        );
+
+        // Absent book lists empty (no error).
+        assert!(db.list_chapters("missing").unwrap().is_empty());
+    }
+
+    #[test]
+    fn sqlite_replace_chapters_is_a_replace_not_append() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = SqliteDb::open(&tmp.path().join("taletrek.db")).unwrap();
+        db.upsert_book(sample_book("b1")).unwrap();
+
+        db.replace_chapters(
+            "b1",
+            vec![
+                chapter_row(0, "Old 0", &["a"]),
+                chapter_row(1, "Old 1", &["b"]),
+            ],
+            1,
+        )
+        .unwrap();
+        // Re-explode with a single chapter — the old rows must be gone.
+        db.replace_chapters("b1", vec![chapter_row(0, "New 0", &["c"])], 2)
+            .unwrap();
+        let listed = db.list_chapters("b1").unwrap();
+        assert_eq!(listed.len(), 1, "no stale rows survive a re-explode");
+        assert_eq!(listed[0].title, "New 0");
+    }
+
+    #[test]
+    fn sqlite_upsert_book_resets_exploded_at_and_delete_cascades_chapters() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = SqliteDb::open(&tmp.path().join("taletrek.db")).unwrap();
+        db.upsert_book(sample_book("b1")).unwrap();
+        db.replace_chapters(
+            "b1",
+            vec![chapter_row(0, "One", &["a."])],
+            1_700_000_000_000,
+        )
+        .unwrap();
+        assert!(db.get_book("b1").unwrap().unwrap().exploded_at.is_some());
+
+        // A re-ingest / post-synth upsert constructs the row fresh (marker
+        // None) → the next chapters fetch must re-explode.
+        let mut re = sample_book("b1");
+        re.updated_at = 1_700_000_000_999;
+        db.upsert_book(re).unwrap();
+        assert_eq!(
+            db.get_book("b1").unwrap().unwrap().exploded_at,
+            None,
+            "upsert resets the marker"
+        );
+        assert_eq!(
+            db.list_chapters("b1").unwrap().len(),
+            1,
+            "chapter rows survive the upsert (re-explode cleans them)"
+        );
+
+        // Delete cascades to chapters.
+        assert!(db.delete_book("b1").unwrap());
+        assert!(db.list_chapters("b1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn stub_replace_and_list_chapters_matches_sqlite_behavior() {
+        let db = StubDb::new();
+        db.upsert_book(sample_book("b1")).unwrap();
+        let rows = vec![
+            chapter_row(1, "One", &["a."]),
+            chapter_row(0, "Zero", &["z."]),
+        ];
+        db.replace_chapters("b1", rows, 7).unwrap();
+        assert_eq!(
+            db.list_chapters("b1").unwrap(),
+            vec![
+                chapter_row(0, "Zero", &["z."]),
+                chapter_row(1, "One", &["a."]),
+            ]
+        );
+        assert_eq!(db.get_book("b1").unwrap().unwrap().exploded_at, Some(7));
+        db.delete_book("b1").unwrap();
+        assert!(db.list_chapters("b1").unwrap().is_empty());
     }
 }

@@ -303,6 +303,8 @@ fn row_from_ingested(book: IngestedBook, existing: Option<&BookRow>) -> BookRow 
         voice_id: book.meta.voice_id,
         audio_present: book.audio_present,
         chapter_count: book.meta.chapter_count as i64,
+        // `None` = not exploded — a re-ingest must re-explode on next read.
+        exploded_at: None,
     }
 }
 
@@ -381,6 +383,7 @@ mod tests {
             chapter_count: 12,
             created_at: 1_700_000_000_000,
             updated_at: 1_700_000_000_000,
+            exploded_at: None,
         }
     }
 
