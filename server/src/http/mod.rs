@@ -31,6 +31,7 @@
 
 mod auth;
 mod books;
+mod chapters;
 mod health;
 mod jobs;
 mod session;
@@ -118,6 +119,7 @@ pub fn router(state: AppState) -> Router {
             get(books::get_book).delete(books::delete_book),
         )
         .route("/api/books/{id}/bundle", get(books::download_bundle))
+        .route("/api/books/{id}/chapters", get(chapters::get_chapters))
         .route("/api/books/{id}/synth", post(jobs::trigger_synth))
         .route("/api/books/{id}/resynth", post(jobs::trigger_resynth))
         .route("/api/jobs", get(jobs::list_jobs))
@@ -126,10 +128,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/voices", get(voices::list_voices))
         .route("/api/voices/{id}/fetch", post(voices::fetch_voice))
         // ----- operator UI (T11) — interim home under /ui/admin until T16 ----
-        .route(
-            "/ui/admin",
-            get(ui::index).post(ui::upload_book),
-        )
+        .route("/ui/admin", get(ui::index).post(ui::upload_book))
         .route("/ui/admin/", get(ui::index))
         .route("/ui/admin/books/{id}", get(ui::book_detail))
         .route("/ui/admin/books/{id}/synth", post(ui::synth_book))
@@ -369,7 +368,11 @@ mod test_support {
     /// directory — the SPA-hosting tests plant a fake `index.html` + assets
     /// there (usually a [`tempfile::tempdir`]).
     #[cfg(test)]
-    pub(crate) fn app_state_with_static_dir(db: Arc<dyn Db>, static_dir: PathBuf, token: &str) -> AppState {
+    pub(crate) fn app_state_with_static_dir(
+        db: Arc<dyn Db>,
+        static_dir: PathBuf,
+        token: &str,
+    ) -> AppState {
         let mut state = app_state_with_db(db, token);
         let mut settings = (*state.settings).clone();
         settings.static_dir = static_dir;

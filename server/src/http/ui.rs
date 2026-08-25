@@ -630,6 +630,7 @@ mod tests {
             chapter_count: 7,
             created_at: 1,
             updated_at: 2,
+            exploded_at: None,
         };
         let v = BookView::from(row);
         assert_eq!(v.id, "bk");
@@ -855,6 +856,7 @@ mod tests {
             chapter_count: 1,
             created_at: 1,
             updated_at: 1,
+            exploded_at: None,
         })
         .expect("seed");
         let app = router(app_state_with_db_with_tmp(Arc::new(db)));
@@ -874,7 +876,10 @@ mod tests {
             html.contains("HTTP Rendered Book"),
             "seeded title on page: {html}"
         );
-        assert!(html.contains("/ui/admin/books/bk_http"), "detail link: {html}");
+        assert!(
+            html.contains("/ui/admin/books/bk_http"),
+            "detail link: {html}"
+        );
     }
 
     /// Build an AppState from a stub db reusing the shared test_support (token
