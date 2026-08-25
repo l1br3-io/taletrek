@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { updateBookProgress } from '../../lib/db'
+import { localDatasource } from '../../lib/datasource'
 import type { BookId, BookPosition } from '../../types'
 import type { ParagraphRef } from './players/types'
 
@@ -32,7 +32,11 @@ export function useProgressPersistence({
     latestRef.current = { position: toPosition(currentParagraph), fraction }
     const handle = setTimeout(() => {
       if (latestRef.current) {
-        void updateBookProgress(bookId, latestRef.current.position, latestRef.current.fraction)
+        void localDatasource.updateBookProgress(
+          bookId,
+          latestRef.current.position,
+          latestRef.current.fraction,
+        )
       }
     }, 2000)
     return () => clearTimeout(handle)
@@ -41,7 +45,11 @@ export function useProgressPersistence({
   useEffect(() => {
     return () => {
       if (latestRef.current) {
-        void updateBookProgress(bookId, latestRef.current.position, latestRef.current.fraction)
+        void localDatasource.updateBookProgress(
+          bookId,
+          latestRef.current.position,
+          latestRef.current.fraction,
+        )
       }
     }
   }, [bookId])

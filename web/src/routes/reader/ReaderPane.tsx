@@ -5,7 +5,7 @@ import { useSettings } from '../../context/settings'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useOnline } from '../../hooks/useOnline'
 import { cleanChapters } from '../../lib/clean'
-import { getBook, getChaptersByBook, getMostRecentBook, updateParagraph } from '../../lib/db'
+import { localDatasource } from '../../lib/datasource'
 import { scrollIntoViewCenter, scrollToTop } from '../../lib/scroll'
 import { bookTransformManager } from '../../lib/transform/manager'
 import { useBookTransformState } from '../../lib/transform/useBookTransformState'
@@ -460,7 +460,7 @@ function ReaderRedirect() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const latest = await getMostRecentBook()
+      const latest = await localDatasource.getMostRecentBook()
       if (cancelled) return
       navigate(latest ? `/reader/${latest.id}` : '/library', { replace: true })
     })()
@@ -479,13 +479,13 @@ function ReaderLoader({ id }: { id: BookId }) {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const book = await getBook(id)
+      const book = await localDatasource.getBook(id)
       if (cancelled) return
       if (!book) {
         setLoad({ type: 'not-found' })
         return
       }
-      const chapters = await getChaptersByBook(id)
+      const chapters = await localDatasource.getChaptersByBook(id)
       if (cancelled) return
       setLoad({ type: 'ready', book, chapters })
     })()
@@ -526,7 +526,7 @@ function ReaderLoader({ id }: { id: BookId }) {
     if (transformTick === 'idle') return
     let cancelled = false
     void (async () => {
-      const fresh = await getChaptersByBook(id)
+      const fresh = await localDatasource.getChaptersByBook(id)
       if (cancelled) return
       setLoad((prev) => (prev.type === 'ready' ? { ...prev, chapters: fresh } : prev))
     })()
@@ -539,7 +539,7 @@ function ReaderLoader({ id }: { id: BookId }) {
   // chapters so the reader + player re-derive from the edited source.
   const handleParagraphChanged = useCallback(
     (chapterId: ChapterId, rawParagraphIndex: number, text: string) => {
-      void updateParagraph(chapterId, rawParagraphIndex, text)
+      void localDatasource.updateParagraph(chapterId, rawParagraphIndex, text)
       setLoad((prev) =>
         prev.type === 'ready'
           ? {

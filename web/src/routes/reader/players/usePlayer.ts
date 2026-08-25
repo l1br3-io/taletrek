@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSettings } from '../../../context/settings'
-import { getBookAudio } from '../../../lib/book-audio'
+import { localDatasource } from '../../../lib/datasource'
 import { resolveMobileEngine } from '../../../lib/playback/engines'
 import type { TtsEngine } from '../../../lib/tts/types'
 import type { BookId, Chapter, VoiceId } from '../../../types'
@@ -72,7 +72,8 @@ export function usePlayer(
       return
     }
     let cancelled = false
-    getBookAudio(args.bookId)
+    localDatasource
+      .getBookAudio(args.bookId)
       .then((audio) => {
         if (!cancelled) setHasBookAudio(audio !== undefined)
       })

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { type BookAudio, getBookAudio } from '../../../lib/book-audio'
+import { type BookAudio, localDatasource } from '../../../lib/datasource'
 import type { TtsEngine } from '../../../lib/tts/types'
 import type { BookId, Chapter, VoiceId } from '../../../types'
 import { flattenParagraphs, type PlaybackStatus, type UseParagraphPlayerResult } from './types'
@@ -69,7 +69,7 @@ export function usePreloadedPlayer({
 
       let ba: BookAudio | null | undefined = bookAudioRef.current
       if (!ba) {
-        const fetchResult = await getBookAudio(bookId)
+        const fetchResult = await localDatasource.getBookAudio(bookId)
         if (!fetchResult) {
           if (token !== playTokenRef.current) return
           setStatus({ type: 'error', message: 'Audio not ready — please re-upload the book' })
