@@ -9,7 +9,7 @@
 ## Phase 1 — SPA datasource seam (pure refactor)
 - [x] T2: `datasource/types.ts` — `LibraryDatasource` + `SynthPipeline` interfaces (`tasks/002-datasource-types.md`)
 - [x] T3: `datasource/local.ts` — local wrappers + parity tests (`tasks/003-datasource-local.md`)
-- [ ] T4: Migrate reader-path callers (`tasks/004-migrate-reader-callers.md`)
+- [x] T4: Migrate reader-path callers (`tasks/004-migrate-reader-callers.md`)
 - [ ] T5: Migrate library-path callers (`tasks/005-migrate-library-callers.md`)
 - [ ] T6: Finish migration + no-direct-import grep gate (`tasks/006-migrate-finish-gate.md`)
 
