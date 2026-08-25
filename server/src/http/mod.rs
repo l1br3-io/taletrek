@@ -1,29 +1,40 @@
 //! HTTP layer: router composition, shared [`AppState`], and handlers.
 //!
-//! [`router`] is the single entry point wired by `main`. It mounts three
-//! unauthenticated routes on the outer router — `GET /api/health`,
-//! `GET /ui/login`, `POST /ui/login` — and every data-bearing `/api/*` route
-//! plus the operator UI (`/`, `/ui/*`) on a protected sub-router that carries
-//! [`auth::require_auth`]. Later tasks add more routes by merging into the
-//! protected sub-router — they inherit the auth layer automatically.
+//! [`router`] is the single entry point wired by `main`. It mounts two
+//! unauthenticated routes on the outer router — `GET /api/health`, `GET/POST
+//! /ui/login` — plus a catch-all `404` for unknown `/api/*` paths. Everything
+//! else lives on a protected sub-router that carries [`auth::require_auth`]:
+//! the data-bearing `/api/*` routes, the operator panel (`/ui/admin/*`, T11 —
+//! interim home until T16 deletes it), and — as the outer router's fallback
+//! service — the static SPA hosting at `/` (T8, [`spa`]). New routes merge
+//! into the protected sub-router and inherit the auth layer automatically.
 //!
-//! The outer router also stamps security headers on every response (CSP,
-//! nosniff, frame denial, no-referrer) — second line of defense behind
-//! askama's auto-escaping for the UI, free hardening for the API.
+//! # Security-header split (T8)
+//!
+//! The outer router stamps nosniff + frame denial + no-referrer on **every**
+//! response (outermost layers). The CSP is split per surface:
+//!
+//! - `/api/*` + `/ui/*` (panel, login): strict no-JS policy
+//!   (`default-src 'none'` …) — the askama panel runs zero client JS and a
+//!   future escaping regression must not become script execution.
+//! - SPA-hosted paths (`/`, client routes, assets): [`spa::SPA_CSP`] — a
+//!   JS-app policy stamped only on `text/html` responses (see [`spa`] for why
+//!   assets must stay CSP-free).
 //!
 //! # Auth boundary
 //!
 //! GOTCHA: `GET /api/health`, `GET /ui/login`, and `POST /ui/login` are the
-//! **only** unauthenticated routes. Every other route sits behind
-//! [`auth::require_auth`] (bearer header for the API, cookie for the UI — see
-//! [`auth`] for the T11 browser-auth tradeoff). A new route mounted on the
-//! outer router (outside the layer) is a security bug.
+//! **only** unauthenticated routes. Every other path — API, panel, *and the
+//! SPA's static files* — sits behind [`auth::require_auth`] (bearer header
+//! for the API, cookie for browsers). A new route mounted on the outer router
+//! (outside the auth layer) is a security bug.
 
 mod auth;
 mod books;
 mod health;
 mod jobs;
 mod session;
+mod spa;
 mod ui;
 mod voices;
 
@@ -35,7 +46,7 @@ use std::sync::Arc;
 use axum::extract::DefaultBodyLimit;
 use axum::http::header;
 use axum::middleware::from_fn_with_state;
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::Router;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
@@ -75,16 +86,25 @@ pub struct AppState {
     pub login_limiter: LoginLimiter,
 }
 
+/// The strict no-JS CSP for the askama panel + login + API responses: the
+/// panel runs zero client JS (inline `<style>` + same-origin form posts
+/// only), so scripts are forbidden outright. Defense-in-depth behind askama's
+/// auto-escaping: an escaping regression must not become script execution.
+pub(crate) const STRICT_CSP: &str =
+    "default-src 'none'; base-uri 'none'; form-action 'self'; style-src 'unsafe-inline'";
+
 /// Build the application router.
 ///
-/// `/api/health`, `GET /ui/login`, and `POST /ui/login` are mounted on the
-/// outer router (no auth); every `/api/books` route + the operator UI (`/`,
-/// `/ui/*`) lives on the protected sub-router and inherits
+/// `/api/health` + `GET/POST /ui/login` + the unknown-API `404` sit on the
+/// outer router (no auth); every `/api/*` data route + the operator panel
+/// (`/ui/admin/*`) lives on the protected sub-router and inherits
 /// [`auth::require_auth`] as well as the upload body-size limit
-/// ([`DefaultBodyLimit`] = `max_bundle_bytes`). The UI POST routes
-/// (`/ui/books`, `/ui/books/{id}/synth`, …) wrap the same cores as the JSON
-/// API and return `303` redirects (Post/Redirect/Get) so plain browser forms
-/// work with no client JS.
+/// ([`DefaultBodyLimit`] = `max_bundle_bytes`). The SPA static hosting
+/// ([`spa::spa_router`]) is the outer router's fallback service — it owns `/`
+/// and every client route, behind the same auth. The panel POST routes
+/// (`/ui/admin/books/{id}/synth`, …) wrap the same cores as the JSON API and
+/// return `303` redirects (Post/Redirect/Get) so plain browser forms work
+/// with no client JS.
 ///
 /// [`State<AppState>`]: axum::extract::State
 pub fn router(state: AppState) -> Router {
@@ -105,35 +125,42 @@ pub fn router(state: AppState) -> Router {
         .route("/api/session", get(session::session))
         .route("/api/voices", get(voices::list_voices))
         .route("/api/voices/{id}/fetch", post(voices::fetch_voice))
-        // ----- operator UI (T11) — same auth layer, cookie-friendly -----
-        .route("/", get(ui::index).post(ui::upload_book))
-        .route("/ui/", get(ui::index))
-        .route("/ui/books/{id}", get(ui::book_detail))
-        .route("/ui/books/{id}/synth", post(ui::synth_book))
-        .route("/ui/books/{id}/resynth", post(ui::resynth_book))
-        .route("/ui/books/{id}/delete", post(ui::delete_book))
-        .route("/ui/jobs", get(ui::jobs))
+        // ----- operator UI (T11) — interim home under /ui/admin until T16 ----
+        .route(
+            "/ui/admin",
+            get(ui::index).post(ui::upload_book),
+        )
+        .route("/ui/admin/", get(ui::index))
+        .route("/ui/admin/books/{id}", get(ui::book_detail))
+        .route("/ui/admin/books/{id}/synth", post(ui::synth_book))
+        .route("/ui/admin/books/{id}/resynth", post(ui::resynth_book))
+        .route("/ui/admin/books/{id}/delete", post(ui::delete_book))
+        .route("/ui/admin/jobs", get(ui::jobs))
         .layer(from_fn_with_state(state.clone(), auth::require_auth))
-        .layer(DefaultBodyLimit::max(state.settings.max_bundle_bytes));
+        .layer(DefaultBodyLimit::max(state.settings.max_bundle_bytes))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            axum::http::HeaderValue::from_static(STRICT_CSP),
+        ));
 
     Router::new()
         .route("/api/health", get(health::health))
         .route("/ui/login", get(auth::login_form).post(auth::login))
+        // Unknown API paths 404 as an API — without this the SPA fallback
+        // would answer them with `index.html` (200 HTML for a typo'd endpoint).
+        .route("/api/{*rest}", any(spa::api_not_found))
+        .route_layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            axum::http::HeaderValue::from_static(STRICT_CSP),
+        ))
         .merge(protected)
+        .fallback_service(spa::spa_router(state.clone()))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
-        // Security headers on every response (outermost layer). The CSP allows
-        // nothing but the templates' inline `<style>` + same-origin form posts
-        // — no scripts exist in the UI. Defense-in-depth behind askama's
-        // auto-escaping: a future escaping regression must not become script
-        // execution in the operator panel; nosniff + frame denial close
-        // content-type confusion + clickjacking on the destructive forms.
-        .layer(SetResponseHeaderLayer::if_not_present(
-            header::CONTENT_SECURITY_POLICY,
-            axum::http::HeaderValue::from_static(
-                "default-src 'none'; base-uri 'none'; form-action 'self'; style-src 'unsafe-inline'",
-            ),
-        ))
+        // Security headers on every response (outermost layers). The CSP is
+        // stamped per-surface above (strict for /api + /ui, JS-app for the
+        // SPA's HTML); nosniff + frame denial close content-type confusion +
+        // clickjacking on the destructive forms and the SPA alike.
         .layer(SetResponseHeaderLayer::if_not_present(
             header::X_CONTENT_TYPE_OPTIONS,
             axum::http::HeaderValue::from_static("nosniff"),
@@ -176,7 +203,7 @@ mod tests {
         let app = router(test_support::app_state("sekrit"));
         let req = Request::builder()
             .method("GET")
-            .uri("/")
+            .uri("/ui/admin")
             .header(header::COOKIE, "taletrek_token=sekrit")
             .body(Body::empty())
             .expect("valid request");
@@ -334,6 +361,19 @@ mod test_support {
             piper: "piper".to_string(),
             ffmpeg: "ffmpeg".to_string(),
             max_bundle_bytes: crate::config::DEFAULT_MAX_BUNDLE_BYTES,
+            static_dir: PathBuf::from("/nonexistent-taletrek-test"),
         }
+    }
+
+    /// An [`AppState`] whose `settings.static_dir` points at a caller-owned
+    /// directory — the SPA-hosting tests plant a fake `index.html` + assets
+    /// there (usually a [`tempfile::tempdir`]).
+    #[cfg(test)]
+    pub(crate) fn app_state_with_static_dir(db: Arc<dyn Db>, static_dir: PathBuf, token: &str) -> AppState {
+        let mut state = app_state_with_db(db, token);
+        let mut settings = (*state.settings).clone();
+        settings.static_dir = static_dir;
+        state.settings = Arc::new(settings);
+        state
     }
 }

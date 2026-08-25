@@ -68,6 +68,22 @@ async fn main() -> Result<()> {
     };
     let app = http::router(state);
 
+    // SPA availability probe (T8): a missing/empty static dir is not fatal —
+    // the API + `/ui/admin` panel keep working headless — but `/` will 404, so
+    // say so loudly instead of leaving a silent misconfiguration.
+    if settings.static_dir.join("index.html").is_file() {
+        info!(
+            static_dir = %settings.static_dir.display(),
+            "serving SPA at / (behind login)"
+        );
+    } else {
+        warn!(
+            static_dir = %settings.static_dir.display(),
+            "TALETREK_STATIC_DIR has no index.html — SPA not served at / \
+             (API + /ui/admin still available); point it at a built web/dist"
+        );
+    }
+
     let listener = TcpListener::bind(settings.bind)
         .await
         .with_context(|| format!("binding {}", settings.bind))?;

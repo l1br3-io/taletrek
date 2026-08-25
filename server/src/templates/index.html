@@ -6,7 +6,7 @@
 
 <section>
   <h2>Upload</h2>
-  <form class="upload" action="/" method="post" enctype="multipart/form-data">
+  <form class="upload" action="/ui/admin" method="post" enctype="multipart/form-data">
     <input type="file" name="bundle" accept=".taletrek,.taletrek-lib" required>
     <button type="submit">Upload</button>
   </form>
@@ -29,7 +29,7 @@
           <td>{% if let Some(a) = b.author %}{{ a }}{% else %}<span class="dim">—</span>{% endif %}</td>
           <td class="mono">{{ b.voice_id }}</td>
           <td><span class="badge {{ b.badge() }}">{{ b.badge() }}</span></td>
-          <td class="actions"><a href="/ui/books/{{ b.id }}">open ›</a></td>
+          <td class="actions"><a href="/ui/admin/books/{{ b.id }}">open ›</a></td>
         </tr>
       {% endfor %}
       </tbody>
@@ -53,12 +53,12 @@
           <td class="mono">{{ j.voice }}</td>
           <td><span class="status {{ j.status }}">{{ j.status }}</span></td>
           <td class="mono">{{ j.progress }}</td>
-          <td><a href="/ui/books/{{ j.book_id }}">{{ j.book_id }}</a></td>
+          <td><a href="/ui/admin/books/{{ j.book_id }}">{{ j.book_id }}</a></td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
-    <p class="muted-note"><a href="/ui/jobs">All jobs ›</a> · refresh to poll.</p>
+    <p class="muted-note"><a href="/ui/admin/jobs">All jobs ›</a> · refresh to poll.</p>
   {% endif %}
 </section>
 
