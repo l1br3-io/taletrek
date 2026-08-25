@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { AiOutlineChapter } from '../../lib/ai/types'
-import { getBookFile, replaceBookChapters, updateBookProgress } from '../../lib/db'
+import { localDatasource } from '../../lib/datasource'
 import { parseInWorker } from '../../lib/parse/client'
 import { OriginalUnavailableError } from '../../lib/reprocess'
 import type { BookId, Chapter } from '../../types'
@@ -77,7 +77,7 @@ export function useOutline(): UseOutline {
       runningRef.current = true
       setState({ type: 'running' })
       try {
-        const stored = await getBookFile(bookId)
+        const stored = await localDatasource.getBookFile(bookId)
         if (!stored) throw new OriginalUnavailableError()
         const file = new File([stored.blob], stored.name, { type: stored.type })
         const result = await parseInWorker(file)
@@ -113,8 +113,8 @@ export function useOutline(): UseOutline {
           })
         }
 
-        await replaceBookChapters(bookId, newChapters)
-        await updateBookProgress(bookId, { chapterIndex: 0, paragraphIndex: 0 }, 0)
+        await localDatasource.replaceBookChapters(bookId, newChapters)
+        await localDatasource.updateBookProgress(bookId, { chapterIndex: 0, paragraphIndex: 0 }, 0)
 
         setState({
           type: 'done',
@@ -139,7 +139,7 @@ export function useOutline(): UseOutline {
     runningRef.current = true
     setState({ type: 'running' })
     try {
-      const stored = await getBookFile(bookId)
+      const stored = await localDatasource.getBookFile(bookId)
       if (!stored) throw new OriginalUnavailableError()
       const file = new File([stored.blob], stored.name, { type: stored.type })
       const result = await parseInWorker(file)
@@ -160,8 +160,8 @@ export function useOutline(): UseOutline {
         paragraphs: parsed.paragraphs,
       }))
 
-      await replaceBookChapters(bookId, newChapters)
-      await updateBookProgress(bookId, { chapterIndex: 0, paragraphIndex: 0 }, 0)
+      await localDatasource.replaceBookChapters(bookId, newChapters)
+      await localDatasource.updateBookProgress(bookId, { chapterIndex: 0, paragraphIndex: 0 }, 0)
 
       setState({
         type: 'done',

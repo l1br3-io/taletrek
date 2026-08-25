@@ -1,7 +1,7 @@
 import { X } from 'lucide-react'
 import { BundleExportAction } from '../../components/BundleExportAction'
 import { BundleImportButton } from '../../components/BundleImportButton'
-import { uploadManager } from '../../lib/upload/manager'
+import { localSynthPipeline } from '../../lib/datasource'
 import { AiStatusChip } from './AiStatusChip'
 import { FeatureUnavailableSheet } from './FeatureUnavailableSheet'
 import { LibraryList } from './LibraryList'
@@ -162,7 +162,7 @@ export function Library() {
             {...aiMenuItems}
             onOutline={handleOutline}
             onResynthesize={synthesizeOnUpload !== 'off' ? handleResynthesize : undefined}
-            onResume={(id) => void uploadManager.resume(id)}
+            onResume={(id) => void localSynthPipeline.resume(id)}
             onRename={handleRename}
             onExportBundle={(id) => void handleExportBundle(id)}
             aiUsable={aiUsable}

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
-import { type JobState, uploadManager } from './manager'
+import { localSynthPipeline } from '../datasource'
+import type { JobState } from './manager'
 
 /**
  * Subscribe to the global upload-manager job state from React. Backed by
@@ -7,11 +8,13 @@ import { type JobState, uploadManager } from './manager'
  * re-render on progress ticks — the rest of the tree is untouched (unlike
  * Context, which would re-render every consumer).
  *
- * `getState`/`subscribe` are bound arrow properties on the singleton, so the
- * references are stable across renders (required by `useSyncExternalStore`).
+ * The subscription goes through the datasource pipeline wrapper
+ * (`localSynthPipeline`), whose `subscribe`/`getState` are the manager's
+ * bound arrow properties — stable references across renders (required by
+ * `useSyncExternalStore`, no re-subscribe churn).
  */
 export function useUploadState(): JobState {
-  return useSyncExternalStore(uploadManager.subscribe, uploadManager.getState)
+  return useSyncExternalStore(localSynthPipeline.subscribe, localSynthPipeline.getState)
 }
 
 /** Convenience: true while a synthesis job is running (or tearing down after cancel/pause). */

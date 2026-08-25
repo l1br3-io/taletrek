@@ -79,6 +79,7 @@ vi.mock('../tts/pool-size', () => ({
 vi.mock('../book-audio', () => ({
   putBookAudio: (...args: unknown[]) => putBookAudioMock(...args),
   getBookAudio: async () => undefined,
+  deleteBookAudio: async () => {},
 }))
 
 const loadCoreMock = vi.fn<(...args: unknown[]) => Promise<void>>()
