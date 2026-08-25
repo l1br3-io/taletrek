@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getCachedParagraphIds } from '../../lib/audio-cache'
+import { localDatasource } from '../../lib/datasource'
 import type { BookId, Chapter, VoiceId } from '../../types'
 
 /**
@@ -24,7 +24,7 @@ export function useCachedParagraphs(
     let cancelled = false
     void (async () => {
       try {
-        const ids = await getCachedParagraphIds(bookId, voiceId, chapters)
+        const ids = await localDatasource.getCachedParagraphIds(bookId, voiceId, chapters)
         if (!cancelled) setCachedIds(ids)
       } catch {
         if (!cancelled) setCachedIds(new Set())
