@@ -23,6 +23,7 @@ mod auth;
 mod books;
 mod health;
 mod jobs;
+mod session;
 mod ui;
 mod voices;
 
@@ -101,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/books/{id}/resynth", post(jobs::trigger_resynth))
         .route("/api/jobs", get(jobs::list_jobs))
         .route("/api/jobs/{id}", get(jobs::get_job))
+        .route("/api/session", get(session::session))
         .route("/api/voices", get(voices::list_voices))
         .route("/api/voices/{id}/fetch", post(voices::fetch_voice))
         // ----- operator UI (T11) — same auth layer, cookie-friendly -----
