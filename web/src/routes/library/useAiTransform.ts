@@ -7,16 +7,8 @@ import type {
   TransformDefinition,
   TransformOp,
 } from '../../lib/ai/types'
-import { deleteBookAudio } from '../../lib/book-audio'
 import type { CleaningConfig } from '../../lib/clean/types'
-import {
-  deleteAudioCacheKeys,
-  getAudioCacheKeysByBook,
-  putChapters,
-  updateBookProcessing,
-  updateBookProgress,
-} from '../../lib/db'
-import { uploadManager } from '../../lib/upload/manager'
+import { localDatasource, localSynthPipeline } from '../../lib/datasource'
 import type { Book, Chapter, VoiceId } from '../../types'
 
 /**
@@ -182,15 +174,15 @@ export function useAiTransform({
           working = next
           // Checkpoint after each op so a tab crash mid-run doesn't lose
           // completed ops (PRD: "long ops checkpoint to IndexedDB").
-          await putChapters(working)
+          await localDatasource.putChapters(working)
         }
         const processing: AppliedProcessing = {
           appliedAt: Date.now(),
           ops,
         }
-        await updateBookProcessing(book.id, processing)
+        await localDatasource.updateBookProcessing(book.id, processing)
         const chapterIndex = book.position?.chapterIndex ?? 0
-        await updateBookProgress(book.id, { chapterIndex, paragraphIndex: 0 }, 0)
+        await localDatasource.updateBookProgress(book.id, { chapterIndex, paragraphIndex: 0 }, 0)
         setState({
           type: 'done',
           message: `Transform applied — resumed at start of chapter ${chapterIndex + 1}.`,
@@ -208,12 +200,12 @@ export function useAiTransform({
               // silently eats it — leaving the user with no audio update
               // and no banner. The cache purge is also skipped so a future
               // manual resynth can run cleanly.
-              if (uploadManager.isActive()) return
-              const keys = await getAudioCacheKeysByBook(book.id)
-              if (keys.length > 0) await deleteAudioCacheKeys(keys)
-              await deleteBookAudio(book.id)
+              if (localSynthPipeline.isActive()) return
+              const keys = await localDatasource.getAudioCacheKeysByBook(book.id)
+              if (keys.length > 0) await localDatasource.deleteAudioCacheKeys(keys)
+              await localDatasource.deleteBookAudio(book.id)
               const latest = { ...book, updatedAt: Date.now() }
-              uploadManager.startJob({
+              localSynthPipeline.startJob({
                 book: latest,
                 chapters: working,
                 voiceId,

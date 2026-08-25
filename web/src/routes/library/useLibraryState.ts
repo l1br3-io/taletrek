@@ -7,11 +7,7 @@ import { getApiKey } from '../../lib/ai/keyring'
 import { opsFromProcessing } from '../../lib/ai/runner'
 import type { TransformOp } from '../../lib/ai/types'
 import type { PronunciationEntry } from '../../lib/clean/types'
-import { deleteBookCascade, getAllBooks, getBook, getChaptersByBook, putBook } from '../../lib/db'
-import { ingestBook } from '../../lib/ingest'
-import { reparseChapters } from '../../lib/reprocess'
-import { bookTransformManager } from '../../lib/transform/manager'
-import { uploadManager } from '../../lib/upload/manager'
+import { localDatasource, localSynthPipeline } from '../../lib/datasource'
 import { isJobActive, useUploadState } from '../../lib/upload/useUpload'
 import type { Book, BookFormat, BookId, Chapter } from '../../types'
 import { useAiTransform } from './useAiTransform'
@@ -130,7 +126,7 @@ export function useLibraryState() {
   const uploadBusy = isJobActive(jobState)
 
   const refresh = useCallback(async () => {
-    const books = await getAllBooks()
+    const books = await localDatasource.getAllBooks()
     setList({ type: 'ready', books })
   }, [])
 
@@ -157,8 +153,8 @@ export function useLibraryState() {
       // Guard against concurrent jobs (issue #3). The singleton also throws,
       // but that error propagates uncaught from this callback — a silent
       // skip here matches `handleResynthesize`'s pattern below.
-      if (uploadManager.isActive()) return
-      uploadManager.startJob({
+      if (localSynthPipeline.isActive()) return
+      localSynthPipeline.startJob({
         book,
         chapters,
         voiceId: settings.voiceId,
@@ -183,7 +179,7 @@ export function useLibraryState() {
     async (file: File): Promise<void> => {
       setParseState({ type: 'parsing', fileName: file.name })
       try {
-        const result = await ingestBook(file)
+        const result = await localSynthPipeline.ingestBook(file)
         setParseState({ type: 'idle' })
         await refresh()
         if (aiUsable && ai.transformDefs.length > 0) {
@@ -219,7 +215,7 @@ export function useLibraryState() {
         const bookId = runCtx.book.id
         void transform.run({
           book: runCtx.book,
-          resolveChapters: () => reparseChapters(bookId),
+          resolveChapters: () => localSynthPipeline.reparseChapters(bookId),
           ops,
         })
       }
@@ -257,7 +253,9 @@ export function useLibraryState() {
       }
       const book = runCtx.book
       const chapters =
-        runCtx.kind === 'post' ? runCtx.chapters : await reparseChapters(book.id).catch(() => [])
+        runCtx.kind === 'post'
+          ? runCtx.chapters
+          : await localSynthPipeline.reparseChapters(book.id).catch(() => [])
       if (chapters.length === 0) {
         console.warn('[taletrek] onRunGenerate: no chapters after reparse, returning')
         return
@@ -270,7 +268,7 @@ export function useLibraryState() {
       // `state.error` and the reader's GenerationBanner shows them; the call
       // itself resolves cleanly. We log any unexpected throw for diagnosis.
       try {
-        await bookTransformManager.start(
+        await localSynthPipeline.startTransform(
           {
             book,
             chapters,
@@ -302,7 +300,7 @@ export function useLibraryState() {
         return
       }
       if (transform.state.type === 'running') return
-      const book = await getBook(id)
+      const book = await localDatasource.getBook(id)
       if (!book) return
       setRunCtx({ kind: 'reprocess', book })
     },
@@ -312,10 +310,10 @@ export function useLibraryState() {
   const refreshRunCtxAfterOutline = useCallback(
     async (id: BookId): Promise<void> => {
       if (runCtx?.book.id !== id) return
-      const book = await getBook(id)
+      const book = await localDatasource.getBook(id)
       if (!book) return
       if (runCtx.kind === 'post') {
-        const fresh = await getChaptersByBook(id)
+        const fresh = await localDatasource.getChaptersByBook(id)
         setRunCtx({ kind: 'post', book, chapters: fresh })
       } else {
         setRunCtx({ kind: 'reprocess', book })
@@ -327,7 +325,7 @@ export function useLibraryState() {
   const handleOutline = useCallback(
     async (id: BookId): Promise<void> => {
       outline.reset()
-      const book = await getBook(id)
+      const book = await localDatasource.getBook(id)
       setOutlineFormat(book?.format ?? 'txt')
       setOutlineBookId(id)
     },
@@ -365,7 +363,7 @@ export function useLibraryState() {
         setUnavailableFeature({ feature: 'pronunciation' })
         return
       }
-      const book = await getBook(id)
+      const book = await localDatasource.getBook(id)
       if (!book) return
       setHintsTitle(book.title)
       void hints.scan(id)
@@ -401,12 +399,12 @@ export function useLibraryState() {
 
   const handleRename = useCallback(
     async (id: BookId): Promise<void> => {
-      const book = await getBook(id)
+      const book = await localDatasource.getBook(id)
       if (!book) return
       const name = window.prompt('New name:', book.title)
       if (!name || !name.trim() || name.trim() === book.title) return
       const renamed = { ...book, title: name.trim(), updatedAt: Date.now() }
-      await putBook(renamed)
+      await localDatasource.putBook(renamed)
       await refresh()
     },
     [refresh],
@@ -419,14 +417,14 @@ export function useLibraryState() {
       // writing to a book that no longer exists — ghost banner, leaked
       // audio-cache pin, stray IDB errors in the finally path. If another
       // book's job is active, refuse the delete and surface why.
-      const uploadResult = await uploadManager.cancelForBook(id)
+      const uploadResult = await localSynthPipeline.cancelForBook(id)
       if (uploadResult.type === 'blocked') {
         window.alert(
           `Can't delete — synthesizing “${uploadResult.activeBookTitle}” right now. Cancel it first.`,
         )
         return
       }
-      const transformResult = await bookTransformManager.cancelForBook(id)
+      const transformResult = await localSynthPipeline.cancelTransformForBook(id)
       if (transformResult.type === 'blocked') {
         window.alert(
           `Can't delete — generating “${transformResult.activeBookTitle}” right now. Cancel it first.`,
@@ -438,7 +436,7 @@ export function useLibraryState() {
         ? 'Remove this book from your library? Any in-progress synthesis will be cancelled.'
         : 'Remove this book from your library?'
       if (!window.confirm(message)) return
-      await deleteBookCascade(id)
+      await localDatasource.deleteBookCascade(id)
       await refresh()
     },
     [refresh],
@@ -447,11 +445,11 @@ export function useLibraryState() {
   // --- per-book synthesize (resume: skips already-cached paragraphs) ---
   const handleResynthesize = useCallback(
     async (id: BookId): Promise<void> => {
-      if (uploadManager.isActive()) return // one job at a time
-      const book = await getBook(id)
+      if (localSynthPipeline.isActive()) return // one job at a time
+      const book = await localDatasource.getBook(id)
       if (!book) return
-      const chapters = await getChaptersByBook(id)
-      uploadManager.startJob({
+      const chapters = await localDatasource.getChaptersByBook(id)
+      localSynthPipeline.startJob({
         book,
         chapters,
         voiceId: settings.voiceId,
@@ -464,7 +462,7 @@ export function useLibraryState() {
 
   // --- per-book export bundle (opens the text-only vs full chooser) ---
   const handleExportBundle = useCallback(async (id: BookId): Promise<void> => {
-    const book = await getBook(id)
+    const book = await localDatasource.getBook(id)
     if (!book) return
     setExportTarget({ id, title: book.title })
   }, [])

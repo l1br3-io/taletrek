@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { AiTransformEngine, PronunciationCandidate } from '../../lib/ai/types'
-import { getChaptersByBook } from '../../lib/db'
+import { localDatasource } from '../../lib/datasource'
 import type { BookId } from '../../types'
 
 /**
@@ -51,7 +51,7 @@ export function usePronunciationHints(engine: AiTransformEngine | null): UsePron
       abortRef.current = controller
       setState({ type: 'loading' })
       try {
-        const chapters = await getChaptersByBook(bookId)
+        const chapters = await localDatasource.getChaptersByBook(bookId)
         const sample = chapters[0]?.paragraphs ?? []
         if (controller.signal.aborted) return
         const candidates = await engine.proposePronunciationHints(
