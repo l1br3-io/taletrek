@@ -7,7 +7,7 @@
 - [x] T1: ADR-0014 — dual-shape SPA amends ADR-0013 alt-2 (`tasks/001-adr-0014-dual-shape.md`)
 
 ## Phase 1 — SPA datasource seam (pure refactor)
-- [ ] T2: `datasource/types.ts` — `LibraryDatasource` + `SynthPipeline` interfaces (`tasks/002-datasource-types.md`)
+- [x] T2: `datasource/types.ts` — `LibraryDatasource` + `SynthPipeline` interfaces (`tasks/002-datasource-types.md`)
 - [ ] T3: `datasource/local.ts` — local wrappers + parity tests (`tasks/003-datasource-local.md`)
 - [ ] T4: Migrate reader-path callers (`tasks/004-migrate-reader-callers.md`)
 - [ ] T5: Migrate library-path callers (`tasks/005-migrate-library-callers.md`)
