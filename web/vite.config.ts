@@ -44,6 +44,16 @@ export default defineConfig({
     port: 8253,
     strictPort: true,
     allowedHosts: ['lodge-loop-massive-greatest.trycloudflare.com'],
+    // Server-hosted shape in dev (`just dev`): same-origin `/api` + the login
+    // form proxy to the personal server, so the boot probe and the 401 →
+    // /ui/login redirect behave exactly like the hosted build. Only /ui/login
+    // of the panel is proxied — post-login lands on `/`, which Vite serves.
+    // With no server running the proxy errors, which the probe treats as
+    // unreachable → local mode (standalone PWA unchanged).
+    proxy: {
+      '/api': 'http://127.0.0.1:7878',
+      '/ui/login': 'http://127.0.0.1:7878',
+    },
   },
   plugins: [
     react(),

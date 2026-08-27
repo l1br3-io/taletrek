@@ -20,6 +20,20 @@ dev-web:
     @echo "→ TaleTrek SPA: http://localhost:8253"
     pnpm dev
 
+# Server-hosted mode dev: SPA on :8253 + server on :7878 in one command.
+# Vite proxies /api + /ui/login → the server, so the dev SPA boots in server
+# mode (login token: dev-secret). Ctrl-C stops both; one crashing stops both.
+# (Shebang must stay the recipe's first line or just runs lines one-by-one.)
+dev:
+    #!/usr/bin/env bash
+    echo "→ TaleTrek dev: SPA http://localhost:8253 (API proxied → 127.0.0.1:7878, token: {{server_token}})"
+    setsid just dev-server &
+    server_pid=$!
+    setsid just dev-web &
+    web_pid=$!
+    trap 'kill -- -"$server_pid" -"$web_pid" 2>/dev/null' EXIT INT TERM
+    wait -n
+
 # Personal server (debug build) → http://127.0.0.1:7878 — token: dev-secret (TALETREK_TOKEN to override).
 # Binds loopback explicitly: the binary's default is 0.0.0.0 (Docker needs it);
 # a dev token must never answer the LAN. Serves the SPA at / from web/dist
