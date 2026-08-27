@@ -11,6 +11,7 @@
 | -------------- | ---------------------- | ------------------------------ | ---------------------------- |
 | SPA / PWA      | `just dev-web`         | <http://localhost:8253>        | nothing (piper is WASM)      |
 | Personal server| `just dev-server`      | <http://127.0.0.1:7878>        | `just setup` for synth only  |
+| Server + SPA   | `just dev`             | <http://localhost:8253>        | `just setup` for synth only  |
 | Desktop (CLI)  | `just synth IN OUT`    | writes a `.taletrek` file      | `just setup`                 |
 
 First time in the repo: `just setup` (pnpm install + native piper + seeded
@@ -41,6 +42,16 @@ voice into `~/.cache/taletrek/` — no sudo, idempotent).
   `tt-data` volume).
 - Full curl walkthrough (upload → synth → poll → download): the
   [personal-server runbook](specs/personal-server/runbook.md).
+
+## Server-hosted mode — `just dev`
+
+- One command, both processes: SPA (Vite, **:8253**) + personal server
+  (**:7878**). Open <http://localhost:8253>; `/api` and `/ui/login` are
+  proxied to the server, so the dev SPA sees the same-origin API exactly like
+  the hosted shape (server mode once logged in; login token `dev-secret`).
+- Ctrl-C stops both; if either process dies the other follows.
+- With no server running (`just dev-web` alone), the probe can't reach `/api`
+  and the SPA boots in local mode — the standalone PWA is unchanged.
 
 ## Desktop — `just synth` / `just resynth`
 
