@@ -20,7 +20,7 @@
 - [x] T8: Static SPA serving + CSP + panel → `/ui/admin` interim (`tasks/008-static-spa-hosting.md`)
 - [x] T9: Chapters — lazy SQLite explode + endpoint (`tasks/009-api-chapters.md`)
 - [x] T10: Audio-by-content-key endpoint (`tasks/010-api-audio-by-key.md`)
-- [ ] T11: Progress PATCH + position column (`tasks/011-api-progress.md`)
+- [x] T11: Progress PATCH + position column (`tasks/011-api-progress.md`)
 - [ ] T12: Dev workflow — Vite proxy + `just dev` (`tasks/012-dev-proxy.md`)
 
 ### Checkpoint: SPA hosted, API complete — curl round-trip on new endpoints; served SPA in local mode.

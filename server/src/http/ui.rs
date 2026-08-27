@@ -631,6 +631,7 @@ mod tests {
             created_at: 1,
             updated_at: 2,
             exploded_at: None,
+            position: None,
         };
         let v = BookView::from(row);
         assert_eq!(v.id, "bk");
@@ -857,6 +858,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             exploded_at: None,
+            position: None,
         })
         .expect("seed");
         let app = router(app_state_with_db_with_tmp(Arc::new(db)));

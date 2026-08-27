@@ -9,6 +9,8 @@
 //!   (byte-identical to what was uploaded).
 //! - `DELETE /api/books/{id}` — removes the bundle file + its index row
 //!   (idempotent: `204` whether or not the book existed).
+//! - `PATCH /api/books/{id}/progress` (T11) — last-write-wins reading
+//!   position into `books.position` + `updated_at`.
 //!
 //! Every `store`/`Db` call runs inside `tokio::task::spawn_blocking` (rusqlite
 //! + file I/O are blocking) — see [`spawn_blocking_ok`].
@@ -57,6 +59,17 @@ pub(crate) struct BookDto {
     chapter_count: i64,
     created_at: i64,
     updated_at: i64,
+    /// Last reading position (T11) — the SPA's `BookPosition` mirrored
+    /// verbatim (`web/src/types.ts`):
+    /// ```ts
+    /// interface BookPosition { chapterIndex: number; paragraphIndex: number }
+    /// ```
+    /// (`web/src/types.ts`; `undefined` means not started.) Stored as opaque
+    /// JSON text in `books.position`; extra fields pass through unvalidated —
+    /// the progress endpoint is loose-shape + last-write-wins (see
+    /// [`patch_progress`]). The ServerDatasource (T13) maps this onto
+    /// `Book.position` unchanged.
+    position: Option<serde_json::Value>,
 }
 
 impl From<BookRow> for BookDto {
@@ -71,12 +84,17 @@ impl From<BookRow> for BookDto {
             chapter_count: row.chapter_count,
             created_at: row.created_at,
             updated_at: row.updated_at,
+            // Only `set_book_position` writes the column, always from a
+            // validated JSON object — a parse failure here means corrupt disk
+            // state and degrades to "no position" rather than a 500.
+            position: row.position.and_then(|s| serde_json::from_str(&s).ok()),
         }
     }
 }
 
 /// `GET /api/books` → `200` JSON array of every book's metadata (newest-first
-/// by `created_at`, per [`Db::list_books`]). Empty library → `200 []`.
+/// by `updated_at`, per [`Db::list_books`] — reading activity re-sorts, T11).
+/// Empty library → `200 []`.
 pub async fn list_books(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<BookDto>>, (StatusCode, String)> {
@@ -101,6 +119,51 @@ pub async fn get_book(
     match row {
         Some(row) => Ok(Json(BookDto::from(row))),
         None => Err((StatusCode::NOT_FOUND, "book not found".to_string())),
+    }
+}
+
+/// `PATCH /api/books/{id}/progress` — store the reading position (T11).
+///
+/// Body: the SPA position object (`{ "chapterIndex": 1, "paragraphIndex": 3 }`)
+/// plus an optional `updatedAt` hint from the client. Validated loosely — the
+/// body must be a JSON object (anything else → `400`; malformed JSON is
+/// rejected by the extractor) and is size-capped by the router-wide
+/// `DefaultBodyLimit` (oversized → `413`, same as uploads). Stored verbatim
+/// (extra fields included); returns `200` with the updated [`BookDto`].
+/// Unknown book → `404`.
+///
+/// # GOTCHA — last-write-wins, deliberately no sync
+///
+/// The write bumps `updated_at` (server clock) and that is the whole
+/// conflict story: two racing PATCHes resolve to whichever lands last, and the
+/// client's `updatedAt` hint is **never consulted** (using it would be
+/// conflict detection, which is a locked non-goal). There is no cross-mode
+/// sync either: the offline PWA's IndexedDB position and the server's
+/// `books.position` are independent stores that never reconcile — by design
+/// (ADR-0014 dual-shape). Do not add merge/CAS logic here without a new ADR.
+pub async fn patch_progress(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<BookDto>, (StatusCode, String)> {
+    // Loose shape check: any JSON object is storable; scalars/arrays are not
+    // a position. (Malformed JSON never reaches here — the extractor 400s.)
+    if !body.is_object() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "progress body must be a JSON object (the SPA position shape)".to_string(),
+        ));
+    }
+    let stored = body.to_string();
+    let db = state.db.clone();
+    let book_id = id.clone();
+    let row = tokio::task::spawn_blocking(move || db.set_book_position(&book_id, Some(&stored)))
+        .await
+        .map_err(internal_error)?
+        .map_err(internal_error)?;
+    match row {
+        Some(row) => Ok(Json(BookDto::from(row))),
+        None => Err((StatusCode::NOT_FOUND, format!("book not found: {id}"))),
     }
 }
 
@@ -288,8 +351,9 @@ fn multipart_err(e: axum::extract::multipart::MultipartError) -> (StatusCode, St
 }
 
 /// Build a [`BookRow`] from an ingested bundle book, preserving the existing
-/// row's `created_at` on re-ingest (idempotent upsert); `updated_at` is bumped
-/// to now. The bundle's own `created_at` seeds a first-time ingest.
+/// row's `created_at` (idempotent upsert) **and `position`** (T11 — reading
+/// progress outlives a re-upload) on re-ingest; `updated_at` is bumped to now.
+/// The bundle's own `created_at` seeds a first-time ingest.
 fn row_from_ingested(book: IngestedBook, existing: Option<&BookRow>) -> BookRow {
     BookRow {
         created_at: existing
@@ -305,6 +369,9 @@ fn row_from_ingested(book: IngestedBook, existing: Option<&BookRow>) -> BookRow 
         chapter_count: book.meta.chapter_count as i64,
         // `None` = not exploded — a re-ingest must re-explode on next read.
         exploded_at: None,
+        // Reading position is user state, not bundle state — a re-ingest of
+        // the same book id must not reset where the reader was (T11).
+        position: existing.and_then(|e| e.position.clone()),
     }
 }
 
@@ -384,6 +451,7 @@ mod tests {
             created_at: 1_700_000_000_000,
             updated_at: 1_700_000_000_000,
             exploded_at: None,
+            position: None,
         }
     }
 
@@ -797,5 +865,220 @@ mod tests {
         let id = one_id(&json);
         assert_eq!(delete(router.clone(), &id).await, StatusCode::NO_CONTENT);
         assert_eq!(delete(router, &id).await, StatusCode::NO_CONTENT);
+    }
+
+    // ===== T11: PATCH /api/books/{id}/progress =====
+
+    /// The SPA position shape, verbatim (`web/src/types.ts` → `BookPosition`).
+    const POSITION_BODY: &str = r#"{ "chapterIndex": 1, "paragraphIndex": 3 }"#;
+
+    /// `PATCH /api/books/{id}/progress` with the bearer + a raw JSON body.
+    async fn patch_progress(
+        router: axum::Router,
+        id: &str,
+        body: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!("/api/books/{id}/progress"))
+            .header(header::AUTHORIZATION, "Bearer sekrit")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("valid request");
+        let resp = router.oneshot(req).await.expect("router serves");
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let json: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn patch_round_trips_position_through_list_and_get() {
+        let (router, _tmp) = empty_router_with_tmp();
+        let (_, json) = upload(router.clone(), BOOK_FULL_FIX).await;
+        let id = one_id(&json);
+
+        let (status, dto) = patch_progress(router.clone(), &id, POSITION_BODY).await;
+        assert_eq!(status, StatusCode::OK, "dto: {dto}");
+        assert_eq!(
+            dto["position"],
+            serde_json::from_str::<serde_json::Value>(POSITION_BODY).unwrap()
+        );
+        assert!(dto["updatedAt"].as_i64().is_some(), "bumped updated_at");
+
+        // Both read paths return it.
+        let (_, list) = get_json(router.clone(), "/api/books").await;
+        let listed = &list.as_array().unwrap()[0];
+        assert_eq!(listed["position"]["chapterIndex"], 1);
+        assert_eq!(listed["position"]["paragraphIndex"], 3);
+        assert!(listed.get("position").is_some());
+        let (_, one) = get_json(router.clone(), &format!("/api/books/{id}")).await;
+        assert_eq!(one["position"]["chapterIndex"], 1);
+
+        // LWW: a second write replaces wholesale (no merge).
+        let (_, dto2) = patch_progress(
+            router.clone(),
+            &id,
+            r#"{ "chapterIndex": 2, "paragraphIndex": 0 }"#,
+        )
+        .await;
+        assert_eq!(dto2["position"]["chapterIndex"], 2);
+        assert_eq!(dto2["position"]["paragraphIndex"], 0);
+    }
+
+    #[tokio::test]
+    async fn patch_unknown_book_is_404() {
+        let (router, _tmp) = empty_router_with_tmp();
+        let (status, _) = patch_progress(router, "definitely-absent", POSITION_BODY).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn patch_rejects_non_object_and_garbage_bodies() {
+        let (router, _tmp) = empty_router_with_tmp();
+        let (_, json) = upload(router.clone(), BOOK_FULL_FIX).await;
+        let id = one_id(&json);
+
+        // Valid JSON, not an object.
+        for bad in ["[1,2]", "\"where was I\"", "5", "null"] {
+            let (status, _) = patch_progress(router.clone(), &id, bad).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "body {bad}");
+        }
+        // Not JSON at all (extractor rejection).
+        let (status, _) = patch_progress(router.clone(), &id, "position:=chapter 1").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Nothing was stored by the rejected writes.
+        let (_, one) = get_json(router, &format!("/api/books/{id}")).await;
+        assert_eq!(one["position"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn patch_requires_auth() {
+        let (router, _tmp) = empty_router_with_tmp();
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/books/any/progress")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(POSITION_BODY.to_string()))
+            .expect("valid request");
+        let resp = router.oneshot(req).await.expect("router serves");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn patch_reorders_library_newest_updated_first() {
+        // Stub db (no data dir needed — progress is db-only): b1 updated
+        // later than b2, so the library starts b1-first; reading b2 floats it.
+        let db = StubDb::new();
+        let mut b1 = book("b1", false);
+        b1.created_at = 1_000;
+        b1.updated_at = 2_000;
+        let mut b2 = book("b2", false);
+        b2.created_at = 1_000;
+        b2.updated_at = 1_000;
+        db.upsert_book(b1).expect("seed b1");
+        db.upsert_book(b2).expect("seed b2");
+        let router = router(app_state_with_db(Arc::new(db), "sekrit"));
+
+        let (_, list) = get_json(router.clone(), "/api/books").await;
+        assert_eq!(list[0]["id"], "b1", "starts newest-updated-first");
+
+        let (status, _) = patch_progress(router.clone(), "b2", POSITION_BODY).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, list) = get_json(router, "/api/books").await;
+        assert_eq!(list[0]["id"], "b2", "reading activity floats the book up");
+    }
+
+    #[tokio::test]
+    async fn re_ingest_preserves_position() {
+        let (router, _tmp) = empty_router_with_tmp();
+        let (_, json) = upload(router.clone(), BOOK_FULL_FIX).await;
+        let id = one_id(&json);
+        let (_, dto) = patch_progress(router.clone(), &id, POSITION_BODY).await;
+        assert_eq!(dto["position"]["chapterIndex"], 1);
+
+        // Re-upload the same book (idempotent upsert) — progress survives.
+        let (status, _) = upload(router.clone(), BOOK_FULL_FIX).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let (_, one) = get_json(router, &format!("/api/books/{id}")).await;
+        assert_eq!(
+            one["position"]["chapterIndex"], 1,
+            "re-ingest must not reset the reading position"
+        );
+    }
+
+    /// The post-synth row upsert must preserve position too — a voice swap
+    /// (resynth) must not reset where the reader was. Runs the stub synth
+    /// loop (jobs.rs pattern): upload text-only → PATCH progress → synth →
+    /// poll → position still present.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn synth_completion_preserves_position() {
+        use crate::http::test_support::app_state_with_data_dir_and_backend;
+        use crate::synth::test_support::stub_backend;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let voices = tmp.path().join("voices");
+        std::fs::create_dir_all(&voices).expect("voice cache dir");
+        let voice = "en_US-hfc_female-medium";
+        std::fs::write(voices.join(format!("{voice}.onnx")), b"stub").expect("onnx");
+        std::fs::write(voices.join(format!("{voice}.json")), b"{}").expect("json");
+
+        let db: Arc<dyn Db> = Arc::new(StubDb::new());
+        let router = router(app_state_with_data_dir_and_backend(
+            db,
+            tmp.path().to_path_buf(),
+            "sekrit",
+            stub_backend(),
+        ));
+
+        let (_, json) = upload(router.clone(), BOOK_TEXT_ONLY_FIX).await;
+        let id = one_id(&json);
+        let (status, _) = patch_progress(router.clone(), &id, POSITION_BODY).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Trigger synth on the seeded voice + poll to terminal.
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/books/{id}/synth"))
+            .header(header::AUTHORIZATION, "Bearer sekrit")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(format!(r#"{{ "voice": "{voice}" }}"#)))
+            .expect("valid request");
+        let resp = router.clone().oneshot(req).await.expect("router serves");
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let job_id = serde_json::from_slice::<serde_json::Value>(&bytes).expect("json")["jobId"]
+            .as_str()
+            .expect("jobId")
+            .to_string();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let (_, job) = get_json(router.clone(), &format!("/api/jobs/{job_id}")).await;
+            match job["status"].as_str() {
+                Some("succeeded") | Some("failed") => {
+                    assert_eq!(job["status"].as_str(), Some("succeeded"), "job: {job}");
+                    break;
+                }
+                _ => {}
+            }
+            assert!(
+                std::time::Instant::now() <= deadline,
+                "synth did not finish in time: {job}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        let (_, one) = get_json(router, &format!("/api/books/{id}")).await;
+        assert_eq!(one["audioPresent"], true, "synth completed");
+        assert_eq!(
+            one["position"]["chapterIndex"], 1,
+            "post-synth upsert must preserve the reading position"
+        );
     }
 }

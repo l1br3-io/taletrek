@@ -48,7 +48,7 @@ use std::sync::Arc;
 use axum::extract::DefaultBodyLimit;
 use axum::http::header;
 use axum::middleware::from_fn_with_state;
-use axum::routing::{any, get, post};
+use axum::routing::{any, get, patch, post};
 use axum::Router;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
@@ -121,6 +121,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/books/{id}/bundle", get(books::download_bundle))
         .route("/api/books/{id}/chapters", get(chapters::get_chapters))
+        .route(
+            "/api/books/{id}/progress",
+            patch(books::patch_progress),
+        )
         .route(
             "/api/books/{id}/audio/{contentKey}",
             get(audio::get_audio),
