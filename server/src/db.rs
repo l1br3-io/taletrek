@@ -76,6 +76,13 @@ pub struct BookRow {
     /// next `GET .../chapters` re-explodes — compare-on-request freshness with
     /// no coupling into the synth runner.
     pub exploded_at: Option<i64>,
+    /// Last reading position (T11) — the SPA's `BookPosition` object stored
+    /// verbatim as JSON text, or `None` when the book was never opened.
+    /// Opaque at this layer: the HTTP handler validates loosely + serializes;
+    /// the DTO parses it back for the wire. Re-ingest + post-synth upserts
+    /// preserve it (progress outlives a re-upload/voice swap — only
+    /// [`Db::set_book_position`] writes it).
+    pub position: Option<String>,
 }
 
 /// One exploded chapter row (T9) — a `text.json` chapter flattened into
@@ -159,8 +166,19 @@ pub trait Db: Send + Sync {
     fn upsert_book(&self, row: BookRow) -> Result<(), DbError>;
     /// Fetch one book by id, or `None` if absent.
     fn get_book(&self, id: &str) -> Result<Option<BookRow>, DbError>;
-    /// List all books, newest-first by `created_at`.
+    /// List all books, newest-first by `updated_at` (T11) — reading activity
+    /// (progress PATCHes) re-sorts the library to the top, matching the SPA's
+    /// `updatedAt` index.
     fn list_books(&self) -> Result<Vec<BookRow>, DbError>;
+    /// Store a book's reading position (T11) — `position` is JSON text stored
+    /// verbatim; `updated_at` bumps to now. Returns the refreshed row, or
+    /// `None` when the book id is absent. Last-write-wins by construction:
+    /// there is deliberately no merge, conflict detection, or cross-mode sync.
+    fn set_book_position(
+        &self,
+        id: &str,
+        position: Option<&str>,
+    ) -> Result<Option<BookRow>, DbError>;
     /// Delete one book by id **including its exploded chapter rows** (T9
     /// cascade — chapters must not outlive their book). Returns `true` if a
     /// row was removed.
@@ -235,9 +253,10 @@ impl SqliteDb {
     /// (serialized through the mutex), but these PRAGMAs persist in the db file
     /// so a future read pool gets concurrent-reads-during-write "for free".
     ///
-    /// T9 adds the `chapters` table + `books.exploded_at`. Fresh dbs get both
-    /// in the CREATE batch; pre-T9 db files are upgraded with a guarded
-    /// `ALTER TABLE` (checked via `pragma_table_info` so re-opens stay no-ops).
+    /// T9 adds the `chapters` table + `books.exploded_at`; T11 adds
+    /// `books.position`. Fresh dbs get both in the CREATE batch; pre-existing
+    /// db files are upgraded with guarded `ALTER TABLE`s (checked via
+    /// `pragma_table_info` so re-opens stay no-ops).
     fn migrate(conn: &Connection) -> Result<(), DbError> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", 5_000i64)?;
@@ -252,7 +271,8 @@ impl SqliteDb {
                 chapter_count  INTEGER NOT NULL,
                 created_at     INTEGER NOT NULL,
                 updated_at     INTEGER NOT NULL,
-                exploded_at    INTEGER
+                exploded_at    INTEGER,
+                position       TEXT
             );
             CREATE TABLE IF NOT EXISTS chapters(
                 book_id     TEXT NOT NULL,
@@ -286,6 +306,15 @@ impl SqliteDb {
         if has_exploded_at == 0 {
             conn.execute("ALTER TABLE books ADD COLUMN exploded_at INTEGER", [])?;
         }
+        // T10-era db files predate `books.position` (T11) — add it in place.
+        let has_position: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name = 'position'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_position == 0 {
+            conn.execute("ALTER TABLE books ADD COLUMN position TEXT", [])?;
+        }
         Ok(())
     }
 }
@@ -299,7 +328,7 @@ impl Db for SqliteDb {
     fn get_book(&self, id: &str) -> Result<Option<BookRow>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at,exploded_at FROM books WHERE id = ?1",
+            "SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at,exploded_at,position FROM books WHERE id = ?1",
         )?;
         let row = stmt.query_row([id], book_from_row).optional()?;
         Ok(row)
@@ -308,9 +337,9 @@ impl Db for SqliteDb {
     fn list_books(&self) -> Result<Vec<BookRow>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            // `id` tiebreaks same-ms created_at stamps (bulk library imports)
-            // so the newest-first order is stable across requests.
-            "SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at,exploded_at FROM books ORDER BY created_at DESC, id DESC",
+            // `id` tiebreaks same-ms updated_at stamps so the newest-first
+            // order is stable across requests.
+            "SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at,exploded_at,position FROM books ORDER BY updated_at DESC, id DESC",
         )?;
         let rows = stmt.query_map([], book_from_row)?;
         let mut out = Vec::new();
@@ -318,6 +347,26 @@ impl Db for SqliteDb {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    fn set_book_position(
+        &self,
+        id: &str,
+        position: Option<&str>,
+    ) -> Result<Option<BookRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE books SET position = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![id, position, now_ms()],
+        )?;
+        if n == 0 {
+            return Ok(None);
+        }
+        let mut stmt = conn.prepare(
+            "SELECT id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at,exploded_at,position FROM books WHERE id = ?1",
+        )?;
+        let row = stmt.query_row([id], book_from_row).optional()?;
+        Ok(row)
     }
 
     fn delete_book(&self, id: &str) -> Result<bool, DbError> {
@@ -439,8 +488,8 @@ impl Db for SqliteDb {
 /// Insert-or-replace a [`BookRow`] (keyed on `id`).
 fn upsert_book_row(conn: &Connection, row: &BookRow) -> Result<(), DbError> {
     conn.execute(
-        "INSERT OR REPLACE INTO books(id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at,exploded_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        "INSERT OR REPLACE INTO books(id,title,author,source_format,voice_id,audio_present,chapter_count,created_at,updated_at,exploded_at,position)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         rusqlite::params![
             row.id,
             row.title,
@@ -452,6 +501,7 @@ fn upsert_book_row(conn: &Connection, row: &BookRow) -> Result<(), DbError> {
             row.created_at,
             row.updated_at,
             row.exploded_at,
+            row.position,
         ],
     )?;
     Ok(())
@@ -470,6 +520,7 @@ fn book_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BookRow> {
         created_at: row.get(7)?,
         updated_at: row.get(8)?,
         exploded_at: row.get(9)?,
+        position: row.get(10)?,
     })
 }
 
@@ -638,8 +689,23 @@ pub mod test_utils {
         }
         fn list_books(&self) -> Result<Vec<BookRow>, DbError> {
             let mut v: Vec<BookRow> = self.books.lock().unwrap().values().cloned().collect();
-            v.sort_by_key(|b| std::cmp::Reverse(b.created_at));
+            v.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
             Ok(v)
+        }
+        fn set_book_position(
+            &self,
+            id: &str,
+            position: Option<&str>,
+        ) -> Result<Option<BookRow>, DbError> {
+            let mut books = self.books.lock().unwrap();
+            match books.get_mut(id) {
+                Some(b) => {
+                    b.position = position.map(str::to_string);
+                    b.updated_at = now_ms();
+                    Ok(Some(b.clone()))
+                }
+                None => Ok(None),
+            }
         }
         fn delete_book(&self, id: &str) -> Result<bool, DbError> {
             let removed = self.books.lock().unwrap().remove(id).is_some();
@@ -747,6 +813,7 @@ mod tests {
             created_at: 1_700_000_000_000,
             updated_at: 1_700_000_000_000,
             exploded_at: None,
+            position: None,
         }
     }
 
@@ -1119,5 +1186,158 @@ mod tests {
         assert_eq!(db.get_book("b1").unwrap().unwrap().exploded_at, Some(7));
         db.delete_book("b1").unwrap();
         assert!(db.list_chapters("b1").unwrap().is_empty());
+    }
+
+    // ===== T11: position column + set_book_position + updated_at ordering =====
+
+    /// A T10-era db file (books table with `exploded_at` but no `position`)
+    /// migrates in place on open — existing rows keep `position = NULL`.
+    #[test]
+    fn sqlite_migration_adds_position_to_existing_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("taletrek.db");
+        {
+            let legacy = Connection::open(&db_path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE books(
+                        id             TEXT PRIMARY KEY,
+                        title          TEXT NOT NULL,
+                        author         TEXT,
+                        source_format  TEXT NOT NULL,
+                        voice_id       TEXT NOT NULL,
+                        audio_present  INTEGER NOT NULL,
+                        chapter_count  INTEGER NOT NULL,
+                        created_at     INTEGER NOT NULL,
+                        updated_at     INTEGER NOT NULL,
+                        exploded_at    INTEGER
+                    );",
+                )
+                .unwrap();
+            legacy
+                .execute(
+                    "INSERT INTO books VALUES('b1','T',NULL,'txt','v',0,1,1,1,NULL)",
+                    [],
+                )
+                .unwrap();
+        }
+        // Open through SqliteDb — migration must add the column; the legacy
+        // row survives with a null position.
+        let db = SqliteDb::open(&db_path).expect("migrates T10-era db");
+        let book = db.get_book("b1").unwrap().expect("row survived");
+        assert_eq!(book.position, None, "legacy row starts positionless");
+
+        // PATCH → populated; the write + read work on the migrated file.
+        let updated = db
+            .set_book_position("b1", Some(r#"{"chapterIndex":2,"paragraphIndex":7}"#))
+            .unwrap()
+            .expect("row updated");
+        assert_eq!(
+            updated.position.as_deref(),
+            Some(r#"{"chapterIndex":2,"paragraphIndex":7}"#)
+        );
+        assert_eq!(
+            db.get_book("b1").unwrap().unwrap().position.as_deref(),
+            Some(r#"{"chapterIndex":2,"paragraphIndex":7}"#)
+        );
+    }
+
+    #[test]
+    fn set_book_position_stores_verbatim_bumps_updated_at_and_lww_overwrites() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = SqliteDb::open(&tmp.path().join("taletrek.db")).unwrap();
+        db.upsert_book(sample_book("b1")).unwrap();
+        let before = db.get_book("b1").unwrap().unwrap().updated_at;
+
+        let first = db
+            .set_book_position("b1", Some(r#"{"chapterIndex":0,"paragraphIndex":1}"#))
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(
+            first.position.as_deref(),
+            Some(r#"{"chapterIndex":0,"paragraphIndex":1}"#)
+        );
+        assert!(first.updated_at >= before, "updated_at bumps");
+
+        // LWW: a second write overwrites wholesale, no merge.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let second = db
+            .set_book_position("b1", Some(r#"{"chapterIndex":4,"paragraphIndex":0}"#))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            second.position.as_deref(),
+            Some(r#"{"chapterIndex":4,"paragraphIndex":0}"#)
+        );
+        assert!(second.updated_at >= first.updated_at);
+
+        // Clearing is supported (position = None) for future reset flows.
+        let cleared = db.set_book_position("b1", None).unwrap().unwrap();
+        assert_eq!(cleared.position, None);
+
+        // Absent book → None (caller maps to 404).
+        assert!(db
+            .set_book_position("missing", Some("{}"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn list_books_orders_newest_updated_first_so_reading_activity_floats_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = SqliteDb::open(&tmp.path().join("taletrek.db")).unwrap();
+        // b1 created (and updated) last by created_at; b2 created first.
+        let mut older = sample_book("b2");
+        older.created_at = 1_000;
+        older.updated_at = 1_000;
+        let mut newer = sample_book("b1");
+        newer.created_at = 2_000;
+        newer.updated_at = 2_000;
+        db.upsert_book(older).unwrap();
+        db.upsert_book(newer).unwrap();
+        assert_eq!(
+            db.list_books().unwrap()[0].id,
+            "b1",
+            "starts newest-created (== newest-updated)"
+        );
+
+        // Reading b2 floats it to the top despite the older created_at.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        db.set_book_position("b2", Some(r#"{"chapterIndex":1,"paragraphIndex":0}"#))
+            .unwrap()
+            .unwrap();
+        let listed = db.list_books().unwrap();
+        assert_eq!(listed[0].id, "b2", "progress PATCH re-sorts the library");
+        assert_eq!(
+            listed[0].position.as_deref(),
+            Some(r#"{"chapterIndex":1,"paragraphIndex":0}"#)
+        );
+    }
+
+    #[test]
+    fn stub_set_book_position_and_ordering_match_sqlite_behavior() {
+        let db = StubDb::new();
+        let mut older = sample_book("b2");
+        older.created_at = 1_000;
+        older.updated_at = 1_000;
+        let mut newer = sample_book("b1");
+        newer.created_at = 2_000;
+        newer.updated_at = 2_000;
+        db.upsert_book(older).unwrap();
+        db.upsert_book(newer).unwrap();
+
+        let updated = db
+            .set_book_position("b2", Some(r#"{"chapterIndex":0,"paragraphIndex":3}"#))
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(
+            updated.position.as_deref(),
+            Some(r#"{"chapterIndex":0,"paragraphIndex":3}"#)
+        );
+        assert_eq!(db.list_books().unwrap()[0].id, "b2");
+        assert!(db
+            .set_book_position("missing", Some("{}"))
+            .unwrap()
+            .is_none());
     }
 }

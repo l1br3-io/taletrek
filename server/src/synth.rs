@@ -759,8 +759,9 @@ async fn mark_failed(db: &Arc<dyn Db>, job_id: &str, message: &str) {
 }
 
 /// Refresh the `books` row for `book_id` after a successful synth so the index
-/// shows `audio_present=true`. `created_at` is preserved from the existing row
-/// (synth is not a re-import); `updated_at` bumps to now. The manifest's own
+/// shows `audio_present=true`. `created_at` + `position` are preserved from the
+/// existing row (synth is not a re-import, and a voice swap must not reset
+/// where the reader was — T11); `updated_at` bumps to now. The manifest's own
 /// `book.*` fields are the source of truth for everything else.
 fn upsert_book_after_synth(
     db: &Arc<dyn Db>,
@@ -768,7 +769,10 @@ fn upsert_book_after_synth(
     bundle: &BookBundle,
 ) -> Result<(), DbError> {
     let existing = db.get_book(book_id)?;
-    let created_at = existing.map(|e| e.created_at).unwrap_or_else(now_ms);
+    let (created_at, position) = match &existing {
+        Some(e) => (e.created_at, e.position.clone()),
+        None => (now_ms(), None),
+    };
     let book = &bundle.manifest.book;
     db.upsert_book(crate::db::BookRow {
         id: book_id.to_string(),
@@ -784,6 +788,7 @@ fn upsert_book_after_synth(
         // the next `GET .../chapters` re-explodes (compare-on-request, no
         // coupling — see http::chapters).
         exploded_at: None,
+        position,
     })
 }
 
