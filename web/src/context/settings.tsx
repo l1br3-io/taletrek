@@ -1,6 +1,7 @@
 import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import type { AiSettings, CloudProvider } from '../lib/ai/types'
 import type { CleaningConfig } from '../lib/clean/types'
+import { DEFAULT_CLEANING } from '../lib/clean/types'
 import { getSetting, setSetting, syncAudioCacheBudget } from '../lib/db'
 import type { PlaybackEngineSetting } from '../lib/playback/engines'
 import { DEFAULT_VOICE_ID } from '../lib/tts/voices'
@@ -43,11 +44,9 @@ export interface Settings {
   vConsoleEnabled: boolean
 }
 
-export const DEFAULT_CLEANING: CleaningConfig = {
-  enabled: true,
-  filters: { urls: true, images: true, footnotes: true, pageNumbers: true },
-  pronunciation: [],
-}
+/** Re-exported for existing importers; lives in `lib/clean` so lib-side
+ * egress (the hosted pipeline's bundle write) can share one default. */
+export { DEFAULT_CLEANING }
 
 /** M6 default: disabled end-to-end (no UI beyond the toggle, no modals, no downloads). */
 export const DEFAULT_AI_SETTINGS: AiSettings = {

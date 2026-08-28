@@ -3,6 +3,7 @@ import type { Chapter, VoiceId } from '../../types'
 import { bookId, chapterId } from '../../types'
 import type { AiSettings, TransformDefinition, TransformOp } from '../ai/types'
 import { readBookBundle } from '../bundle/reader'
+import { setSetting } from '../db'
 import type { ParseResult } from '../parse/types'
 import {
   type BookDto,
@@ -12,7 +13,6 @@ import {
   HostedModeUnavailableError,
   type JobDto,
   ServerApiError,
-  serverPlaybackEngine,
 } from './server'
 
 const parseMock = vi.fn<(file: File) => Promise<ParseResult>>()
@@ -489,6 +489,73 @@ describe('ServerSynthPipeline ingestBook (parse → text-only bundle → POST)',
     const err = await p.ingestBook(new File([], 'big.epub')).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ServerApiError)
     expect((err as ServerApiError).status).toBe(413)
+  })
+})
+
+describe('ServerSynthPipeline ingestBook — egress cleaning (T15 key parity)', () => {
+  /** Paragraphs the default filters visibly change (URL stripped, page
+   * number line dropped). */
+  const RAW = ['Visit https://example.com for more.', '12', 'Plain text stays.']
+  const CLEANED = ['Visit for more.', 'Plain text stays.']
+
+  async function postedParagraphs(): Promise<{ bundle: string[]; result: string[] }> {
+    const posted: { init: RequestInit | undefined }[] = []
+    const p = pipeline([
+      [
+        '/api/books',
+        (init) => {
+          posted.push({ init })
+          const bundle = (init?.body as FormData | undefined)?.get('bundle') as File | null
+          const id = bundle ? decodeURIComponent(bundle.name).replace(/\.taletrek$/, '') : 'b1'
+          return [dto({ id, chapterCount: 1 })]
+        },
+      ],
+    ])
+    parseMock.mockResolvedValue({
+      title: 'Wizards Abroad',
+      chapters: [{ title: 'Chapter One', paragraphs: RAW }],
+    } as ParseResult)
+    const result = await p.ingestBook(new File([], 'wizards.epub'))
+    const form = posted[0]?.init?.body as FormData | undefined
+    const file = form?.get('bundle') as File | undefined
+    if (!file) throw new Error('no bundle was posted')
+    const read = await readBookBundle(new Uint8Array(await file.arrayBuffer()))
+    return {
+      bundle: read.chapters[0]?.paragraphs ?? [],
+      result: result.chapters[0]?.paragraphs ?? [],
+    }
+  }
+
+  it('applies the default cleaning config when no settings are stored yet', async () => {
+    const p = await postedParagraphs()
+    expect(p.bundle).toEqual(CLEANED)
+    expect(p.result).toEqual(CLEANED)
+  })
+
+  it('applies the stored cleaning config to the posted bundle + result chapters', async () => {
+    await setSetting('app', {
+      cleaning: {
+        enabled: true,
+        filters: { urls: true, images: true, footnotes: true, pageNumbers: true },
+        pronunciation: [],
+      },
+    })
+    const p = await postedParagraphs()
+    expect(p.bundle).toEqual(CLEANED)
+    expect(p.result).toEqual(CLEANED)
+  })
+
+  it('keeps bundle text verbatim when cleaning is disabled in settings', async () => {
+    await setSetting('app', {
+      cleaning: {
+        enabled: false,
+        filters: { urls: true, images: true, footnotes: true, pageNumbers: true },
+        pronunciation: [],
+      },
+    })
+    const p = await postedParagraphs()
+    expect(p.bundle).toEqual(RAW)
+    expect(p.result).toEqual(RAW)
   })
 })
 
@@ -1105,21 +1172,6 @@ describe('ServerSynthPipeline startTransform (client-side AI loop → re-POST �
     expect(await p.cancelTransformForBook(bookId('b1'))).toEqual({ type: 'cancelled' })
     await running
     expect(p.getTransformState()).toEqual({ type: 'idle' })
-  })
-})
-
-describe('serverPlaybackEngine (interim T13)', () => {
-  it('refuses on-device synthesis + voice downloads; answers queries passively', async () => {
-    await expect(serverPlaybackEngine.synthesize({} as never)).rejects.toBeInstanceOf(
-      HostedModeUnavailableError,
-    )
-    await expect(serverPlaybackEngine.download('v' as never)).rejects.toBeInstanceOf(
-      HostedModeUnavailableError,
-    )
-    await expect(serverPlaybackEngine.isStored('v' as never)).resolves.toBe(false)
-    await expect(serverPlaybackEngine.listVoices()).resolves.toEqual([])
-    await expect(serverPlaybackEngine.remove('v' as never)).resolves.toBeUndefined()
-    await expect(serverPlaybackEngine.clearAllStored()).resolves.toBeUndefined()
   })
 })
 

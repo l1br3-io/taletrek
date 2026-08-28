@@ -1,5 +1,10 @@
 export { BackupTooLargeError, CorruptBackupError } from '../backup'
 export { AUDIO_CACHE_BUDGET_BYTES, localDatasource, localSynthPipeline } from './local'
+export {
+  type CreateServerPlaybackEngineOptions,
+  createServerPlaybackEngine,
+  serverPlaybackEngine,
+} from './remote-playback'
 export { type DatasourceMode, type ResolvedDatasource, resolveDatasourceMode } from './resolve'
 export {
   type BookDto,
@@ -10,7 +15,6 @@ export {
   HostedModeUnavailableError,
   ServerApiError,
   serverDatasource,
-  serverPlaybackEngine,
   serverSynthPipeline,
 } from './server'
 export type {
