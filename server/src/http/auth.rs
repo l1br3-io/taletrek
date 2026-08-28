@@ -29,8 +29,8 @@
 //!
 //! # Security — the auth exclusion list
 //!
-//! GOTCHA: `GET /api/health`, `GET /ui/login`, and `POST /ui/login` are the
-//! **only** unauthenticated routes. Every other route sits behind
+//! GOTCHA: `GET /api/health`, `GET/POST /ui/login`, and `POST /ui/logout`
+//! are the **only** unauthenticated routes. Every other route sits behind
 //! [`require_auth`] by default — new routes must be mounted on the protected
 //! sub-router in [`crate::http::router`], where they inherit the layer
 //! automatically. A route accidentally mounted on the outer router (outside
@@ -246,6 +246,22 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
 #[derive(Debug, Deserialize)]
 pub(crate) struct LoginForm {
     token: String,
+}
+
+/// `POST /ui/logout` (T16) — clear the session cookie, redirect to the login
+/// page. Unauthenticated on purpose: logging out with an already-expired
+/// cookie must still work (the alternative — an auth-protected logout —
+/// bounces to the login form anyway, but only after a confusing redirect
+/// chain). The SPA's hosted Settings renders a plain `<form>` POST here; the
+/// cookie is `HttpOnly`, so only the server can clear it.
+pub async fn logout() -> Response {
+    let cookie = format!("{TOKEN_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+    let mut resp = Redirect::to("/ui/login").into_response();
+    if let Ok(val) = HeaderValue::from_str(&cookie) {
+        resp.headers_mut().append(header::SET_COOKIE, val);
+    }
+    *resp.status_mut() = StatusCode::SEE_OTHER; // 303 — PRG after a POST
+    resp
 }
 
 /// Extract the bearer token bytes from `Authorization: Bearer <token>`, or None.
@@ -536,5 +552,38 @@ mod tests {
             "sekrit",
             "plain token unchanged"
         );
+    }
+
+    // ---- logout (T16) ----
+
+    /// `POST /ui/logout` (no credentials at all) clears the cookie and
+    /// redirects to the login page.
+    #[tokio::test]
+    async fn logout_clears_cookie_and_redirects_without_auth() {
+        let app = router(app_state("sekrit"));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/ui/logout")
+            .body(Body::empty())
+            .expect("valid request");
+        let resp = app.oneshot(req).await.expect("router serves");
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            resp.headers()
+                .get(header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("/ui/login")
+        );
+        let set_cookie = resp
+            .headers()
+            .get(header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            set_cookie.starts_with("taletrek_token=;"),
+            "cookie cleared: {set_cookie}"
+        );
+        assert!(set_cookie.contains("Max-Age=0"), "expired: {set_cookie}");
+        assert!(set_cookie.contains("HttpOnly"), "HttpOnly: {set_cookie}");
     }
 }

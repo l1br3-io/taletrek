@@ -81,6 +81,7 @@ import { type IngestResult, UnsupportedFileError } from '../ingest'
 import { parseInWorker } from '../parse/client'
 import { formatForFile } from '../parse/util'
 import { NORM_VERSION } from '../tts/normalize'
+import type { Voice } from '../tts/types'
 import { DEFAULT_VOICE_ID } from '../tts/voices'
 import type {
   BookTransformState,
@@ -88,6 +89,7 @@ import type {
   JobSpec,
   JobState,
   LibraryDatasource,
+  RecentJob,
   SynthPipeline,
   TransformJobSpec,
   TransformRunDeps,
@@ -111,6 +113,20 @@ export class ServerApiError extends Error {
   get isUnauthorized(): boolean {
     return this.status === 401
   }
+}
+
+/**
+ * Mid-session 401 handling (T16): when a hosted operation rejects because
+ * the auth cookie expired, send the browser to the no-JS login gate (the
+ * same place the boot probe redirects). Returns whether it redirected, so
+ * callers can skip their usual error surfacing.
+ */
+export function redirectToLoginIfUnauthorized(e: unknown): boolean {
+  if (e instanceof ServerApiError && e.isUnauthorized) {
+    window.location.assign('/ui/login')
+    return true
+  }
+  return false
 }
 
 /** A UI-reachable operation with no hosted-mode implementation (yet). */
@@ -269,6 +285,29 @@ function notFound(e: unknown): boolean {
 }
 
 /**
+ * `GET /api/voices` → the server's curated catalog as the SPA `Voice`
+ * shape (T16 hosted voice pickers — Settings + per-book synth). Settings
+ * and voices stay client-side, so this lives beside the pipeline rather
+ * than on the `LibraryDatasource` seam.
+ */
+export async function fetchServerVoices(fetchImpl: typeof fetch = fetch): Promise<Voice[]> {
+  return getJson<Voice[]>(fetchImpl, '/api/voices')
+}
+
+/** Map a wire `JobDto` onto the seam's {@link RecentJob}. */
+function toRecentJob(dto: JobDto): RecentJob {
+  return {
+    id: dto.id,
+    bookId: bookId(dto.bookId),
+    kind: dto.kind,
+    status: dto.status,
+    done: dto.done,
+    total: dto.total,
+    error: dto.error,
+  }
+}
+
+/**
  * Read the user's cleaning config for egress (the hosted `ingestBook` bundle
  * write). Settings stay client-side IndexedDB in both modes (ADR-0014); the
  * SettingsProvider persists the merged object under `'app'` on every update
@@ -341,7 +380,9 @@ export interface CreateServerDatasourceOptions {
 export function createServerDatasource(
   opts: CreateServerDatasourceOptions = {},
 ): LibraryDatasource {
-  const f = opts.fetchImpl ?? fetch
+  // Lazy default: resolve the global at call time (not module load) so tests
+  // can stub `fetch` after the singletons exist.
+  const f = opts.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init))
   const bookPath = (id: BookId): string => `/api/books/${encodeURIComponent(id)}`
 
   const unavailable = (op: string): HostedModeUnavailableError => new HostedModeUnavailableError(op)
@@ -535,7 +576,8 @@ class RemoteSynthPipeline implements SynthPipeline {
   private transformBook: Book | null = null
 
   constructor(opts: CreateServerSynthPipelineOptions = {}) {
-    this.f = opts.fetchImpl ?? fetch
+    // Lazy default (see createServerDatasource): tests stub the global late.
+    this.f = opts.fetchImpl ?? ((input, init) => fetch(input, init))
     this.defaultVoice = opts.defaultVoiceId ?? DEFAULT_VOICE_ID
     this.pollIntervalMs = opts.pollIntervalMs ?? 1000
   }
@@ -806,6 +848,20 @@ class RemoteSynthPipeline implements SynthPipeline {
     return jobs.find(
       (j) => j.bookId === bookId && (j.status === 'queued' || j.status === 'running'),
     )
+  }
+
+  /**
+   * Recent jobs across books for the library's per-book status chips (T16).
+   * Best-effort: an unreachable server degrades to `[]` — the chips are
+   * informational, never load-bearing.
+   */
+  async listRecentJobs(): Promise<RecentJob[]> {
+    try {
+      const jobs = await getJson<JobDto[]>(this.f, '/api/jobs')
+      return jobs.map(toRecentJob)
+    } catch {
+      return []
+    }
   }
 
   /** Re-attach the poll loop to an already-running server job. */

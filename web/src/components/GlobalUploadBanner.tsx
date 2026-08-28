@@ -65,7 +65,7 @@ function useSecondTicker(active: boolean): void {
  * the reader (where Phase 2 streaming lets you play buffered paragraphs).
  */
 export function GlobalUploadBanner() {
-  const { synth } = useDatasource()
+  const { mode, synth } = useDatasource()
   const state = useUploadState(synth)
   const navigate = useNavigate()
   const isMobile = useIsMobile()
@@ -303,11 +303,13 @@ export function GlobalUploadBanner() {
       )}
       {state.type === 'synthesizing' && (
         <p className="text-xs text-accent/60">
-          {!wakeLockSupported
-            ? 'Your browser can’t keep the screen awake — synth pauses on lock and resumes when you return.'
-            : isMobile
-              ? 'Keep this tab open. Closing or locking your phone will pause synthesis.'
-              : 'Keep this tab open. Closing it will pause synthesis.'}
+          {mode === 'server'
+            ? 'Synthesis runs on your server — this tab is only watching. You can close it and the job keeps going.'
+            : !wakeLockSupported
+              ? 'Your browser can’t keep the screen awake — synth pauses on lock and resumes when you return.'
+              : isMobile
+                ? 'Keep this tab open. Closing or locking your phone will pause synthesis.'
+                : 'Keep this tab open. Closing it will pause synthesis.'}
         </p>
       )}
       <ProgressBar fraction={fraction} />

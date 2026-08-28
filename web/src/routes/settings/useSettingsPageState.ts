@@ -29,7 +29,8 @@ export function useSettingsPageState({
   const [booksCount, setBooksCount] = useState(0)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
-  const { library } = useDatasource()
+  const { mode, library } = useDatasource()
+  const hosted = mode === 'server'
   const online = useOnline()
   const cacheStats = useAudioCacheStats()
   const storageEstimate = useStorageEstimate()
@@ -40,13 +41,17 @@ export function useSettingsPageState({
     setStoredIds(new Set(CURATED_VOICES.filter((_, i) => results[i]).map((v) => v.id)))
   }, [])
 
+  // Hosted: none of these on-device probes have a surface to feed (T16 hides
+  // the Storage section; the voice picker is server-side) — skip them rather
+  // than fire pointless OPFS/IDB/network work.
   useEffect(() => {
+    if (hosted) return
     void refreshStored()
     void (async () => {
       const books = await library.getAllBooks()
       setBooksCount(books.length)
     })()
-  }, [refreshStored, library])
+  }, [hosted, refreshStored, library])
 
   const handleDownload = useCallback(async (id: VoiceId) => {
     setDownloading({ id, progress: 0 })

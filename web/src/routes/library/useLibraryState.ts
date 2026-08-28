@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useDatasource } from '../../context/datasource'
 import { DEFAULT_AI_SETTINGS, useSettings } from '../../context/settings'
@@ -8,8 +8,11 @@ import { getApiKey } from '../../lib/ai/keyring'
 import { opsFromProcessing } from '../../lib/ai/runner'
 import type { TransformOp } from '../../lib/ai/types'
 import type { PronunciationEntry } from '../../lib/clean/types'
+import type { RecentJob } from '../../lib/datasource'
+import { redirectToLoginIfUnauthorized, ServerApiError } from '../../lib/datasource'
 import { isJobActive, useUploadState } from '../../lib/upload/useUpload'
-import type { Book, BookFormat, BookId, Chapter } from '../../types'
+import type { Book, BookFormat, BookId, Chapter, VoiceId } from '../../types'
+import type { SynthStatusChip } from './BookCard'
 import { useAiTransform } from './useAiTransform'
 import { useOutline } from './useOutline'
 import { usePronunciationHints } from './usePronunciationHints'
@@ -36,7 +39,8 @@ type RunContext =
  */
 export function useLibraryState() {
   const navigate = useNavigate()
-  const { library, synth } = useDatasource()
+  const { mode, library, synth } = useDatasource()
+  const hosted = mode === 'server'
   const { settings, update } = useSettings()
   const ai = settings.ai ?? DEFAULT_AI_SETTINGS
   const online = useOnline()
@@ -126,9 +130,91 @@ export function useLibraryState() {
   const jobState = useUploadState(synth)
   const uploadBusy = isJobActive(jobState)
 
+  // Hosted per-book synth status (T16): the recent-jobs list feeds chips for
+  // failures + "done while away" (in-flight % prefers the live state below).
+  // Re-fetched when the live job settles so a just-finished run flips the
+  // chip without a remount.
+  const [recentJobs, setRecentJobs] = useState<RecentJob[]>([])
+  const [jobsTick, setJobsTick] = useState(0)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: trigger-only dep — re-fetch the job list when the live job settles. `jobsTick` isn't read inside; it's a refresh signal.
+  useEffect(() => {
+    if (!hosted) return
+    let cancelled = false
+    void synth.listRecentJobs().then((jobs) => {
+      if (!cancelled) setRecentJobs(jobs)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [hosted, synth, jobsTick])
+  const prevJobActiveRef = useRef(false)
+  useEffect(() => {
+    if (prevJobActiveRef.current && !uploadBusy) setJobsTick((n) => n + 1)
+    prevJobActiveRef.current = uploadBusy
+  }, [uploadBusy])
+
+  /**
+   * Live pipeline state wins over the mount-time snapshot (fresh progress);
+   * otherwise the latest fetched job for the book (newest-first list).
+   */
+  const synthStatusFor = useCallback(
+    (id: BookId): SynthStatusChip | undefined => {
+      if (!hosted) return undefined
+      if (jobState.type === 'synthesizing' && jobState.book.id === id) {
+        return { status: 'running', done: jobState.done, total: jobState.total }
+      }
+      if (jobState.type === 'cancelling' && jobState.book.id === id) {
+        return { status: 'running', done: 0, total: 0 }
+      }
+      const job = recentJobs.find((j) => j.bookId === id)
+      if (!job) return undefined
+      if (job.status === 'queued' || job.status === 'running') {
+        return { status: 'running', done: job.done, total: job.total }
+      }
+      if (job.status === 'failed') {
+        return { status: 'failed', message: job.error ?? undefined }
+      }
+      return { status: 'ready' }
+    },
+    [hosted, jobState, recentJobs],
+  )
+
+  // Hosted per-book Synthesize picks the voice first (the server synthesizes
+  // under it — a different voice re-voices the book). Local keeps the one-tap
+  // flow under the settings voice.
+  const [synthVoiceTarget, setSynthVoiceTarget] = useState<{ id: BookId; title: string } | null>(
+    null,
+  )
+  const startSynthWithVoice = useCallback(
+    (voiceId: VoiceId): void => {
+      const target = synthVoiceTarget
+      setSynthVoiceTarget(null)
+      if (!target || synth.isActive()) return
+      void (async () => {
+        const book = await library.getBook(target.id)
+        if (!book) return
+        const chapters = await library.getChaptersByBook(target.id)
+        synth.startJob({
+          book,
+          chapters,
+          voiceId,
+          cleaning: settings.cleaning,
+          mode: 'resynth',
+        })
+      })()
+    },
+    [synthVoiceTarget, synth, library, settings.cleaning],
+  )
+
   const refresh = useCallback(async () => {
-    const books = await library.getAllBooks()
-    setList({ type: 'ready', books })
+    try {
+      const books = await library.getAllBooks()
+      setList({ type: 'ready', books })
+    } catch (e) {
+      // Mid-session cookie expiry → back to the login gate (T16).
+      if (redirectToLoginIfUnauthorized(e)) return
+      throw e
+    }
   }, [library])
 
   useEffect(() => {
@@ -437,7 +523,21 @@ export function useLibraryState() {
         ? 'Remove this book from your library? Any in-progress synthesis will be cancelled.'
         : 'Remove this book from your library?'
       if (!window.confirm(message)) return
-      await library.deleteBookCascade(id)
+      try {
+        await library.deleteBookCascade(id)
+      } catch (e) {
+        // Mid-session cookie expiry → back to the login gate (T16).
+        if (redirectToLoginIfUnauthorized(e)) return
+        // Hosted: the server refuses deletes while a synth job runs for the
+        // book (409) — surface its message instead of an unhandled reject.
+        if (e instanceof ServerApiError && e.status === 409) {
+          window.alert(
+            `Can't delete — a synthesis job is running for this book on the server. Wait for it to finish or cancel it first.`,
+          )
+          return
+        }
+        throw e
+      }
       await refresh()
     },
     [refresh, library, synth],
@@ -447,6 +547,12 @@ export function useLibraryState() {
   const handleResynthesize = useCallback(
     async (id: BookId): Promise<void> => {
       if (synth.isActive()) return // one job at a time
+      // Hosted: the voice is a per-job server choice — open the picker.
+      if (hosted) {
+        const book = await library.getBook(id)
+        if (book) setSynthVoiceTarget({ id, title: book.title })
+        return
+      }
       const book = await library.getBook(id)
       if (!book) return
       const chapters = await library.getChaptersByBook(id)
@@ -458,7 +564,7 @@ export function useLibraryState() {
         mode: 'resynth',
       })
     },
-    [settings.voiceId, settings.cleaning, library, synth],
+    [hosted, settings.voiceId, settings.cleaning, library, synth],
   )
 
   // --- per-book export bundle (opens the text-only vs full chooser) ---
@@ -507,6 +613,11 @@ export function useLibraryState() {
     onHintsClose,
     handleDelete,
     handleResynthesize,
+    hosted,
+    synthStatusFor,
+    synthVoiceTarget,
+    startSynthWithVoice,
+    onSynthVoiceClose: () => setSynthVoiceTarget(null),
     exportTarget,
     handleExportBundle,
     handleExportClose: () => setExportTarget(null),

@@ -6,7 +6,7 @@ import { useSettings } from '../../context/settings'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useOnline } from '../../hooks/useOnline'
 import { cleanChapters } from '../../lib/clean'
-import { serverPlaybackEngine } from '../../lib/datasource'
+import { redirectToLoginIfUnauthorized, serverPlaybackEngine } from '../../lib/datasource'
 import { scrollIntoViewCenter, scrollToTop } from '../../lib/scroll'
 import { bookTransformManager } from '../../lib/transform/manager'
 import { useBookTransformState } from '../../lib/transform/useBookTransformState'
@@ -486,15 +486,21 @@ function ReaderLoader({ id }: { id: BookId }) {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const book = await library.getBook(id)
-      if (cancelled) return
-      if (!book) {
-        setLoad({ type: 'not-found' })
-        return
+      try {
+        const book = await library.getBook(id)
+        if (cancelled) return
+        if (!book) {
+          setLoad({ type: 'not-found' })
+          return
+        }
+        const chapters = await library.getChaptersByBook(id)
+        if (cancelled) return
+        setLoad({ type: 'ready', book, chapters })
+      } catch (e) {
+        // Mid-session cookie expiry → back to the login gate (T16). Local
+        // mode never produces the 401 this checks for.
+        if (!redirectToLoginIfUnauthorized(e)) throw e
       }
-      const chapters = await library.getChaptersByBook(id)
-      if (cancelled) return
-      setLoad({ type: 'ready', book, chapters })
     })()
     return () => {
       cancelled = true

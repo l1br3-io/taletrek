@@ -15,6 +15,17 @@ import type { AiUnusableReason } from './AiStatusChip'
 
 const DAY = 86_400_000
 
+/**
+ * Per-book synthesis status chip (T16, hosted): live in-flight progress,
+ * a persisted failure, or "audio ready" after a job completed (including
+ * while this session was away). Local mode surfaces the same information
+ * via `uploading`/`uploadJob` on the book record instead.
+ */
+export type SynthStatusChip =
+  | { status: 'running'; done: number; total: number }
+  | { status: 'failed'; message?: string }
+  | { status: 'ready' }
+
 /** Render an `updatedAt` timestamp as a short relative label. Pure given `now`. */
 export function formatRelativeTime(ts: number, now: number = Date.now()): string {
   const diff = Math.max(0, now - ts)
@@ -48,6 +59,11 @@ interface BookCardProps {
   /** When provided, shows an "Export bundle" action on the card. */
   onExportBundle?: (id: BookId) => void
   /**
+   * Hosted-mode synthesis status for this book (T16): renders a status chip
+   * next to the title. Omit in local mode (book-record badges cover it).
+   */
+  synthStatus?: SynthStatusChip
+  /**
    * When `false`, AI menu items (Transform / Pronunciation) render with an amber
    * dot to flag "enabled but not usable right now" — click still fires the
    * handler, which opens an explanatory sheet. See `FeatureUnavailableSheet`.
@@ -72,6 +88,7 @@ export function BookCard({
   onResynthesize,
   onResume,
   onExportBundle,
+  synthStatus,
   aiUsable = true,
   aiUnusableReason = null,
 }: BookCardProps) {
@@ -246,6 +263,26 @@ export function BookCard({
               {book.uploading && (
                 <span className="ml-2 inline-flex items-center rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-medium text-accent">
                   Uploading…
+                </span>
+              )}
+              {synthStatus?.status === 'running' && (
+                <span className="ml-2 inline-flex items-center rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-medium text-accent">
+                  {synthStatus.total > 0
+                    ? `Synthesizing ${synthStatus.done}/${synthStatus.total}`
+                    : 'Synthesizing…'}
+                </span>
+              )}
+              {synthStatus?.status === 'failed' && (
+                <span
+                  className="ml-2 inline-flex items-center rounded-full bg-danger/20 px-2 py-0.5 text-[10px] font-medium text-danger"
+                  title={synthStatus.message}
+                >
+                  Synthesis failed
+                </span>
+              )}
+              {synthStatus?.status === 'ready' && (
+                <span className="ml-2 inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-medium text-accent">
+                  Audio ready
                 </span>
               )}
               {book.uploadJob && !book.uploading && (

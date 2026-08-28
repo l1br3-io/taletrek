@@ -1,4 +1,4 @@
-import { describe, expect, it, type Mock, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import type { Chapter, VoiceId } from '../../types'
 import { bookId, chapterId } from '../../types'
 import type { AiSettings, TransformDefinition, TransformOp } from '../ai/types'
@@ -10,8 +10,10 @@ import {
   type ChapterDto,
   createServerDatasource,
   createServerSynthPipeline,
+  fetchServerVoices,
   HostedModeUnavailableError,
   type JobDto,
+  redirectToLoginIfUnauthorized,
   ServerApiError,
 } from './server'
 
@@ -689,6 +691,60 @@ describe('ServerSynthPipeline startJob (trigger → poll loop)', () => {
     expect(p.canRetry()).toBe(true)
   })
 
+  it('listRecentJobs maps the wire JobDto list onto RecentJob (T16 chips)', async () => {
+    const p = pipeline([
+      [
+        '/api/jobs',
+        () => [
+          jobDto({
+            id: 'j2',
+            bookId: 'b2',
+            kind: 'resynth',
+            status: 'failed',
+            done: 1,
+            total: 4,
+            error: 'boom',
+          }),
+          jobDto({ id: 'j1', bookId: 'b1', status: 'succeeded', done: 5, total: 5 }),
+        ],
+      ],
+    ])
+
+    const jobs = await p.listRecentJobs()
+    expect(jobs).toEqual([
+      {
+        id: 'j2',
+        bookId: bookId('b2'),
+        kind: 'resynth',
+        status: 'failed',
+        done: 1,
+        total: 4,
+        error: 'boom',
+      },
+      {
+        id: 'j1',
+        bookId: bookId('b1'),
+        kind: 'synth',
+        status: 'succeeded',
+        done: 5,
+        total: 5,
+        error: null,
+      },
+    ])
+  })
+
+  it('listRecentJobs degrades to [] when the server is unreachable', async () => {
+    const p = pipeline([
+      [
+        '/api/jobs',
+        () => {
+          throw new TypeError('fetch failed')
+        },
+      ],
+    ])
+    await expect(p.listRecentJobs()).resolves.toEqual([])
+  })
+
   it('job failure surfaces the server error message', async () => {
     const p = pipeline([
       ['/api/books/b1/synth', () => ({ jobId: 'j1' })],
@@ -1172,6 +1228,80 @@ describe('ServerSynthPipeline startTransform (client-side AI loop → re-POST �
     expect(await p.cancelTransformForBook(bookId('b1'))).toEqual({ type: 'cancelled' })
     await running
     expect(p.getTransformState()).toEqual({ type: 'idle' })
+  })
+})
+
+describe('fetchServerVoices (T16 hosted voice picker)', () => {
+  it('GETs /api/voices and maps the camelCase wire shape onto Voice', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+    fetchMock.mockResolvedValue(
+      json(200, [
+        {
+          id: 'en_US-hfc_female-medium',
+          name: 'HFC Female',
+          quality: 'medium',
+          sizeBytes: 63_000_000,
+          language: 'en_US',
+        },
+      ]),
+    )
+
+    const voices = await fetchServerVoices(fetchMock as unknown as typeof fetch)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/voices',
+      expect.objectContaining({ credentials: 'same-origin', cache: 'no-store' }),
+    )
+    expect(voices).toEqual([
+      {
+        id: 'en_US-hfc_female-medium',
+        name: 'HFC Female',
+        quality: 'medium',
+        sizeBytes: 63_000_000,
+        language: 'en_US',
+      },
+    ])
+  })
+
+  it('propagates failures as ServerApiError', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+    fetchMock.mockResolvedValue(new Response('nope', { status: 500 }))
+    await expect(fetchServerVoices(fetchMock as unknown as typeof fetch)).rejects.toBeInstanceOf(
+      ServerApiError,
+    )
+  })
+})
+
+describe('redirectToLoginIfUnauthorized (mid-session 401)', () => {
+  // `window.location` is unforgeable in jsdom — same delete/reassign dance as
+  // resolve.test.ts so the redirect is observable via a mock `assign`.
+  let assignMock: ReturnType<typeof vi.fn>
+  let originalLocation: Location
+
+  beforeEach(() => {
+    originalLocation = window.location
+    assignMock = vi.fn()
+    delete (window as unknown as Record<string, unknown>).location
+    ;(window as unknown as Record<string, unknown>).location = {
+      ...originalLocation,
+      assign: assignMock,
+    }
+  })
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).location
+    ;(window as unknown as Record<string, unknown>).location = originalLocation
+  })
+
+  it('a 401 ServerApiError navigates to /ui/login and reports true', () => {
+    expect(redirectToLoginIfUnauthorized(new ServerApiError('unauthorized', 401))).toBe(true)
+    expect(assignMock).toHaveBeenCalledWith('/ui/login')
+  })
+
+  it('any other error is left to the caller (reports false, no navigation)', () => {
+    expect(redirectToLoginIfUnauthorized(new ServerApiError('boom', 500))).toBe(false)
+    expect(redirectToLoginIfUnauthorized(new Error('boom'))).toBe(false)
+    expect(assignMock).not.toHaveBeenCalled()
   })
 })
 

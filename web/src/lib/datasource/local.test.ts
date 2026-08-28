@@ -471,3 +471,9 @@ describe('localSynthPipeline — parity', () => {
     expect(notified).toBe(1)
   })
 })
+
+describe('localSynthPipeline — listRecentJobs (T16 parity surface)', () => {
+  it('answers [] — local surfaces job state via book records, not a job list', async () => {
+    await expect(localSynthPipeline.listRecentJobs()).resolves.toEqual([])
+  })
+})

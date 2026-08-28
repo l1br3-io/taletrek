@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatasourceProvider } from '../context/datasource'
 import { SettingsProvider } from '../context/settings'
+import { _resetServerVoicesCacheForTests } from '../hooks/useServerVoices'
 import {
   _clearDBForTests,
   _resetDBForTests,
@@ -372,5 +373,64 @@ describe('Settings — AI transforms (M6)', () => {
     })
     const stored = await getSetting<{ audioCacheBudgetMb: number }>('app')
     expect(stored?.audioCacheBudgetMb).toBe(1000)
+  })
+})
+
+describe('Settings view — hosted mode (T16)', () => {
+  function withServerProviders(node: React.ReactElement) {
+    return (
+      <MemoryRouter>
+        <DatasourceProvider mode="server">
+          <SettingsProvider>{node}</SettingsProvider>
+        </DatasourceProvider>
+      </MemoryRouter>
+    )
+  }
+
+  beforeEach(() => {
+    _resetServerVoicesCacheForTests()
+  })
+
+  it('hides local-only sections and shows the logout affordance', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+    fetchMock.mockResolvedValue(new Response('[]', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(withServerProviders(<Settings />))
+
+    // Logout (server account) replaces local-only surfaces.
+    expect(screen.getByText('Server account')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument()
+
+    // On-device storage/backup/wipe surfaces are gone.
+    expect(screen.queryByText('Storage')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pre-synthesize on upload')).not.toBeInTheDocument()
+    expect(screen.queryByText('Danger zone')).not.toBeInTheDocument()
+    expect(screen.queryByText('Delete all data')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /download/i })).not.toBeInTheDocument()
+    vi.unstubAllGlobals()
+  })
+
+  it('lists the server voice catalog for selection', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: 'en_US-hfc_female-medium',
+            name: 'HFC Female',
+            quality: 'medium',
+            sizeBytes: 63_000_000,
+            language: 'en_US',
+          },
+        ]),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(withServerProviders(<Settings />))
+
+    expect(await screen.findByText(/HFC Female/)).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/api/voices', expect.anything())
+    vi.unstubAllGlobals()
   })
 })
