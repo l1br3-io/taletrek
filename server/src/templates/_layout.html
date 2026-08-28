@@ -79,10 +79,10 @@
 <body>
 <header>
   <div class="brand"><span class="mark">❯~</span> TaleTrek</div>
-  <nav>
-    <a href="/ui/admin">Library</a>
-    <a href="/ui/admin/jobs">Jobs</a>
-  </nav>
+  {#
+    No panel nav (T16 deleted the interim operator panel — the hosted SPA is
+    the UI; this layout now serves only the login page).
+  #}
 </header>
 {% block content %}{% endblock %}
 </body>

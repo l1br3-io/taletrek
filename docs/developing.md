@@ -36,8 +36,9 @@ voice into `~/.cache/taletrek/` — no sudo, idempotent).
   `curl -fsS http://127.0.0.1:7878/api/health` is the liveness probe.
 - After `pnpm build`, the server also serves the **SPA at `/`** (recipe wires
   `TALETREK_STATIC_DIR=web/dist`; a missing dist logs a warning and the server
-  stays up headless). The no-JS askama operator panel lives at `/ui/admin`
-  (interim until the hosted SPA reaches parity).
+  stays up headless). `/ui/login` (+ `POST /ui/logout`) is the no-JS cookie
+  gate; the interim askama panel was deleted in effort 5 (T16) once the
+  hosted SPA reached parity.
 - Docker variant (closer to prod): `just docker-server` (data persists in the
   `tt-data` volume).
 - Full curl walkthrough (upload → synth → poll → download): the

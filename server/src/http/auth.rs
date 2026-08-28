@@ -586,4 +586,102 @@ mod tests {
         assert!(set_cookie.contains("Max-Age=0"), "expired: {set_cookie}");
         assert!(set_cookie.contains("HttpOnly"), "HttpOnly: {set_cookie}");
     }
+
+    // ---- login form flow (moved from the deleted panel's test module, T16) ----
+
+    /// `GET /ui/login` (unauthed) → 200 + the token form.
+    #[tokio::test]
+    async fn login_form_renders_without_auth() {
+        let app = router(app_state("sekrit"));
+        let req = Request::builder()
+            .method("GET")
+            .uri("/ui/login")
+            .body(Body::empty())
+            .expect("valid request");
+        let resp = app.oneshot(req).await.expect("router serves");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let html = String::from_utf8(bytes.to_vec()).unwrap_or_default();
+        assert!(html.contains(r#"name="token""#), "token field: {html}");
+    }
+
+    /// A logged-in browser hitting `GET /ui/login` bounces straight to `/`.
+    #[tokio::test]
+    async fn login_form_short_circuits_when_already_authed() {
+        let app = router(app_state("sekrit"));
+        let req = Request::builder()
+            .method("GET")
+            .uri("/ui/login")
+            .header(header::COOKIE, "taletrek_token=sekrit")
+            .body(Body::empty())
+            .expect("valid request");
+        let resp = app.oneshot(req).await.expect("router serves");
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            resp.headers()
+                .get(header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("/")
+        );
+    }
+
+    /// `POST /ui/login` with the right token → 303 + a `Set-Cookie` carrying
+    /// the token, pointing at `/`.
+    #[tokio::test]
+    async fn login_post_sets_cookie_on_success() {
+        let app = router(app_state("sekrit"));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/ui/login")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from("token=sekrit"))
+            .expect("valid request");
+        let resp = app.oneshot(req).await.expect("router serves");
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            resp.headers()
+                .get(header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("/")
+        );
+        let set_cookie = resp
+            .headers()
+            .get(header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            set_cookie.contains("taletrek_token=sekrit"),
+            "cookie set: {set_cookie}"
+        );
+        assert!(set_cookie.contains("HttpOnly"), "HttpOnly: {set_cookie}");
+        assert!(
+            set_cookie.contains("SameSite=Lax"),
+            "SameSite=Lax: {set_cookie}"
+        );
+    }
+
+    /// Wrong token → the form re-renders (200) with the error, no Set-Cookie.
+    #[tokio::test]
+    async fn login_post_wrong_token_rerenders_no_cookie() {
+        let app = router(app_state("sekrit"));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/ui/login")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from("token=nope"))
+            .expect("valid request");
+        let resp = app.oneshot(req).await.expect("router serves");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            resp.headers().get(header::SET_COOKIE).is_none(),
+            "no cookie on failure"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let html = String::from_utf8(bytes.to_vec()).unwrap_or_default();
+        assert!(html.contains("invalid token"), "error shown: {html}");
+    }
 }
