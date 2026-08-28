@@ -90,6 +90,12 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         cleanupOutdatedCaches: true,
+        // Server-owned paths must never resolve to the offline SPA shell:
+        // `/ui/login` is the no-JS cookie gate (a SW-served index.html there
+        // makes the unauthed probe redirect back into itself — an endless
+        // navigation loop after logout), and `/api/*` answers as JSON or
+        // nothing. T16; the audit in T17 keeps watch on this list.
+        navigateFallbackDenylist: [/^\/api\//, /^\/ui\//],
         // The Piper WASM runtime (~39 MB) is too large to precache. Cache it on
         // first fetch so it's available offline thereafter — the app shell +
         // these binaries + the OPFS voice model together enable true offline.
