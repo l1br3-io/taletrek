@@ -1,15 +1,23 @@
 import { describe, expect, it, type Mock, vi } from 'vitest'
 import type { Chapter, VoiceId } from '../../types'
 import { bookId, chapterId } from '../../types'
+import type { ParseResult } from '../parse/types'
 import {
   type BookDto,
   type ChapterDto,
   createServerDatasource,
   createServerSynthPipeline,
   HostedModeUnavailableError,
+  type JobDto,
   ServerApiError,
   serverPlaybackEngine,
 } from './server'
+
+const parseMock = vi.fn<(file: File) => Promise<ParseResult>>()
+
+vi.mock('../parse/client', () => ({
+  parseInWorker: (file: File) => parseMock(file),
+}))
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -322,11 +330,381 @@ describe('ServerDatasource local-only surfaces', () => {
 })
 
 // ---------------------------------------------------------------------------
-// synth pipeline stub (T14 fills it in)
+// ServerSynthPipeline (T14) — hosted upload → POST → synth → poll
 // ---------------------------------------------------------------------------
 
-describe('serverSynthPipeline stub', () => {
-  it('passive queries keep mount-path subscribers inert', async () => {
+/** A fetch mock whose routes match exact URL strings or regexes (first wins). */
+type Route = [match: RegExp | string, respond: (init?: RequestInit) => unknown | Response]
+
+function router(routes: Route[]): Mock {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    for (const [m, respond] of routes) {
+      const hit = typeof m === 'string' ? url === m : m.test(url)
+      if (hit) {
+        const out = await respond(init)
+        return out instanceof Response ? out : json(200, out)
+      }
+    }
+    throw new Error(`unexpected fetch: ${url}`)
+  }) as unknown as Mock
+}
+
+function jobDto(overrides: Partial<JobDto> = {}): JobDto {
+  return {
+    id: 'j1',
+    bookId: 'b1',
+    kind: 'synth',
+    voice: 'en_US-lessac',
+    status: 'succeeded',
+    done: 3,
+    total: 3,
+    error: null,
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_001_000,
+    ...overrides,
+  }
+}
+
+type JobSpecLike = Parameters<ReturnType<typeof createServerSynthPipeline>['startJob']>[0]
+
+const idleCleaning = {
+  enabled: false,
+  filters: { urls: true, images: true, footnotes: true, pageNumbers: true },
+  pronunciation: [],
+}
+
+function specBook(overrides: Partial<JobSpecLike> = {}): JobSpecLike {
+  return {
+    book: {
+      id: bookId('b1'),
+      title: 'Wizards Abroad',
+      format: 'epub',
+      chapterCount: 1,
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_000_000,
+    },
+    chapters: [],
+    voiceId: 'en_US-lessac' as VoiceId,
+    cleaning: idleCleaning,
+    ...overrides,
+  }
+}
+
+/** Poll `p.getState()` until `cond` holds (bounded, real-timer friendly). */
+async function until(cond: () => boolean, ms = 2000): Promise<void> {
+  const deadline = Date.now() + ms
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('condition not met in time')
+    await new Promise((r) => setTimeout(r, 5))
+  }
+}
+
+function pipeline(routes: Route[]): ReturnType<typeof createServerSynthPipeline> {
+  const mock = router(routes)
+  return createServerSynthPipeline({
+    fetchImpl: mock as unknown as typeof fetch,
+    pollIntervalMs: 1,
+  })
+}
+
+describe('ServerSynthPipeline ingestBook (parse → text-only bundle → POST)', () => {
+  it('parses in the worker, POSTs a multipart bundle, and returns the server-mapped book + derived-id chapters', async () => {
+    parseMock.mockResolvedValue({
+      title: 'Wizards Abroad',
+      chapters: [
+        { title: 'Chapter One', paragraphs: ['Hello world.', 'Second ¶.'] },
+        { title: 'Chapter Two', paragraphs: ['More.'] },
+      ],
+    } as ParseResult)
+
+    const posted: { init: RequestInit | undefined }[] = []
+    const p = pipeline([
+      [
+        '/api/books',
+        (init) => {
+          posted.push({ init })
+          // The server keys books by the uploaded bundle's manifest id —
+          // mirror that by echoing the id encoded in the multipart filename.
+          const bundle = (init?.body as FormData | undefined)?.get('bundle') as File | null
+          const id = bundle ? decodeURIComponent(bundle.name).replace(/\.taletrek$/, '') : 'b1'
+          return [dto({ id, chapterCount: 2 })]
+        },
+      ],
+    ])
+
+    const result = await p.ingestBook(new File([], 'wizards.epub'))
+
+    // Book is mapped from the 201 BookDto (not a locally-constructed record):
+    // id + chapterCount echo the server's upsert row.
+    expect(result.book).toMatchObject({ format: 'epub', chapterCount: 2 })
+    // Chapters use the server's derived id scheme so later GET /chapters agree.
+    expect(result.chapters.map((c) => c.id)).toEqual([
+      chapterId(`ch_${result.book.id}_0`),
+      chapterId(`ch_${result.book.id}_1`),
+    ])
+    expect(result.chapters[0]?.paragraphs).toEqual(['Hello world.', 'Second ¶.'])
+
+    // The POST carried a multipart body with a non-empty `bundle` field.
+    expect(posted).toHaveLength(1)
+    expect(posted[0]?.init?.method).toBe('POST')
+    const body = posted[0]?.init?.body
+    expect(body).toBeInstanceOf(FormData)
+    const bundle = (body as FormData).get('bundle')
+    expect(bundle).toBeInstanceOf(Blob)
+    expect((bundle as Blob).size).toBeGreaterThan(0)
+  })
+
+  it('throws UnsupportedFileError for unrecognized extensions without any fetch', async () => {
+    const p = pipeline([])
+    await expect(p.ingestBook(new File([], 'book.docx'))).rejects.toThrow(
+      'Unsupported file type: book.docx',
+    )
+  })
+
+  it('surfaces a 413 oversize upload as ServerApiError', async () => {
+    parseMock.mockResolvedValue({
+      title: 'Big',
+      chapters: [{ title: 'C', paragraphs: ['x'] }],
+    } as ParseResult)
+    const p = pipeline([['/api/books', () => new Response('payload too large', { status: 413 })]])
+    const err = await p.ingestBook(new File([], 'big.epub')).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ServerApiError)
+    expect((err as ServerApiError).status).toBe(413)
+  })
+})
+
+describe('ServerSynthPipeline startJob (trigger → poll loop)', () => {
+  it('happy path: probe → POST synth with the spec voice → poll → done', async () => {
+    let polls = 0
+    const synthBodies: unknown[] = []
+    const p = pipeline([
+      [
+        '/api/books/b1/synth',
+        (init) => {
+          synthBodies.push(JSON.parse(String(init?.body)))
+          return { jobId: 'j1' }
+        },
+      ],
+      [
+        /\/api\/jobs\/j1$/,
+        () => {
+          polls += 1
+          return polls <= 2
+            ? jobDto({ status: 'running', done: polls, total: 5 })
+            : jobDto({ status: 'succeeded', done: 5, total: 5 })
+        },
+      ],
+      ['/api/books/b1', () => dto({ audioPresent: false })],
+    ])
+
+    p.startJob(specBook())
+    expect(p.getState().type).toBe('synthesizing')
+
+    await until(() => p.getState().type === 'done')
+    expect(synthBodies).toEqual([{ voice: 'en_US-lessac' }])
+    expect(polls).toBe(3)
+    expect(p.getState()).toMatchObject({ type: 'done', mode: 'initial' })
+
+    p.dismiss()
+    expect(p.getState()).toEqual({ type: 'idle' })
+  })
+
+  it('feeds running job done/total into the synthesizing state', async () => {
+    const seen: Array<{ done: number; total: number }> = []
+    let polls = 0
+    const p = pipeline([
+      ['/api/books/b1/synth', () => ({ jobId: 'j1' })],
+      [
+        /\/api\/jobs\/j1$/,
+        () => {
+          polls += 1
+          return polls <= 2
+            ? jobDto({ status: 'running', done: polls, total: 4 })
+            : jobDto({ status: 'succeeded', done: 4, total: 4 })
+        },
+      ],
+      ['/api/books/b1', () => dto({ audioPresent: false })],
+    ])
+    p.subscribe(() => {
+      const s = p.getState()
+      if (s.type === 'synthesizing') seen.push({ done: s.done, total: s.total })
+    })
+    p.startJob(specBook())
+    await until(() => p.getState().type === 'done')
+    // Every running poll's done/total flowed through (1/4 then 2/4); the
+    // succeeded poll settles 'done' directly.
+    expect(seen).toEqual(expect.arrayContaining([{ done: 1, total: 4 }]))
+    expect(seen.at(-1)).toEqual({ done: 2, total: 4 })
+  })
+
+  it('audioPresent book (or resynth mode) triggers the resynth endpoint', async () => {
+    let polls = 0
+    let resynthBody: unknown
+    const p = pipeline([
+      [
+        '/api/books/b1/resynth',
+        (init) => {
+          resynthBody = JSON.parse(String(init?.body))
+          return { jobId: 'j1' }
+        },
+      ],
+      [
+        /\/api\/jobs\/j1$/,
+        () => {
+          polls += 1
+          return jobDto({ status: 'succeeded', kind: 'resynth' })
+        },
+      ],
+      ['/api/books/b1', () => dto({ audioPresent: true, voiceId: 'en_US-amy' })],
+    ])
+
+    // Explicit resynth mode (library card "synthesize again")…
+    p.startJob(specBook({ mode: 'resynth' }))
+    await until(() => p.getState().type === 'done')
+    expect(resynthBody).toEqual({ voice: 'en_US-lessac' })
+    expect(p.getState()).toMatchObject({ type: 'done', mode: 'resynth' })
+
+    // …and an initial-mode job on a book that already has audio (race guard).
+    p.dismiss()
+    polls = 0
+    p.startJob(specBook())
+    await until(() => p.getState().type === 'done')
+    expect(polls).toBe(1)
+  })
+
+  it('409 already-running adopts the in-flight job instead of erroring', async () => {
+    const p = pipeline([
+      ['/api/books/b1/synth', () => json(409, 'a synth job is already running for book b1')],
+      ['/api/jobs', () => [jobDto({ status: 'running', done: 1, total: 9 })]],
+      [/\/api\/jobs\/j1$/, () => jobDto({ status: 'succeeded' })],
+      ['/api/books/b1', () => dto({ audioPresent: false })],
+    ])
+
+    p.startJob(specBook())
+    await until(() => p.getState().type === 'done')
+    expect(p.getState()).toMatchObject({ type: 'done', mode: 'initial' })
+  })
+
+  it('409 with nothing adoptable surfaces the server message as a retryable error', async () => {
+    const p = pipeline([
+      ['/api/books/b1/synth', () => json(409, 'book already has audio; use resynth')],
+      ['/api/jobs', () => []],
+      ['/api/books/b1', () => dto({ audioPresent: false })],
+    ])
+
+    p.startJob(specBook())
+    await until(() => p.getState().type === 'error')
+    const s = p.getState()
+    expect(s).toMatchObject({ type: 'error', mode: 'initial' })
+    if (s.type === 'error') {
+      expect(s.message).toContain('resynth')
+      expect(s.retryable).toBe(true)
+    }
+    expect(p.canRetry()).toBe(true)
+  })
+
+  it('job failure surfaces the server error message', async () => {
+    const p = pipeline([
+      ['/api/books/b1/synth', () => ({ jobId: 'j1' })],
+      ['/api/books/b1', () => dto({ audioPresent: false })],
+      [
+        /\/api\/jobs\/j1$/,
+        () => jobDto({ status: 'failed', error: 'voice model download failed' }),
+      ],
+    ])
+
+    p.startJob(specBook())
+    await until(() => p.getState().type === 'error')
+    expect(p.getState()).toMatchObject({
+      type: 'error',
+      message: 'voice model download failed',
+      mode: 'initial',
+    })
+  })
+
+  it('retry re-runs the failed trigger', async () => {
+    let attempt = 0
+    const p = pipeline([
+      [
+        '/api/books/b1/synth',
+        () => {
+          attempt += 1
+          return attempt === 1 ? json(500, 'boom') : { jobId: 'j1' }
+        },
+      ],
+      [/\/api\/jobs\/j1$/, () => jobDto({ status: 'succeeded' })],
+      ['/api/books/b1', () => dto({ audioPresent: false })],
+    ])
+
+    p.startJob(specBook())
+    await until(() => p.getState().type === 'error')
+    p.retry()
+    await until(() => p.getState().type === 'done')
+    expect(attempt).toBe(2)
+  })
+
+  it('unknown book on the server (probe 404) surfaces an error', async () => {
+    const p = pipeline([['/api/books/b1', () => json(404, 'book not found')]])
+    p.startJob(specBook())
+    await until(() => p.getState().type === 'error')
+    expect(p.getState()).toMatchObject({ type: 'error' })
+  })
+
+  it('poll 401 surfaces an error (cookie expired mid-job)', async () => {
+    const p = pipeline([
+      ['/api/books/b1/synth', () => ({ jobId: 'j1' })],
+      ['/api/books/b1', () => dto({ audioPresent: false })],
+      [/\/api\/jobs\/j1$/, () => json(401, 'unauthorized')],
+    ])
+    p.startJob(specBook())
+    await until(() => p.getState().type === 'error')
+    const s = p.getState()
+    if (s.type === 'error') {
+      expect(s.book.title).toBe('Wizards Abroad')
+    }
+  })
+
+  it('startJob while active throws (re-entry guard)', () => {
+    const p = pipeline([
+      ['/api/books/b1/synth', () => ({ jobId: 'j1' })],
+      ['/api/books/b1', () => dto({ audioPresent: false })],
+      [/\/api\/jobs\/j1$/, () => jobDto({ status: 'running' })],
+    ])
+    p.startJob(specBook())
+    expect(() => p.startJob(specBook())).toThrow('already running')
+  })
+})
+
+describe('ServerSynthPipeline cancel (stop polling — the job keeps running server-side)', () => {
+  it('flips cancelling → idle and stops the poll loop', async () => {
+    let polls = 0
+    const p = pipeline([
+      ['/api/books/b1/synth', () => ({ jobId: 'j1' })],
+      ['/api/books/b1', () => dto({ audioPresent: false })],
+      [
+        /\/api\/jobs\/j1$/,
+        () => {
+          polls += 1
+          return jobDto({ status: 'running', done: polls, total: 100 })
+        },
+      ],
+    ])
+
+    p.startJob(specBook())
+    await until(() => polls >= 2)
+    p.cancel()
+    await until(() => p.getState().type === 'idle')
+    expect(p.getState()).toEqual({ type: 'idle' })
+
+    const pollsAtCancel = polls
+    await new Promise((r) => setTimeout(r, 30))
+    expect(polls).toBe(pollsAtCancel)
+  })
+})
+
+describe('ServerSynthPipeline passive surface', () => {
+  it('passive queries keep mount-path subscribers inert', () => {
     const p = createServerSynthPipeline()
     expect(p.getState()).toEqual({ type: 'idle' })
     expect(p.getState()).toBe(p.getState()) // reference-stable for useSyncExternalStore
@@ -341,21 +719,16 @@ describe('serverSynthPipeline stub', () => {
     expect(() => unsub()).not.toThrow()
   })
 
-  it('delete guards answer no-op so hosted delete still works', async () => {
+  it('delete guards answer no-op; the server 409 is authoritative', async () => {
     const p = createServerSynthPipeline()
     expect(await p.cancelForBook(bookId('b1'))).toEqual({ type: 'no-op' })
     expect(await p.cancelTransformForBook(bookId('b1'))).toEqual({ type: 'no-op' })
   })
 
-  it('operations throw HostedModeUnavailableError', async () => {
+  it('unsupported hosted operations still throw HostedModeUnavailableError', async () => {
     const p = createServerSynthPipeline()
-    await expect(p.ingestBook(new File([], 'b.epub'))).rejects.toBeInstanceOf(
-      HostedModeUnavailableError,
-    )
-    expect(() => p.startJob({} as Parameters<typeof p.startJob>[0])).toThrow(
-      HostedModeUnavailableError,
-    )
-    await expect(p.resume(bookId('b1'))).rejects.toBeInstanceOf(HostedModeUnavailableError)
+    expect(() => p.pause()).toThrow(HostedModeUnavailableError)
+    await expect(p.reparseChapters(bookId('b1'))).rejects.toBeInstanceOf(HostedModeUnavailableError)
     await expect(
       p.startTransform({} as Parameters<typeof p.startTransform>[0], {
         ai: {} as Parameters<typeof p.startTransform>[1]['ai'],
@@ -363,7 +736,6 @@ describe('serverSynthPipeline stub', () => {
         synthEnabled: true,
       }),
     ).rejects.toBeInstanceOf(HostedModeUnavailableError)
-    await expect(p.reparseChapters(bookId('b1'))).rejects.toBeInstanceOf(HostedModeUnavailableError)
   })
 })
 
