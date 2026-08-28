@@ -10,7 +10,7 @@ import { SettingsProvider } from './context/settings'
 // on first page load is captured even if the user hasn't opened Settings yet
 // (where the install affordance lives). See `lib/install-prompt.ts`.
 import './lib/install-prompt'
-import { resolveDatasourceMode } from './lib/datasource'
+import { resolveDatasourceMode, serverSynthPipeline } from './lib/datasource'
 import { isMediaSessionSupported, supportedMediaSessionActions } from './lib/media-session'
 import { requestPersistence } from './lib/storage'
 import {
@@ -43,6 +43,10 @@ if (!root) throw new Error('#root not found')
 //      clear stranded `transforming` flags; if `transformJob` is present the
 //      book surfaces as Paused in the library. Silent — logs only. Local
 //      only, same reasoning.
+//   4. SERVER MODE: re-adopt any in-flight server synth job (T14 / R5) —
+//      closing the tab mid-synth never paused anything server-side, so the
+//      recent-jobs list is probed and a non-terminal job re-attaches to the
+//      pipeline's poll loop. Silent — logs only.
 //
 // All best-effort; failures degrade gracefully and never block render.
 void (async () => {
@@ -56,6 +60,10 @@ void (async () => {
     })
     await reconcileInterruptedTransforms().catch((error) => {
       console.info('[taletrek] boot-sweep (transforms) failed:', error)
+    })
+  } else {
+    await serverSynthPipeline.recoverInFlightJobs().catch((error) => {
+      console.info('[taletrek] server job recovery failed:', error)
     })
   }
 

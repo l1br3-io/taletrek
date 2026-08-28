@@ -1,6 +1,8 @@
 import { describe, expect, it, type Mock, vi } from 'vitest'
 import type { Chapter, VoiceId } from '../../types'
 import { bookId, chapterId } from '../../types'
+import type { AiSettings, TransformDefinition, TransformOp } from '../ai/types'
+import { readBookBundle } from '../bundle/reader'
 import type { ParseResult } from '../parse/types'
 import {
   type BookDto,
@@ -14,9 +16,25 @@ import {
 } from './server'
 
 const parseMock = vi.fn<(file: File) => Promise<ParseResult>>()
+const engineMock =
+  vi.fn<
+    (
+      paragraphs: string[],
+      op: unknown,
+      def: unknown,
+      onProgress: unknown,
+      signal?: AbortSignal,
+    ) => Promise<string[]>
+  >()
 
 vi.mock('../parse/client', () => ({
   parseInWorker: (file: File) => parseMock(file),
+}))
+
+vi.mock('../ai/client', () => ({
+  getAiEngineForDef: () => ({
+    transform: (...args: Parameters<typeof engineMock>) => engineMock(...args),
+  }),
 }))
 
 // ---------------------------------------------------------------------------
@@ -728,14 +746,365 @@ describe('ServerSynthPipeline passive surface', () => {
   it('unsupported hosted operations still throw HostedModeUnavailableError', async () => {
     const p = createServerSynthPipeline()
     expect(() => p.pause()).toThrow(HostedModeUnavailableError)
+    expect(() => p.pauseTransform()).toThrow(HostedModeUnavailableError)
+    await expect(p.resumeTransform(bookId('b1'))).rejects.toBeInstanceOf(HostedModeUnavailableError)
     await expect(p.reparseChapters(bookId('b1'))).rejects.toBeInstanceOf(HostedModeUnavailableError)
-    await expect(
-      p.startTransform({} as Parameters<typeof p.startTransform>[0], {
+    // startTransform surfaces pre-loop failures via the transform error
+    // variant (local-manager contract), never throws.
+    await p.startTransform(
+      { book: specBook().book, ops: [] } as unknown as Parameters<typeof p.startTransform>[0],
+      {
         ai: {} as Parameters<typeof p.startTransform>[1]['ai'],
         defs: [],
         synthEnabled: true,
-      }),
-    ).rejects.toBeInstanceOf(HostedModeUnavailableError)
+      },
+    )
+    expect(p.getTransformState()).toMatchObject({ type: 'error' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ServerSynthPipeline (T14) — reload recovery (R5)
+// ---------------------------------------------------------------------------
+
+describe('ServerSynthPipeline reload recovery (R5)', () => {
+  it('recoverInFlightJobs adopts the newest non-terminal job and polls it', async () => {
+    const p = pipeline([
+      [
+        '/api/jobs',
+        () => [
+          jobDto({ status: 'succeeded', id: 'j0' }),
+          jobDto({ id: 'j1', status: 'running', done: 2, total: 7 }),
+        ],
+      ],
+      ['/api/jobs/j1', () => jobDto({ status: 'succeeded', done: 7, total: 7 })],
+      ['/api/books/b1', () => dto()],
+    ])
+
+    await p.recoverInFlightJobs()
+    expect(p.getState()).toMatchObject({ type: 'synthesizing', done: 2, total: 7 })
+    await until(() => p.getState().type === 'done')
+    expect(p.getState()).toMatchObject({ type: 'done', mode: 'initial' })
+  })
+
+  it('recoverInFlightJobs stays idle when every recent job is terminal', async () => {
+    let listFetches = 0
+    const p = pipeline([
+      [
+        '/api/jobs',
+        () => {
+          listFetches += 1
+          return [jobDto({ status: 'succeeded' }), jobDto({ status: 'failed' })]
+        },
+      ],
+    ])
+    await p.recoverInFlightJobs()
+    expect(p.getState()).toEqual({ type: 'idle' })
+    expect(listFetches).toBe(1)
+  })
+
+  it('recoverInFlightJobs is silent when the jobs list is unreachable', async () => {
+    const p = pipeline([['/api/jobs', () => json(500, 'boom')]])
+    await expect(p.recoverInFlightJobs()).resolves.toBeUndefined()
+    expect(p.getState()).toEqual({ type: 'idle' })
+  })
+
+  it('resume adopts an in-flight job for the book; no in-flight job → no-op', async () => {
+    const p = pipeline([
+      [
+        '/api/jobs',
+        () => [jobDto({ id: 'j1', status: 'running', done: 1, total: 3, kind: 'resynth' })],
+      ],
+      ['/api/jobs/j1', () => jobDto({ status: 'succeeded', kind: 'resynth' })],
+      ['/api/books/b1', () => dto({ audioPresent: true })],
+    ])
+    await p.resume(bookId('b1'))
+    await until(() => p.getState().type === 'done')
+    expect(p.getState()).toMatchObject({ type: 'done', mode: 'resynth' })
+
+    const idle = pipeline([['/api/jobs', () => []]])
+    await idle.resume(bookId('b1'))
+    expect(idle.getState()).toEqual({ type: 'idle' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ServerSynthPipeline (T14) — hosted transform (client-side loop → re-POST → synth)
+// ---------------------------------------------------------------------------
+
+const TRANSFORM_DEF = {
+  id: 'upper',
+  label: 'Uppercase',
+  hint: '',
+  desc: '',
+  systemPrompt: '',
+  params: [],
+} as unknown as TransformDefinition
+
+const transformDeps = (synthEnabled: boolean) => ({
+  ai: { enabled: true } as unknown as AiSettings,
+  defs: [TRANSFORM_DEF],
+  synthEnabled,
+})
+
+function transformChapters(): Chapter[] {
+  return [
+    {
+      id: chapterId('ch_b1_0'),
+      bookId: bookId('b1'),
+      index: 0,
+      title: 'Chapter One',
+      paragraphs: ['hello world.', 'second ¶.'],
+    },
+  ]
+}
+
+/** Capture re-POSTed bundles (parse the multipart field back into a bundle). */
+function bundleCapture(): {
+  bundles: Promise<BookBundleRouted>[]
+  respond: (init?: RequestInit) => Promise<BookDto[]>
+} {
+  const bundles: Promise<BookBundleRouted>[] = []
+  return {
+    bundles,
+    respond: (init) => {
+      const entry = (init?.body as FormData | undefined)?.get('bundle') as File | null
+      const parsed = entry
+        ? entry.arrayBuffer().then((buf) => readBookBundle(new Uint8Array(buf)))
+        : Promise.reject(new Error('no bundle field'))
+      bundles.push(parsed as Promise<BookBundleRouted>)
+      return Promise.resolve([dto()])
+    },
+  }
+}
+
+type BookBundleRouted = Awaited<ReturnType<typeof readBookBundle>>
+
+describe('ServerSynthPipeline startTransform (client-side AI loop → re-POST → trigger)', () => {
+  it('fresh book: transforms client-side, re-POSTs the transformed text, chains initial synth', async () => {
+    engineMock.mockImplementation(async (paragraphs: string[]) =>
+      paragraphs.map((p) => p.toUpperCase()),
+    )
+    const capture = bundleCapture()
+    let synthBody: unknown
+    const progressBodies: unknown[] = []
+    const p = pipeline([
+      ['/api/books', capture.respond],
+      [
+        '/api/books/b1/synth',
+        (init) => {
+          synthBody = JSON.parse(String(init?.body))
+          return { jobId: 'j1' }
+        },
+      ],
+      ['/api/jobs/j1', () => jobDto({ status: 'succeeded', done: 2, total: 2 })],
+      [
+        '/api/books/b1/progress',
+        (init) => {
+          progressBodies.push(JSON.parse(String(init?.body)))
+          return dto()
+        },
+      ],
+      ['/api/books/b1', () => dto({ audioPresent: false })],
+    ])
+
+    await p.startTransform(
+      {
+        book: specBook().book,
+        chapters: transformChapters(),
+        ops: [{ defId: 'upper', params: {} } as TransformOp],
+        voiceId: 'en_US-lessac' as VoiceId,
+        cleaning: idleCleaning,
+      },
+      transformDeps(true),
+    )
+
+    expect(p.getTransformState()).toMatchObject({ type: 'done', bookId: bookId('b1') })
+    await until(() => p.getState().type === 'done')
+
+    // The re-POSTed bundle carries the transformed paragraphs, the intended
+    // voice, and the applied-processing record.
+    expect(capture.bundles).toHaveLength(1)
+    const bundle = await capture.bundles[0]
+    if (!bundle) throw new Error('no bundle posted')
+    expect(bundle.chapters[0]?.paragraphs).toEqual(['HELLO WORLD.', 'SECOND ¶.'])
+    expect(bundle.manifest.book.voiceId).toBe('en_US-lessac')
+    expect(bundle.manifest.audio.present).toBe(false)
+    expect(bundle.meta.processing?.ops).toHaveLength(1)
+
+    // Initial synth under the spec voice; position reset to the chapter start.
+    expect(synthBody).toEqual({ voice: 'en_US-lessac' })
+    expect(progressBodies).toEqual([{ chapterIndex: 0, paragraphIndex: 0, progressFraction: 0 }])
+  })
+
+  it("re-transform after synth: resynths under the book's current voice", async () => {
+    engineMock.mockImplementation(async (paragraphs: string[]) => paragraphs)
+    const capture = bundleCapture()
+    let resynthBody: unknown
+    const p = pipeline([
+      ['/api/books', capture.respond],
+      [
+        '/api/books/b1/resynth',
+        (init) => {
+          resynthBody = JSON.parse(String(init?.body))
+          return { jobId: 'j1' }
+        },
+      ],
+      ['/api/jobs/j1', () => jobDto({ status: 'succeeded', kind: 'resynth' })],
+      ['/api/books/b1/progress', () => dto()],
+      ['/api/books/b1', () => dto({ audioPresent: true, voiceId: 'en_US-amy' })],
+    ])
+
+    await p.startTransform(
+      {
+        book: specBook().book,
+        chapters: transformChapters(),
+        ops: [{ defId: 'upper', params: {} } as TransformOp],
+        voiceId: 'en_US-lessac' as VoiceId,
+        cleaning: idleCleaning,
+      },
+      transformDeps(true),
+    )
+    await until(() => p.getState().type === 'done')
+
+    const bundle = await capture.bundles[0]
+    if (!bundle) throw new Error('no bundle posted')
+    expect(bundle.manifest.book.voiceId).toBe('en_US-amy')
+    expect(resynthBody).toEqual({ voice: 'en_US-amy' })
+    expect(p.getState()).toMatchObject({ type: 'done', mode: 'resynth' })
+  })
+
+  it('engine failure surfaces a transform error and nothing is POSTed', async () => {
+    engineMock.mockRejectedValue(new Error('provider quota exceeded'))
+    const capture = bundleCapture()
+    const p = pipeline([
+      ['/api/books', capture.respond],
+      ['/api/books/b1', () => dto()],
+    ])
+
+    await p.startTransform(
+      {
+        book: specBook().book,
+        chapters: transformChapters(),
+        ops: [{ defId: 'upper', params: {} } as TransformOp],
+        voiceId: 'en_US-lessac' as VoiceId,
+        cleaning: idleCleaning,
+      },
+      transformDeps(true),
+    )
+
+    expect(p.getTransformState()).toMatchObject({
+      type: 'error',
+      message: 'provider quota exceeded',
+    })
+    expect(capture.bundles).toHaveLength(0)
+  })
+
+  it('re-POST failure (413) surfaces a transform error', async () => {
+    engineMock.mockImplementation(async (paragraphs: string[]) => paragraphs)
+    const p = pipeline([
+      ['/api/books', () => new Response('payload too large', { status: 413 })],
+      ['/api/books/b1', () => dto()],
+    ])
+
+    await p.startTransform(
+      {
+        book: specBook().book,
+        chapters: transformChapters(),
+        ops: [{ defId: 'upper', params: {} } as TransformOp],
+        voiceId: 'en_US-lessac' as VoiceId,
+        cleaning: idleCleaning,
+      },
+      transformDeps(true),
+    )
+
+    expect(p.getTransformState()).toMatchObject({ type: 'error' })
+    const s = p.getTransformState()
+    if (s.type === 'error') {
+      expect(s.message).toContain('uploading the transformed text failed')
+    }
+    expect(p.getState()).toEqual({ type: 'idle' })
+  })
+
+  it('cancelTransform aborts the loop, drops the in-memory output, never POSTs', async () => {
+    engineMock.mockImplementation(
+      (
+        paragraphs: string[],
+        _op: unknown,
+        _def: unknown,
+        _onProgress: unknown,
+        signal?: AbortSignal,
+      ) =>
+        new Promise((resolve, reject) => {
+          const onAbort = () => reject(new DOMException('Aborted', 'AbortError'))
+          if (signal?.aborted) return onAbort()
+          signal?.addEventListener('abort', onAbort, { once: true })
+          setTimeout(() => resolve(paragraphs.map((p) => p.toUpperCase())), 10_000)
+        }),
+    )
+    const capture = bundleCapture()
+    const p = pipeline([
+      ['/api/books', capture.respond],
+      ['/api/books/b1', () => dto()],
+    ])
+
+    const running = p.startTransform(
+      {
+        book: specBook().book,
+        chapters: transformChapters(),
+        ops: [{ defId: 'upper', params: {} } as TransformOp],
+        voiceId: 'en_US-lessac' as VoiceId,
+        cleaning: idleCleaning,
+      },
+      transformDeps(true),
+    )
+    await until(() => p.getTransformState().type === 'running')
+    await p.cancelTransform()
+    await running
+    expect(p.getTransformState()).toEqual({ type: 'idle' })
+    expect(capture.bundles).toHaveLength(0)
+  })
+
+  it('cancelTransformForBook: own running book cancels; another book blocks with its title', async () => {
+    engineMock.mockImplementation(
+      (
+        _paragraphs: string[],
+        _op: unknown,
+        _def: unknown,
+        _onProgress: unknown,
+        signal?: AbortSignal,
+      ) =>
+        new Promise((resolve, reject) => {
+          const onAbort = () => reject(new DOMException('Aborted', 'AbortError'))
+          if (signal?.aborted) return onAbort()
+          signal?.addEventListener('abort', onAbort, { once: true })
+          setTimeout(() => resolve([]), 10_000)
+        }),
+    )
+    const p = pipeline([
+      ['/api/books', bundleCapture().respond],
+      ['/api/books/b1', () => dto()],
+    ])
+
+    const running = p.startTransform(
+      {
+        book: specBook().book,
+        chapters: transformChapters(),
+        ops: [{ defId: 'upper', params: {} } as TransformOp],
+        voiceId: 'en_US-lessac' as VoiceId,
+        cleaning: idleCleaning,
+      },
+      transformDeps(true),
+    )
+    await until(() => p.getTransformState().type === 'running')
+
+    expect(await p.cancelTransformForBook(bookId('other'))).toEqual({
+      type: 'blocked',
+      activeBookTitle: 'Wizards Abroad',
+    })
+    expect(await p.cancelTransformForBook(bookId('b1'))).toEqual({ type: 'cancelled' })
+    await running
+    expect(p.getTransformState()).toEqual({ type: 'idle' })
   })
 })
 
