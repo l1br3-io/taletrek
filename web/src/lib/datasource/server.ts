@@ -73,11 +73,14 @@ import {
   WRITABLE_AUDIO_CODEC,
 } from '../bundle/manifest'
 import { writeBookBundle } from '../bundle/writer'
+import { cleanChapters } from '../clean'
+import type { CleaningConfig } from '../clean/types'
+import { DEFAULT_CLEANING } from '../clean/types'
+import { getSetting } from '../db'
 import { type IngestResult, UnsupportedFileError } from '../ingest'
 import { parseInWorker } from '../parse/client'
 import { formatForFile } from '../parse/util'
 import { NORM_VERSION } from '../tts/normalize'
-import type { TtsEngine } from '../tts/types'
 import { DEFAULT_VOICE_ID } from '../tts/voices'
 import type {
   BookTransformState,
@@ -212,7 +215,14 @@ function toChapter(dto: ChapterDto): Chapter {
 // Fetch plumbing
 // ---------------------------------------------------------------------------
 
-async function api(fetchImpl: typeof fetch, path: string, init?: RequestInit): Promise<Response> {
+/** Shared fetch plumbing for the server shape (also used by the T15 remote
+ * playback engine): same-origin cookies, no-store, `ServerApiError` on any
+ * HTTP/network failure. */
+export async function api(
+  fetchImpl: typeof fetch,
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
   let res: Response
   try {
     res = await fetchImpl(path, {
@@ -256,6 +266,24 @@ async function fetchBookDto(fetchImpl: typeof fetch, id: BookId): Promise<BookDt
 
 function notFound(e: unknown): boolean {
   return e instanceof ServerApiError && e.status === 404
+}
+
+/**
+ * Read the user's cleaning config for egress (the hosted `ingestBook` bundle
+ * write). Settings stay client-side IndexedDB in both modes (ADR-0014); the
+ * SettingsProvider persists the merged object under `'app'` on every update
+ * (same read pattern as `bundle/export.ts`'s voice recovery). A never-written
+ * store (fresh install, first upload) falls back to the default config —
+ * which matches what the reader displays before settings hydrate.
+ */
+async function readCleaningConfig(): Promise<CleaningConfig> {
+  try {
+    const stored = await getSetting<{ cleaning?: CleaningConfig }>('app')
+    return stored?.cleaning ?? DEFAULT_CLEANING
+  } catch {
+    // IDB must never block an upload — fail open to the defaults.
+    return DEFAULT_CLEANING
+  }
 }
 
 /**
@@ -580,13 +608,23 @@ class RemoteSynthPipeline implements SynthPipeline {
     const id = newBookId()
     // Chapter ids use the server's derived scheme (`ch_<bookId>_<idx>`, T9) so
     // the parse result agrees with every later `GET /chapters` fetch.
-    const chapters: Chapter[] = parsed.chapters.map((parsedChapter, index) => ({
-      id: chapterId(`ch_${id}_${index}`),
-      bookId: id,
-      index,
-      title: parsedChapter.title,
-      paragraphs: parsedChapter.paragraphs,
-    }))
+    // Egress cleaning (T15 key parity): the server synthesizes the bundle's
+    // stored text and the reader plays its cleaned view of that text — keys
+    // only agree when the two are the same string, so the user's cleaning
+    // config is applied HERE, before the bundle is written. The returned
+    // chapters mirror the bundle so the post-upload transform path re-POSTs
+    // cleaned text too.
+    const cleaning = await readCleaningConfig()
+    const chapters: Chapter[] = cleanChapters(
+      parsed.chapters.map((parsedChapter, index) => ({
+        id: chapterId(`ch_${id}_${index}`),
+        bookId: id,
+        index,
+        title: parsedChapter.title,
+        paragraphs: parsedChapter.paragraphs,
+      })),
+      cleaning,
+    )
     const provisional: Book = {
       id,
       title: parsed.title,
@@ -1130,31 +1168,3 @@ export function createServerSynthPipeline(
 /** Default singletons for the provider (one server shape per session). */
 export const serverDatasource: LibraryDatasource = createServerDatasource()
 export const serverSynthPipeline: RemoteSynthPipeline = createServerSynthPipeline()
-
-/**
- * Interim hosted playback engine (T13): occupies the players' engine slot in
- * server mode so on-device Piper never loads hosted (locked decision: synth
- * is server-side only in the hosted shape). `synthesize` refuses — the
- * player surfaces the error instead of downloading a voice model. T15
- * replaces the body with audio-by-key fetches through this same slot.
- */
-export const serverPlaybackEngine: TtsEngine = {
-  async synthesize(): Promise<never> {
-    throw new HostedModeUnavailableError('On-device playback synthesis')
-  },
-  async listVoices() {
-    return []
-  },
-  async isStored() {
-    return false
-  },
-  async download() {
-    throw new HostedModeUnavailableError('Downloading on-device voices')
-  },
-  async remove() {
-    // Nothing is ever stored hosted — no-op.
-  },
-  async clearAllStored() {
-    // Nothing is ever stored hosted — no-op.
-  },
-}
