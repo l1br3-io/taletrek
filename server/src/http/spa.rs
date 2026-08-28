@@ -92,6 +92,14 @@ pub(crate) async fn api_not_found() -> StatusCode {
     StatusCode::NOT_FOUND
 }
 
+/// Unknown `/ui/*` paths 404 (T16): the server-rendered namespace is just
+/// login/logout now — a stray `/ui/admin/…` (the deleted panel) must not
+/// fall through to the SPA's history fallback and boot the whole app for a
+/// dead URL. Same shape as [`api_not_found`].
+pub(crate) async fn ui_not_found() -> StatusCode {
+    StatusCode::NOT_FOUND
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -151,6 +151,9 @@ pub fn router(state: AppState) -> Router {
         // Unknown API paths 404 as an API — without this the SPA fallback
         // would answer them with `index.html` (200 HTML for a typo'd endpoint).
         .route("/api/{*rest}", any(spa::api_not_found))
+        // Unknown /ui paths likewise (T16): the deleted panel's URLs must
+        // 404, not boot the SPA via the history fallback.
+        .route("/ui/{*rest}", any(spa::ui_not_found))
         .route_layer(SetResponseHeaderLayer::if_not_present(
             header::CONTENT_SECURITY_POLICY,
             axum::http::HeaderValue::from_static(STRICT_CSP),
@@ -196,6 +199,28 @@ mod tests {
             .expect("valid request");
         let resp = app.oneshot(req).await.expect("router serves");
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// T16: the deleted operator panel 404s even when authed — it must not
+    /// fall through to the SPA's history fallback (that would boot the app
+    /// for a dead URL).
+    #[tokio::test]
+    async fn deleted_panel_paths_are_404_even_when_authed() {
+        let app = router(test_support::app_state_with_static_dir(
+            std::sync::Arc::new(crate::db::test_utils::StubDb::new()),
+            std::path::PathBuf::from("/nonexistent-taletrek-test"),
+            "sekrit",
+        ));
+        for path in ["/ui/admin", "/ui/admin/jobs", "/ui/admin/books/b1"] {
+            let req = Request::builder()
+                .method("GET")
+                .uri(path)
+                .header(header::COOKIE, "taletrek_token=sekrit")
+                .body(Body::empty())
+                .expect("valid request");
+            let resp = app.clone().oneshot(req).await.expect("router serves");
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "path {path}");
+        }
     }
 
     /// Every response — API and UI, authed or not — carries the security
