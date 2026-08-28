@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { localDatasource } from '../../lib/datasource'
+import { useDatasource } from '../../context/datasource'
 
 export interface AudioCacheStats {
   /** Current cache size in bytes, or null while loading / on error. */
@@ -14,15 +14,16 @@ export interface AudioCacheStats {
  * playback, not while Settings is open; call `refresh()` after a Clear.
  */
 export function useAudioCacheStats(): AudioCacheStats {
+  const { library } = useDatasource()
   const [sizeBytes, setSizeBytes] = useState<number | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      setSizeBytes(await localDatasource.getAudioCacheSize())
+      setSizeBytes(await library.getAudioCacheSize())
     } catch {
       setSizeBytes(null)
     }
-  }, [])
+  }, [library])
 
   useEffect(() => {
     void refresh()

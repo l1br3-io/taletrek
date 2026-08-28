@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { localDatasource } from '../../lib/datasource'
+import { useDatasource } from '../../context/datasource'
 import type { BookId, BookPosition } from '../../types'
 import type { ParagraphRef } from './players/types'
 
@@ -24,6 +24,7 @@ export function useProgressPersistence({
   currentParagraph,
   totalParagraphs,
 }: UseProgressPersistenceArgs) {
+  const { library } = useDatasource()
   const latestRef = useRef<{ position: BookPosition; fraction: number } | null>(null)
 
   useEffect(() => {
@@ -32,7 +33,7 @@ export function useProgressPersistence({
     latestRef.current = { position: toPosition(currentParagraph), fraction }
     const handle = setTimeout(() => {
       if (latestRef.current) {
-        void localDatasource.updateBookProgress(
+        void library.updateBookProgress(
           bookId,
           latestRef.current.position,
           latestRef.current.fraction,
@@ -40,17 +41,17 @@ export function useProgressPersistence({
       }
     }, 2000)
     return () => clearTimeout(handle)
-  }, [currentIndex, currentParagraph, bookId, totalParagraphs])
+  }, [currentIndex, currentParagraph, bookId, totalParagraphs, library])
 
   useEffect(() => {
     return () => {
       if (latestRef.current) {
-        void localDatasource.updateBookProgress(
+        void library.updateBookProgress(
           bookId,
           latestRef.current.position,
           latestRef.current.fraction,
         )
       }
     }
-  }, [bookId])
+  }, [bookId, library])
 }

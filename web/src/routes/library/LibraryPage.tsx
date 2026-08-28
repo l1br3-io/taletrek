@@ -1,7 +1,7 @@
 import { X } from 'lucide-react'
 import { BundleExportAction } from '../../components/BundleExportAction'
 import { BundleImportButton } from '../../components/BundleImportButton'
-import { localSynthPipeline } from '../../lib/datasource'
+import { useDatasource } from '../../context/datasource'
 import { AiStatusChip } from './AiStatusChip'
 import { FeatureUnavailableSheet } from './FeatureUnavailableSheet'
 import { LibraryList } from './LibraryList'
@@ -12,6 +12,7 @@ import { UploadButton } from './UploadButton'
 import { useLibraryState } from './useLibraryState'
 
 export function Library() {
+  const { synth } = useDatasource()
   const {
     ai,
     online,
@@ -162,7 +163,7 @@ export function Library() {
             {...aiMenuItems}
             onOutline={handleOutline}
             onResynthesize={synthesizeOnUpload !== 'off' ? handleResynthesize : undefined}
-            onResume={(id) => void localSynthPipeline.resume(id)}
+            onResume={(id) => void synth.resume(id)}
             onRename={handleRename}
             onExportBundle={(id) => void handleExportBundle(id)}
             aiUsable={aiUsable}

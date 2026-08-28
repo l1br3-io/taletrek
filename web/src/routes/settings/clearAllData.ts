@@ -1,4 +1,4 @@
-import { localDatasource } from '../../lib/datasource'
+import type { LibraryDatasource } from '../../lib/datasource'
 import { ttsClient } from '../../lib/tts/client'
 
 /**
@@ -10,9 +10,9 @@ import { ttsClient } from '../../lib/tts/client'
  * Best-effort — each step is independent and failures are swallowed so a
  * partial wipe (e.g. SW unregister fails) still clears the user data.
  */
-export async function clearAllData(): Promise<void> {
+export async function clearAllData(library: LibraryDatasource): Promise<void> {
   await Promise.allSettled([
-    localDatasource.clearAllStores(),
+    library.clearAllStores(),
     ttsClient.clearAllStored(),
     clearServiceWorkers(),
     clearCaches(),

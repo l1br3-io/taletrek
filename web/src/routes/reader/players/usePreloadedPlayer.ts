@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { type BookAudio, localDatasource } from '../../../lib/datasource'
+import { useDatasource } from '../../../context/datasource'
+import type { BookAudio } from '../../../lib/datasource'
 import type { TtsEngine } from '../../../lib/tts/types'
 import type { BookId, Chapter, VoiceId } from '../../../types'
 import { flattenParagraphs, type PlaybackStatus, type UseParagraphPlayerResult } from './types'
@@ -19,6 +20,7 @@ export function usePreloadedPlayer({
   initialIndex,
   bookId,
 }: UsePreloadedPlayerArgs): UseParagraphPlayerResult {
+  const { library } = useDatasource()
   const paragraphs = useMemo(() => flattenParagraphs(chapters), [chapters])
 
   const [status, setStatus] = useState<PlaybackStatus>({ type: 'idle' })
@@ -69,7 +71,7 @@ export function usePreloadedPlayer({
 
       let ba: BookAudio | null | undefined = bookAudioRef.current
       if (!ba) {
-        const fetchResult = await localDatasource.getBookAudio(bookId)
+        const fetchResult = await library.getBookAudio(bookId)
         if (!fetchResult) {
           if (token !== playTokenRef.current) return
           setStatus({ type: 'error', message: 'Audio not ready — please re-upload the book' })
@@ -113,7 +115,7 @@ export function usePreloadedPlayer({
         setStatus({ type: 'paused', paragraphId: para.id })
       }
     },
-    [bookId, createVideo, playbackRate, paragraphs],
+    [bookId, createVideo, playbackRate, paragraphs, library],
   )
 
   useEffect(() => {

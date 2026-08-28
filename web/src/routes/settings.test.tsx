@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { DatasourceProvider } from '../context/datasource'
 import { SettingsProvider } from '../context/settings'
 import {
   _clearDBForTests,
@@ -37,7 +38,9 @@ vi.mock('../lib/ai/keyring', () => ({
 function withProviders(node: React.ReactElement) {
   return (
     <MemoryRouter>
-      <SettingsProvider>{node}</SettingsProvider>
+      <DatasourceProvider>
+        <SettingsProvider>{node}</SettingsProvider>
+      </DatasourceProvider>
     </MemoryRouter>
   )
 }
