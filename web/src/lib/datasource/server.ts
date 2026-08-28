@@ -62,6 +62,7 @@ import type {
   VoiceId,
 } from '../../types'
 import { bookId, chapterId, newBookId } from '../../types'
+import { getAiEngineForDef } from '../ai/client'
 import type { ImportReport } from '../backup'
 import type { BookAudio } from '../book-audio'
 import type { BookBundle } from '../bundle/manifest'
@@ -500,6 +501,11 @@ class RemoteSynthPipeline implements SynthPipeline {
   /** Last accepted spec, re-run by `retry()`. */
   private lastSpec: (JobSpec & { mode: 'initial' | 'resynth' }) | null = null
 
+  /** Aborts the in-flight client-side transform loop. */
+  private transformAbort: AbortController | null = null
+  /** The running transform's book (title for `cancelTransformForBook`'s blocked result). */
+  private transformBook: Book | null = null
+
   constructor(opts: CreateServerSynthPipelineOptions = {}) {
     this.f = opts.fetchImpl ?? fetch
     this.defaultVoice = opts.defaultVoiceId ?? DEFAULT_VOICE_ID
@@ -530,6 +536,11 @@ class RemoteSynthPipeline implements SynthPipeline {
   private setJobState(next: JobState): void {
     this.job = next
     for (const ln of this.jobListeners) ln()
+  }
+
+  private setTransformState(next: BookTransformState): void {
+    this.transform = next
+    for (const ln of this.transformListeners) ln()
   }
 
   isActive(): boolean {
@@ -611,6 +622,17 @@ class RemoteSynthPipeline implements SynthPipeline {
 
   startJob(spec: JobSpec): void {
     if (this.isActive()) throw new Error('A synthesis job is already running')
+    this.launchJob(spec)
+  }
+
+  /**
+   * Set the synthesizing state + kick the async run — shared by `startJob`
+   * (throwing re-entry guard) and the post-transform chain (quiet skip when a
+   * job is somehow already active, mirroring the local manager's
+   * `triggerResynth`).
+   */
+  private launchJob(spec: JobSpec): void {
+    if (this.isActive()) return
     const resolved = { ...spec, mode: spec.mode ?? 'initial' } as JobSpec & {
       mode: 'initial' | 'resynth'
     }
@@ -790,21 +812,255 @@ class RemoteSynthPipeline implements SynthPipeline {
     return { type: 'no-op' }
   }
 
-  // --- transform half (T14 follows-up in a second commit) ---
+  // --- reload recovery (R5) ---
 
-  async resume(_bookId: BookId): Promise<void> {
-    throw new HostedModeUnavailableError('Resuming a paused job')
+  /**
+   * Re-adopt an in-flight server job after a reload (R5): the tab closing
+   * mid-synth never pauses anything server-side, so on boot in server mode
+   * `main.tsx` calls this — any non-terminal job in the recent-50 list is
+   * re-attached to the poll loop and the processing display resumes. Jobs
+   * that completed while away need no recovery: the book's `audioPresent`
+   * already shows ready. Best-effort and silent — an unreachable server
+   * leaves the pipeline idle.
+   */
+  async recoverInFlightJobs(): Promise<void> {
+    if (this.isActive()) return
+    const jobs = await getJson<JobDto[]>(this.f, '/api/jobs').catch(() => [])
+    const job = jobs.find((j) => j.status === 'queued' || j.status === 'running')
+    if (!job) return
+    const dto = await fetchBookDto(this.f, bookId(job.bookId)).catch(() => undefined)
+    if (!dto) return
+    const mode: 'initial' | 'resynth' = job.kind === 'resynth' ? 'resynth' : 'initial'
+    const book = toBook(dto)
+    this.stopPolling = false
+    this.setJobState({
+      type: 'synthesizing',
+      book,
+      done: job.done,
+      total: job.total,
+      synthesizedParagraphIds: new Set(),
+      mode,
+    })
+    void this.pollLoop(job.id, book, mode)
+  }
+
+  /** Adopt + watch any in-flight server job for a book (library Resume). */
+  async resume(bookId: BookId): Promise<void> {
+    if (this.isActive()) return
+    const job = await this.findInFlightJob(bookId).catch(() => undefined)
+    if (!job) return
+    const dto = await fetchBookDto(this.f, bookId).catch(() => undefined)
+    if (!dto) return
+    const mode: 'initial' | 'resynth' = job.kind === 'resynth' ? 'resynth' : 'initial'
+    const book = toBook(dto)
+    this.stopPolling = false
+    this.setJobState({
+      type: 'synthesizing',
+      book,
+      done: job.done,
+      total: job.total,
+      synthesizedParagraphIds: new Set(),
+      mode,
+    })
+    void this.pollLoop(job.id, book, mode)
   }
 
   pause(): void {
     throw new HostedModeUnavailableError('Pausing synthesis')
   }
 
-  async startTransform(_spec: TransformJobSpec, _deps: TransformRunDeps): Promise<void> {
-    throw new HostedModeUnavailableError('Whole-book AI transform')
+  // --- hosted whole-book AI transform ---
+
+  /**
+   * The transform corner of ADR-0014: AI transforms run **client-side**
+   * (keys never leave the browser) over in-memory chapters. On completion the
+   * transformed text is serialized to a fresh text-only bundle and re-POSTed
+   * (same book id → idempotent upsert; the old-voice audio is discarded with
+   * it) and synthesis is re-triggered — `resynth` under the book's *current*
+   * voice when it already had audio, else a first `synth` under the spec's.
+   * Operational failures surface via `getTransformState()` (error variant),
+   * never throws — mirroring the local manager's contract.
+   */
+  async startTransform(spec: TransformJobSpec, deps: TransformRunDeps): Promise<void> {
+    const failSync = (message: string): void => {
+      this.setTransformState({ type: 'error', bookId: spec.book.id, message })
+    }
+    if (this.transform.type === 'running' || this.transform.type === 'paused') {
+      failSync('A book transform is already in progress.')
+      return
+    }
+    if ((spec.ops?.length ?? 0) === 0) {
+      failSync('No transform ops selected.')
+      return
+    }
+    if (!deps.ai.enabled) {
+      failSync('AI is not enabled — open Settings → AI.')
+      return
+    }
+
+    // Pre-state probe, BEFORE the loop + re-POST: whether the book currently
+    // has audio decides synth vs resynth and fixes the book's current voice.
+    // After a text-only re-POST `audioPresent` is false by then, so the
+    // decision must be captured up front.
+    let dto: BookDto | undefined
+    try {
+      dto = await fetchBookDto(this.f, spec.book.id)
+    } catch (e) {
+      failSync(e instanceof Error ? e.message : 'Could not reach the server.')
+      return
+    }
+    if (!dto) {
+      failSync('Book not found on the server.')
+      return
+    }
+
+    this.transformAbort = new AbortController()
+    this.transformBook = spec.book
+    await this.runTransformLoop(spec, deps, dto)
+  }
+
+  private failTransform(bookId: BookId, message: string): void {
+    this.setTransformState({ type: 'error', bookId, message })
+  }
+
+  private async runTransformLoop(
+    spec: TransformJobSpec,
+    deps: TransformRunDeps,
+    dto: BookDto,
+  ): Promise<void> {
+    const { book, chapters } = spec
+
+    // Resolve defs + engines upfront (mirrors the local loop's pre-checks).
+    const pairs: Array<{
+      op: TransformJobSpec['ops'][number]
+      def: TransformRunDeps['defs'][number]
+      engine: NonNullable<ReturnType<typeof getAiEngineForDef>>
+    }> = []
+    for (const op of spec.ops) {
+      const def = deps.defs.find((d) => d.id === op.defId)
+      if (!def) {
+        this.failTransform(book.id, `Transform "${op.defId}" not found — it may have been deleted.`)
+        return
+      }
+      const engine = getAiEngineForDef(deps.ai, def)
+      if (!engine) {
+        this.failTransform(
+          book.id,
+          `No provider configured for "${def.label}". Open Settings → AI and configure a provider.`,
+        )
+        return
+      }
+      pairs.push({ op, def, engine })
+    }
+
+    const total = pairs.length * chapters.length
+    this.setTransformState({
+      type: 'running',
+      bookId: book.id,
+      opLabel: pairs[0]?.def.label ?? '',
+      currentOpIndex: 0,
+      totalOps: pairs.length,
+      currentChapterIndex: 0,
+      totalChapters: chapters.length,
+      done: 0,
+      total,
+      chapterStartedAt: performance.now(),
+      // Hosted transforms keep chapters in memory only; the live in-place
+      // paragraph rendering is a local-reader affordance and stays null here.
+      streamingParagraphs: null,
+    })
+
+    let working = chapters
+    let done = 0
+    try {
+      for (const [i, { op, def, engine }] of pairs.entries()) {
+        for (const [c, chapter] of working.entries()) {
+          if (this.transformAbort?.signal.aborted) {
+            throw new DOMException('Aborted', 'AbortError')
+          }
+          const out = await engine.transform(
+            chapter.paragraphs,
+            op,
+            def,
+            undefined,
+            this.transformAbort?.signal,
+          )
+          working = working.map((ch, idx) => (idx === c ? { ...chapter, paragraphs: out } : ch))
+          done += 1
+          const s = this.transform
+          if (s.type === 'running') {
+            this.setTransformState({
+              ...s,
+              currentOpIndex: i,
+              currentChapterIndex: c,
+              done,
+              total,
+              chapterStartedAt: performance.now(),
+            })
+          }
+        }
+      }
+    } catch (e) {
+      if ((e as DOMException)?.name === 'AbortError') {
+        // Cancel: nothing was committed server-side — the in-memory output is
+        // dropped wholesale and the transform goes back to idle.
+        this.setTransformState({ type: 'idle' })
+      } else {
+        this.failTransform(book.id, (e as Error)?.message || 'Transform failed.')
+      }
+      return
+    } finally {
+      this.transformAbort = null
+      this.transformBook = null
+    }
+
+    // Transform succeeded — submit: re-POST the transformed text-only bundle
+    // (idempotent upsert under the same book id), stamping the intended
+    // voice + the applied-processing record into the bundle's meta.
+    const voice: VoiceId = dto.audioPresent ? (dto.voiceId as VoiceId) : spec.voiceId
+    try {
+      const bytes = await writeBookBundle(
+        textOnlyBundle(book, working, voice, {
+          processing: { appliedAt: Date.now(), ops: spec.ops },
+        }),
+      )
+      await this.postBundle(book.id, bytes)
+    } catch (e) {
+      this.failTransform(
+        book.id,
+        `Transform succeeded but uploading the transformed text failed: ${
+          e instanceof Error ? e.message : 'network error'
+        }`,
+      )
+      return
+    }
+
+    // Reset the reading position to the chapter start (local parity — the
+    // M6 decision: a transform invalidates the old paragraphIndex).
+    const chapterIndex = book.position?.chapterIndex ?? 0
+    await api(this.f, `/api/books/${encodeURIComponent(book.id)}/progress`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chapterIndex, paragraphIndex: 0, progressFraction: 0 }),
+    }).catch(() => {})
+
+    this.setTransformState({ type: 'done', bookId: book.id })
+
+    // Chain synthesis (sequential, resynth-safe — mirrors the local manager).
+    if (deps.synthEnabled) {
+      this.launchJob({
+        book: { ...book, updatedAt: Date.now() },
+        chapters: working,
+        voiceId: voice,
+        cleaning: spec.cleaning,
+        mode: dto.audioPresent ? 'resynth' : 'initial',
+      })
+    }
   }
 
   async resumeTransform(_bookId: BookId): Promise<void> {
+    // Hosted transforms are in-memory only — a reload drops the output, so
+    // there is no persisted job to resume. Re-run from the modal instead.
     throw new HostedModeUnavailableError('Resuming a transform')
   }
 
@@ -812,12 +1068,46 @@ class RemoteSynthPipeline implements SynthPipeline {
     throw new HostedModeUnavailableError('Pausing a transform')
   }
 
+  /** Abort the running loop; already-completed chapters are dropped (nothing
+   * was committed server-side — the re-POST happens only at completion). */
   async cancelTransform(): Promise<void> {
-    throw new HostedModeUnavailableError('Cancelling a transform')
+    if (this.transform.type !== 'running') return
+    this.transformAbort?.abort()
+    await this.waitForTransformSettled()
   }
 
-  async cancelTransformForBook(_bookId: BookId): Promise<CancelForBookResult> {
-    return { type: 'no-op' }
+  async cancelTransformForBook(bookId: BookId): Promise<CancelForBookResult> {
+    if (this.transform.type !== 'running' && this.transform.type !== 'paused') {
+      return { type: 'no-op' }
+    }
+    if (this.transform.bookId !== bookId) {
+      return { type: 'blocked', activeBookTitle: this.transformBook?.title ?? 'another book' }
+    }
+    await this.cancelTransform()
+    return { type: 'cancelled' }
+  }
+
+  /** Resolve once the transform reaches a non-active state (bounded). */
+  private waitForTransformSettled(): Promise<void> {
+    return new Promise((resolve) => {
+      const settled = () => this.transform.type !== 'running'
+      if (settled()) {
+        resolve()
+        return
+      }
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        unsubscribe()
+        clearTimeout(timer)
+        resolve()
+      }
+      const unsubscribe = this.subscribeTransform(() => {
+        if (settled()) finish()
+      })
+      const timer = setTimeout(finish, 5000)
+    })
   }
 
   async reparseChapters(_bookId: BookId): Promise<Chapter[]> {
