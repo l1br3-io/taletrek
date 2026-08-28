@@ -26,13 +26,15 @@
 ### Checkpoint: SPA hosted, API complete — curl round-trip on new endpoints; served SPA in local mode.
 
 ## Phase 3 — `ServerDatasource` + hosted UX
-- [ ] T13: `resolve.ts` boot probe + `server.ts` library ops (`tasks/013-server-datasource.md`)
+- [x] T13: `resolve.ts` boot probe + `server.ts` library ops (`tasks/013-server-datasource.md`)
 - [ ] T14: Remote synth pipeline (`tasks/014-remote-synth-pipeline.md`)
 - [ ] T15: Remote playback (`tasks/015-remote-playback.md`)
 - [ ] T16: Hosted parity + delete askama panel (`tasks/016-hosted-parity-delete-panel.md`)
 - [ ] T17: SW `/api` network-only + affordances audit (`tasks/017-sw-scoping.md`)
 
 ### Checkpoint: End-to-end hosted flow — login → upload → server synth (tab closed) → reopen → play. Safari/Opus check (R2).
+
+> T13 verification notes (2026-08-28): `just dev` with a seeded server — probe 200 → `datasource mode: server`; 401 (no cookie) → `/ui/login` redirect, post-login cookie lands back on `/` in server mode; library lists the server book; reader loads chapters (lazy explode) + position PATCH round-trips (`position.progressFraction` piggybacks on the verbatim T11 body). Standalone check: `pnpm dev` with no server → proxy 502 → `datasource mode: local`, PWA boots identically. Hosted Play currently refuses with "On-device playback synthesis is not available while hosted by the server." (`serverPlaybackEngine` holds the T15 engine slot — no Piper/wasm downloads hosted). Audio probing decided per task: single `GET /api/books/:id` → `audioPresent && voiceId` match marks every non-empty paragraph (whole-book synth, bundle rewritten atomically at completion).
 
 ## Phase 4 — Deploy + ship
 - [ ] T18: Dockerfile builds SPA + docker e2e (`tasks/018-docker-builds-spa.md`)
