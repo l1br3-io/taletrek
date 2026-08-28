@@ -51,7 +51,9 @@ export interface CreateServerPlaybackEngineOptions {
 export function createServerPlaybackEngine(
   opts: CreateServerPlaybackEngineOptions = {},
 ): TtsEngine {
-  const f = opts.fetchImpl ?? fetch
+  // Lazy default: resolve the global at call time so tests can stub `fetch`
+  // after the singleton exists.
+  const f = opts.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init))
 
   return {
     async synthesize(req: SynthesisRequest): Promise<SynthesisResult> {

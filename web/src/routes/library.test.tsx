@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Layout } from '../components/Layout'
 import { DatasourceProvider } from '../context/datasource'
 import { DEFAULT_AI_SETTINGS, DEFAULT_SETTINGS, SettingsProvider } from '../context/settings'
+import { _resetServerVoicesCacheForTests } from '../hooks/useServerVoices'
 import { _resetAiEngineForTests } from '../lib/ai/client'
 import { clearAllKeys } from '../lib/ai/keyring'
 import { type AiSettings, type AiTransformEngine, transformDefId } from '../lib/ai/types'
@@ -985,5 +986,199 @@ describe('Library — per-book synthesize', () => {
     await openBookMenu(title)
     fireEvent.click(await screen.findByRole('button', { name: `Synthesize ${title}` }))
     expect(await screen.findByText(/Couldn't update audio for/i)).toBeInTheDocument()
+  })
+})
+
+describe('Library — hosted mode (T16 parity)', () => {
+  type Route = [match: RegExp | string, respond: (init?: RequestInit) => unknown | Response]
+
+  /** A fetch stub with exact/regex routing (the server.test.ts pattern). */
+  function apiRouter(routes: Route[]): typeof fetch {
+    return (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      for (const [m, respond] of routes) {
+        const hit = typeof m === 'string' ? url === m : m.test(url)
+        if (hit) {
+          const out = await respond(init)
+          return out instanceof Response
+            ? out
+            : new Response(JSON.stringify(out), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+              })
+        }
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }) as typeof fetch
+  }
+
+  function bookDto(id: string, title: string): Record<string, unknown> {
+    return {
+      id,
+      title,
+      author: null,
+      sourceFormat: 'txt',
+      voiceId: 'en_US-hfc_female-medium',
+      audioPresent: false,
+      chapterCount: 1,
+      createdAt: 1,
+      updatedAt: 2,
+      position: null,
+    }
+  }
+
+  function jobDto(o: Partial<Record<string, unknown>>): Record<string, unknown> {
+    return {
+      id: 'j1',
+      bookId: 'bk-hosted',
+      kind: 'synth',
+      voice: 'en_US-hfc_female-medium',
+      status: 'succeeded',
+      done: 3,
+      total: 3,
+      error: null,
+      createdAt: 1,
+      updatedAt: 2,
+      ...o,
+    }
+  }
+
+  function renderHostedAt(fetchStub: typeof fetch) {
+    function Capture() {
+      const loc = useLocation()
+      return <div data-testid="capture">{loc.pathname}</div>
+    }
+    vi.stubGlobal('fetch', fetchStub)
+    return render(
+      <DatasourceProvider mode="server">
+        <SettingsProvider>
+          <MemoryRouter initialEntries={['/library']}>
+            <Routes>
+              <Route element={<Layout />}>
+                <Route path="/library" element={<Library />} />
+                <Route path="*" element={<Capture />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </SettingsProvider>
+      </DatasourceProvider>,
+    )
+  }
+
+  beforeEach(() => {
+    _resetServerVoicesCacheForTests()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('hides local-only affordances (import/export/rename/outline) and keeps server ones', async () => {
+    const fetchStub = apiRouter([
+      ['/api/books', () => [bookDto('bk-hosted', 'Server Book')]],
+      ['/api/jobs', () => []],
+      ['/api/voices', () => []],
+    ])
+    renderHostedAt(fetchStub)
+
+    expect(await screen.findByText('Server Book')).toBeInTheDocument()
+    expect(screen.queryByText('Import bundle')).not.toBeInTheDocument()
+
+    await openBookMenu('Server Book')
+    expect(
+      await screen.findByRole('button', { name: 'Synthesize Server Book' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Export bundle for Server Book' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename Server Book' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Re-process outline for Server Book' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders failed + ready chips from the server job list', async () => {
+    const fetchStub = apiRouter([
+      ['/api/books', () => [bookDto('bk-failed', 'Broken'), bookDto('bk-done', 'Finished')]],
+      [
+        '/api/jobs',
+        () => [
+          jobDto({ id: 'j2', bookId: 'bk-failed', status: 'failed', error: 'piper missing' }),
+          jobDto({ id: 'j1', bookId: 'bk-done', status: 'succeeded' }),
+        ],
+      ],
+      ['/api/voices', () => []],
+    ])
+    renderHostedAt(fetchStub)
+
+    const failed = await screen.findByText('Synthesis failed')
+    expect(failed).toHaveAttribute('title', 'piper missing')
+    expect(await screen.findByText('Audio ready')).toBeInTheDocument()
+  })
+
+  it('delete surfaces the 409 job-running refusal instead of crashing', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const alertSpy = vi.spyOn(window, 'alert').mockReturnValue(undefined)
+    const fetchStub = apiRouter([
+      ['/api/books', () => [bookDto('bk-hosted', 'Busy Book')]],
+      ['/api/jobs', () => []],
+      [
+        '/api/books/bk-hosted',
+        () => new Response('a synth job is running for book bk-hosted', { status: 409 }),
+      ],
+      ['/api/voices', () => []],
+    ])
+    renderHostedAt(fetchStub)
+
+    await openBookMenu('Busy Book')
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Busy Book' }))
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('synthesis job is running'))
+    })
+    expect(await screen.findByText('Busy Book')).toBeInTheDocument()
+    confirmSpy.mockRestore()
+    alertSpy.mockRestore()
+  })
+
+  it('Synthesize opens the server voice sheet and posts the picked voice', async () => {
+    const synthBodies: unknown[] = []
+    const fetchStub = apiRouter([
+      ['/api/books', () => [bookDto('bk-hosted', 'Voiced Book')]],
+      ['/api/jobs', () => []],
+      [
+        '/api/voices',
+        () => [
+          {
+            id: 'en_US-ryan-medium',
+            name: 'Ryan',
+            quality: 'medium',
+            sizeBytes: 2,
+            language: 'en_US',
+          },
+        ],
+      ],
+      ['/api/books/bk-hosted', () => bookDto('bk-hosted', 'Voiced Book')],
+      ['/api/books/bk-hosted/chapters', () => []],
+      [
+        /\/api\/books\/bk-hosted\/(synth|resynth)$/,
+        (init) => {
+          synthBodies.push(JSON.parse(String(init?.body)))
+          return { jobId: 'j9' }
+        },
+      ],
+      ['/api/jobs/j9', () => jobDto({ id: 'j9', status: 'succeeded' })],
+    ])
+    renderHostedAt(fetchStub)
+
+    await openBookMenu('Voiced Book')
+    fireEvent.click(await screen.findByRole('button', { name: 'Synthesize Voiced Book' }))
+
+    const voice = await screen.findByText(/Ryan/)
+    fireEvent.click(voice)
+
+    await waitFor(() => {
+      expect(synthBodies).toEqual([{ voice: 'en_US-ryan-medium' }])
+    })
   })
 })

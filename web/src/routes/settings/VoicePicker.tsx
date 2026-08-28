@@ -10,11 +10,15 @@ export interface DownloadState {
 interface VoicePickerProps {
   voices: readonly Voice[]
   activeVoiceId: VoiceId
-  storedIds: ReadonlySet<string>
-  downloading: DownloadState | null
   onSelect: (id: VoiceId) => void
-  onDownload: (id: VoiceId) => void
-  onRemove: (id: VoiceId) => void
+  /**
+   * Local-mode on-device storage controls. Omitted in hosted mode (T16) —
+   * voices live on the server, so the picker renders select-only rows.
+   */
+  storedIds?: ReadonlySet<string>
+  downloading?: DownloadState | null
+  onDownload?: (id: VoiceId) => void
+  onRemove?: (id: VoiceId) => void
 }
 
 function formatSize(bytes: number): string {
@@ -30,11 +34,12 @@ export function VoicePicker({
   onDownload,
   onRemove,
 }: VoicePickerProps) {
+  const managed = onDownload !== undefined || onRemove !== undefined
   return (
     <ul className="space-y-2">
       {voices.map((voice) => {
         const active = voice.id === activeVoiceId
-        const stored = storedIds.has(voice.id)
+        const stored = managed && storedIds?.has(voice.id)
         const isDownloading = downloading?.id === voice.id
         return (
           <li
@@ -60,20 +65,22 @@ export function VoicePicker({
                 <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent">
                   <Check className="h-3 w-3" /> downloaded
                 </span>
-                <button
-                  type="button"
-                  onClick={() => onRemove(voice.id)}
-                  aria-label={`remove ${voice.name}`}
-                  className="inline-flex items-center gap-1 rounded border border-line px-2 py-1 text-sm transition-colors hover:border-danger hover:text-danger"
-                >
-                  <Trash2 className="h-3.5 w-3.5" /> remove
-                </button>
+                {onRemove && (
+                  <button
+                    type="button"
+                    onClick={() => onRemove(voice.id)}
+                    aria-label={`remove ${voice.name}`}
+                    className="inline-flex items-center gap-1 rounded border border-line px-2 py-1 text-sm transition-colors hover:border-danger hover:text-danger"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> remove
+                  </button>
+                )}
               </>
             ) : isDownloading ? (
               <span className="text-xs text-muted">
                 {Math.round((downloading?.progress ?? 0) * 100)}%
               </span>
-            ) : (
+            ) : onDownload ? (
               <button
                 type="button"
                 onClick={() => onDownload(voice.id)}
@@ -81,7 +88,7 @@ export function VoicePicker({
               >
                 <Download className="h-3.5 w-3.5" /> download
               </button>
-            )}
+            ) : null}
           </li>
         )
       })}

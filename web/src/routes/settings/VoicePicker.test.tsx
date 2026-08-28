@@ -65,3 +65,16 @@ describe('VoicePicker', () => {
     expect(onRemove).toHaveBeenCalledWith(ACTIVE)
   })
 })
+
+describe('VoicePicker — hosted variant (T16: select-only, no on-device storage)', () => {
+  it('renders without any storage/download props and offers plain selection', () => {
+    const onSelect = vi.fn()
+    render(<VoicePicker voices={CURATED_VOICES} activeVoiceId={ACTIVE} onSelect={onSelect} />)
+    expect(screen.queryByText(/download/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/downloaded/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/remove /i)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText(/Ryan/))
+    expect(onSelect).toHaveBeenCalledWith(CURATED_VOICES.find((v) => /Ryan/.test(v.name))?.id)
+  })
+})

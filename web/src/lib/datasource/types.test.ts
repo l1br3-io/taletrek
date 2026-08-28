@@ -77,6 +77,9 @@ const transformKeys = [
   'subscribeTransform',
 ] as const
 
+// `listRecentJobs` (T16) is intentionally absent from this Pick: it is the
+// one job-surface member uploadManager does NOT own (local answers `[]` in
+// local.ts). Interface conformance fences it on both impls instead.
 type JobSlice = Pick<
   SynthPipeline,
   | 'canPause'

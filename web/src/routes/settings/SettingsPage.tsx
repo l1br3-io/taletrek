@@ -1,5 +1,6 @@
 import { Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useDatasource } from '../../context/datasource'
 import {
   DEFAULT_AI_SETTINGS,
   type SynthMode,
@@ -7,6 +8,7 @@ import {
   useSettings,
 } from '../../context/settings'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { useServerVoices } from '../../hooks/useServerVoices'
 import type { CleaningFilters } from '../../lib/clean/types'
 import { MOBILE_ENGINES, type PlaybackEngineSetting } from '../../lib/playback/engines'
 import { CURATED_VOICES } from '../../lib/tts/voices'
@@ -52,6 +54,8 @@ const FILTERS: { key: keyof CleaningFilters; label: string; hint: string }[] = [
 ]
 
 export function Settings() {
+  const { mode } = useDatasource()
+  const hosted = mode === 'server'
   const { reload: reloadSettings } = useSettings()
   const [theme, setTheme] = useSetting('theme')
   const [fontScale, setFontScale] = useSetting('fontScale')
@@ -100,9 +104,30 @@ export function Settings() {
     window.location.hash = tab === 'ai' ? '#ai' : ''
   }
 
+  const serverVoices = useServerVoices()
+
   const generalContent = (
     <>
       <InstallPrompt />
+
+      {hosted && (
+        <SettingsGroup title="Server account">
+          <p className="text-xs text-muted">
+            Books, audio, and synthesis live on your TaleTrek server. Settings below stay on this
+            device.
+          </p>
+          {/* Plain form POST: the server clears the session cookie (HttpOnly —
+              JS can't) and redirects to the login page. No fetch needed. */}
+          <form action="/ui/logout" method="post">
+            <button
+              type="submit"
+              className="inline-flex items-center gap-2 border border-line px-4 py-2 text-sm font-medium transition-colors hover:border-danger hover:text-danger"
+            >
+              Log out
+            </button>
+          </form>
+        </SettingsGroup>
+      )}
 
       <SettingsGroup title="Reading">
         <section className="space-y-3">
@@ -153,23 +178,46 @@ export function Settings() {
         <section className="space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">
-              Voices &amp; offline
+              {hosted ? 'Voice' : 'Voices & offline'}
             </h3>
-            <OfflineBadge online={online} ready={storedIds.has(voiceId)} />
+            {!hosted && <OfflineBadge online={online} ready={storedIds.has(voiceId)} />}
           </div>
-          <p className="text-xs text-muted">
-            Download a voice once and it's cached on this device — TaleTrek keeps working with no
-            connection. Remove a voice to free up space.
-          </p>
-          <VoicePicker
-            voices={CURATED_VOICES}
-            activeVoiceId={voiceId}
-            storedIds={storedIds}
-            downloading={downloading}
-            onSelect={setVoiceId}
-            onDownload={handleDownload}
-            onRemove={handleRemove}
-          />
+          {hosted ? (
+            <>
+              <p className="text-xs text-muted">
+                The voice your server synthesizes new books under. Playback streams the finished
+                audio — nothing downloads to this device.
+              </p>
+              {serverVoices.type === 'ready' && (
+                <VoicePicker
+                  voices={serverVoices.voices}
+                  activeVoiceId={voiceId}
+                  onSelect={setVoiceId}
+                />
+              )}
+              {serverVoices.type === 'error' && (
+                <p className="text-xs text-warning">
+                  Couldn’t load voices — {serverVoices.message}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-muted">
+                Download a voice once and it's cached on this device — TaleTrek keeps working with
+                no connection. Remove a voice to free up space.
+              </p>
+              <VoicePicker
+                voices={CURATED_VOICES}
+                activeVoiceId={voiceId}
+                storedIds={storedIds}
+                downloading={downloading}
+                onSelect={setVoiceId}
+                onDownload={handleDownload}
+                onRemove={handleRemove}
+              />
+            </>
+          )}
         </section>
 
         <section className="space-y-3">
@@ -190,96 +238,101 @@ export function Settings() {
         </section>
       </SettingsGroup>
 
-      <SettingsGroup title="Storage">
-        <StorageUsageIndicator
-          usageBytes={storageEstimate.usage}
-          quotaBytes={storageEstimate.quota}
-        />
-        <p className="text-xs text-muted">
-          {booksCount} book{booksCount === 1 ? '' : 's'} · {storedIds.size} voice{' '}
-          {storedIds.size === 1 ? 'model' : 'models'} downloaded
-          {cacheStats.sizeBytes
-            ? ` · ${Math.round(cacheStats.sizeBytes / (1024 * 1024))} MB cached audio`
-            : ''}
-        </p>
-
-        <section className="space-y-3">
-          <h3 className="text-sm font-medium text-fg">Pre-synthesize on upload</h3>
+      {/* Storage management is on-device only (T16): the hosted shape keeps
+          no local audio cache, so the whole group — pre-synth mode, cache
+          budget, storage estimate — is a local affordance. */}
+      {!hosted && (
+        <SettingsGroup title="Storage">
+          <StorageUsageIndicator
+            usageBytes={storageEstimate.usage}
+            quotaBytes={storageEstimate.quota}
+          />
           <p className="text-xs text-muted">
-            Synthesize the entire audiobook when you upload it, so your first reading session is
-            friction-free. You can still start reading before it finishes.
+            {booksCount} book{booksCount === 1 ? '' : 's'} · {storedIds.size} voice{' '}
+            {storedIds.size === 1 ? 'model' : 'models'} downloaded
+            {cacheStats.sizeBytes
+              ? ` · ${Math.round(cacheStats.sizeBytes / (1024 * 1024))} MB cached audio`
+              : ''}
           </p>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {SYNTH_MODES.map((m: { value: SynthMode; label: string; hint: string }) => (
-              <button
-                key={m.value}
-                type="button"
-                onClick={() => setSynthMode(m.value)}
-                aria-pressed={synthMode === m.value}
-                className={[
-                  'border p-4 text-left transition-colors',
-                  synthMode === m.value
-                    ? 'border-accent bg-elevated'
-                    : 'border-line hover:border-muted',
-                ].join(' ')}
-              >
-                <div className="font-medium">{m.label}</div>
-                <div className="mt-0.5 text-xs text-muted">{m.hint}</div>
-              </button>
-            ))}
-          </div>
-          {synthMode === 'no-limit' && (
-            <p className="border border-warning/40 bg-warning/10 p-3 text-xs text-warning">
-              No-limit mode keeps every synthesized paragraph until the browser&apos;s storage quota
-              is hit. On low-space devices this can trigger panics that evict half the cache at
-              once. Use Standard if you&apos;re unsure.
-            </p>
-          )}
-        </section>
 
-        {synthMode === 'standard' && (
           <section className="space-y-3">
-            <h3 className="text-sm font-medium text-fg">
-              Audio cache size
-              <span className="ml-2 text-muted">
-                {audioCacheBudgetMb} MB (~{Math.round((audioCacheBudgetMb * 1024) / 300)}{' '}
-                paragraphs)
-              </span>
-            </h3>
-            <input
-              type="range"
-              min={100}
-              max={2000}
-              step={50}
-              value={audioCacheBudgetMb}
-              onChange={(e) => void handleChangeBudget(Number(e.target.value))}
-              className="w-full accent-accent"
-              aria-label="Audio cache size in megabytes"
-            />
+            <h3 className="text-sm font-medium text-fg">Pre-synthesize on upload</h3>
             <p className="text-xs text-muted">
-              TaleTrek caches the audio it synthesizes so reopening a book picks up instantly where
-              you left off. Clearing it frees up space; the audio is re-created on demand.
+              Synthesize the entire audiobook when you upload it, so your first reading session is
+              friction-free. You can still start reading before it finishes.
             </p>
-            <AudioCacheIndicator
-              sizeBytes={cacheStats.sizeBytes}
-              clearing={clearingCache}
-              onClear={() => void handleClearCache()}
-              budgetBytes={audioCacheBudgetMb * 1024 * 1024}
-            />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {SYNTH_MODES.map((m: { value: SynthMode; label: string; hint: string }) => (
+                <button
+                  key={m.value}
+                  type="button"
+                  onClick={() => setSynthMode(m.value)}
+                  aria-pressed={synthMode === m.value}
+                  className={[
+                    'border p-4 text-left transition-colors',
+                    synthMode === m.value
+                      ? 'border-accent bg-elevated'
+                      : 'border-line hover:border-muted',
+                  ].join(' ')}
+                >
+                  <div className="font-medium">{m.label}</div>
+                  <div className="mt-0.5 text-xs text-muted">{m.hint}</div>
+                </button>
+              ))}
+            </div>
+            {synthMode === 'no-limit' && (
+              <p className="border border-warning/40 bg-warning/10 p-3 text-xs text-warning">
+                No-limit mode keeps every synthesized paragraph until the browser&apos;s storage
+                quota is hit. On low-space devices this can trigger panics that evict half the cache
+                at once. Use Standard if you&apos;re unsure.
+              </p>
+            )}
           </section>
-        )}
 
-        {synthMode === 'no-limit' && (
-          <section className="space-y-3">
-            <AudioCacheIndicator
-              sizeBytes={cacheStats.sizeBytes}
-              clearing={clearingCache}
-              onClear={() => void handleClearCache()}
-              budgetBytes={Number.POSITIVE_INFINITY}
-            />
-          </section>
-        )}
-      </SettingsGroup>
+          {synthMode === 'standard' && (
+            <section className="space-y-3">
+              <h3 className="text-sm font-medium text-fg">
+                Audio cache size
+                <span className="ml-2 text-muted">
+                  {audioCacheBudgetMb} MB (~{Math.round((audioCacheBudgetMb * 1024) / 300)}{' '}
+                  paragraphs)
+                </span>
+              </h3>
+              <input
+                type="range"
+                min={100}
+                max={2000}
+                step={50}
+                value={audioCacheBudgetMb}
+                onChange={(e) => void handleChangeBudget(Number(e.target.value))}
+                className="w-full accent-accent"
+                aria-label="Audio cache size in megabytes"
+              />
+              <p className="text-xs text-muted">
+                TaleTrek caches the audio it synthesizes so reopening a book picks up instantly
+                where you left off. Clearing it frees up space; the audio is re-created on demand.
+              </p>
+              <AudioCacheIndicator
+                sizeBytes={cacheStats.sizeBytes}
+                clearing={clearingCache}
+                onClear={() => void handleClearCache()}
+                budgetBytes={audioCacheBudgetMb * 1024 * 1024}
+              />
+            </section>
+          )}
+
+          {synthMode === 'no-limit' && (
+            <section className="space-y-3">
+              <AudioCacheIndicator
+                sizeBytes={cacheStats.sizeBytes}
+                clearing={clearingCache}
+                onClear={() => void handleClearCache()}
+                budgetBytes={Number.POSITIVE_INFINITY}
+              />
+            </section>
+          )}
+        </SettingsGroup>
+      )}
 
       {isMobile && (
         <SettingsGroup title="Advanced">
@@ -389,7 +442,8 @@ export function Settings() {
         )}
       </SettingsGroup>
 
-      <BackupSection onImported={() => void reloadSettings()} />
+      {/* Local-device backup only (T16): hosted books live on the server. */}
+      {!hosted && <BackupSection onImported={() => void reloadSettings()} />}
 
       <SettingsGroup title="Debug">
         <section className="space-y-3">
@@ -419,33 +473,40 @@ export function Settings() {
         </section>
       </SettingsGroup>
 
-      <section className="space-y-3 border border-danger/40 bg-surface p-5">
-        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.15em] text-danger">
-          <span aria-hidden>❯</span>
-          Danger zone
-        </h2>
-        <p className="text-xs text-muted">
-          Permanently delete every book, voice model, cached audio, and setting from this device.
-          There is no undo — export a backup first if you want to keep anything.
-        </p>
-        <button
-          type="button"
-          onClick={() => setDeleteDialogOpen(true)}
-          className="inline-flex items-center gap-2 border border-danger px-4 py-2 text-sm font-medium text-danger transition-colors hover:bg-danger hover:text-white"
-        >
-          <Trash2 className="h-4 w-4" /> Delete all data
-        </button>
-      </section>
+      {/* Device wipe is a local-only affordance (T16): hosted mode owns no
+          local stores, and server data must not be wiped from the client. */}
+      {!hosted && (
+        <>
+          <section className="space-y-3 border border-danger/40 bg-surface p-5">
+            <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.15em] text-danger">
+              <span aria-hidden>❯</span>
+              Danger zone
+            </h2>
+            <p className="text-xs text-muted">
+              Permanently delete every book, voice model, cached audio, and setting from this
+              device. There is no undo — export a backup first if you want to keep anything.
+            </p>
+            <button
+              type="button"
+              onClick={() => setDeleteDialogOpen(true)}
+              className="inline-flex items-center gap-2 border border-danger px-4 py-2 text-sm font-medium text-danger transition-colors hover:bg-danger hover:text-white"
+            >
+              <Trash2 className="h-4 w-4" /> Delete all data
+            </button>
+          </section>
 
-      <DeleteAllDataDialog
-        open={deleteDialogOpen}
-        busy={deletingAll}
-        onResult={(confirmed) => void handleDeleteAllResult(confirmed)}
-      />
+          <DeleteAllDataDialog
+            open={deleteDialogOpen}
+            busy={deletingAll}
+            onResult={(confirmed) => void handleDeleteAllResult(confirmed)}
+          />
+        </>
+      )}
 
       <p className="text-sm text-muted">
-        Settings are stored on this device (IndexedDB) and survive a reload or restart. Voice models
-        download once and are cached offline. Nothing leaves your phone.
+        {hosted
+          ? 'Reading preferences are stored on this device; books and synthesized audio live on your server.'
+          : 'Settings are stored on this device (IndexedDB) and survive a reload or restart. Voice models download once and are cached offline. Nothing leaves your phone.'}
       </p>
     </>
   )

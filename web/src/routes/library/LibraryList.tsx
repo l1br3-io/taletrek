@@ -1,6 +1,6 @@
 import type { Book, BookId } from '../../types'
 import type { AiUnusableReason } from './AiStatusChip'
-import { BookCard } from './BookCard'
+import { BookCard, type SynthStatusChip } from './BookCard'
 
 interface LibraryListProps {
   books: readonly Book[]
@@ -20,6 +20,11 @@ interface LibraryListProps {
   onExportBundle?: (id: BookId) => void
   /** When provided, shows a "Rename" action on each card. */
   onRename?: (id: BookId) => void
+  /**
+   * Hosted-mode per-book synth status lookup (T16): when provided, each
+   * card renders a status chip from the result. Omit in local mode.
+   */
+  synthStatusFor?: (id: BookId) => SynthStatusChip | undefined
   /**
    * When `false` AND AI menu items are shown, they render with an amber dot
    * indicator to signal "this feature is enabled but not usable right now"
@@ -46,6 +51,8 @@ export function LibraryList({
   onResynthesize,
   onResume,
   onExportBundle,
+  onRename,
+  synthStatusFor,
   aiUsable = true,
   aiUnusableReason = null,
 }: LibraryListProps) {
@@ -76,6 +83,8 @@ export function LibraryList({
           onResynthesize={onResynthesize}
           onResume={onResume}
           onExportBundle={onExportBundle}
+          onRename={onRename}
+          synthStatus={synthStatusFor?.(book.id)}
           aiUsable={aiUsable}
           aiUnusableReason={aiUnusableReason}
         />

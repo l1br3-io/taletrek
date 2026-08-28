@@ -7,12 +7,14 @@ import { FeatureUnavailableSheet } from './FeatureUnavailableSheet'
 import { LibraryList } from './LibraryList'
 import { OutlineSheet } from './OutlineSheet'
 import { PronunciationReview } from './PronunciationReview'
+import { SynthVoiceSheet } from './SynthVoiceSheet'
 import { UploadBookModal } from './UploadBookModal'
 import { UploadButton } from './UploadButton'
 import { useLibraryState } from './useLibraryState'
 
 export function Library() {
-  const { synth } = useDatasource()
+  const { mode, synth } = useDatasource()
+  const hosted = mode === 'server'
   const {
     ai,
     online,
@@ -47,6 +49,10 @@ export function Library() {
     onHintsClose,
     handleDelete,
     handleResynthesize,
+    synthStatusFor,
+    synthVoiceTarget,
+    startSynthWithVoice,
+    onSynthVoiceClose,
     exportTarget,
     handleExportBundle,
     handleExportClose,
@@ -76,7 +82,10 @@ export function Library() {
         </h1>
         <div className="flex flex-wrap items-center gap-3">
           <UploadButton onSelect={handleSelect} disabled={uploadBusy} />
-          <BundleImportButton onImported={() => void refresh()} disabled={uploadBusy} />
+          {/* Bundle import reads local IDB — a local-mode affordance (T16). */}
+          {!hosted && (
+            <BundleImportButton onImported={() => void refresh()} disabled={uploadBusy} />
+          )}
         </div>
       </div>
 
@@ -161,16 +170,24 @@ export function Library() {
             onOpen={(id) => navigate(`/reader/${id}`)}
             onDelete={handleDelete}
             {...aiMenuItems}
-            onOutline={handleOutline}
+            onOutline={hosted ? undefined : handleOutline}
             onResynthesize={synthesizeOnUpload !== 'off' ? handleResynthesize : undefined}
             onResume={(id) => void synth.resume(id)}
-            onRename={handleRename}
-            onExportBundle={(id) => void handleExportBundle(id)}
+            onRename={hosted ? undefined : handleRename}
+            onExportBundle={hosted ? undefined : (id) => void handleExportBundle(id)}
+            synthStatusFor={hosted ? synthStatusFor : undefined}
             aiUsable={aiUsable}
             aiUnusableReason={aiUnusableReason}
           />
         </>
       )}
+
+      {/* Hosted per-book Synthesize: pick the server voice first (T16). */}
+      <SynthVoiceSheet
+        target={synthVoiceTarget}
+        onSelect={startSynthWithVoice}
+        onClose={onSynthVoiceClose}
+      />
 
       {/* Process modal: always shown after upload when AI is enabled (opt-in skip).
           Also used for Reprocess (re-parse original → transform). Cancel/Close

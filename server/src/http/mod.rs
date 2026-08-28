@@ -154,6 +154,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health::health))
         .route("/ui/login", get(auth::login_form).post(auth::login))
+        .route("/ui/logout", post(auth::logout))
         // Unknown API paths 404 as an API — without this the SPA fallback
         // would answer them with `index.html` (200 HTML for a typo'd endpoint).
         .route("/api/{*rest}", any(spa::api_not_found))

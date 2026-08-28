@@ -50,6 +50,22 @@ export type CancelForBookResult =
   | { type: 'no-op' }
   | { type: 'blocked'; activeBookTitle: string }
 
+/**
+ * A recent synthesis job, as surfaced for per-book status chips (T16). The
+ * hosted pipeline maps `GET /api/jobs`; local answers `[]` — local job
+ * state is already carried on book records (`uploading` / `uploadJob`), so
+ * there is no separate list to report.
+ */
+export interface RecentJob {
+  id: string
+  bookId: BookId
+  kind: 'synth' | 'resynth'
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  done: number
+  total: number
+  error: string | null
+}
+
 /** Client-side inputs a whole-book transform run needs (AI settings are
  * always local — keys never leave the browser, in either mode). */
 export interface TransformRunDeps {
@@ -207,6 +223,11 @@ export interface SynthPipeline {
   subscribe(listener: () => void): () => void
   /** Current job state (variant union — see `JobState`). */
   getState(): JobState
+  /**
+   * Recent synthesis jobs across books (newest first, server-truncated) —
+   * drives per-book status chips in hosted mode. Local answers `[]`.
+   */
+  listRecentJobs(): Promise<RecentJob[]>
 
   // --- whole-book AI transform (streaming) ---
   /**

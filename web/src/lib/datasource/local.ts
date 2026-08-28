@@ -83,6 +83,9 @@ export const localSynthPipeline: SynthPipeline = {
   cancelForBook: (bookId) => uploadManager.cancelForBook(bookId),
   subscribe: uploadManager.subscribe,
   getState: uploadManager.getState,
+  // Local job state rides on book records (`uploading` / `uploadJob` chips)
+  // — there is no separate job list to report. Hosted maps GET /api/jobs.
+  listRecentJobs: async () => [],
   startTransform: (spec, deps) => bookTransformManager.start(spec, deps),
   resumeTransform: (bookId, deps) => bookTransformManager.resume(bookId, deps),
   pauseTransform: () => bookTransformManager.pause(),
