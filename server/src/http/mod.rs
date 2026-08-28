@@ -1,21 +1,23 @@
 //! HTTP layer: router composition, shared [`AppState`], and handlers.
 //!
-//! [`router`] is the single entry point wired by `main`. It mounts two
-//! unauthenticated routes on the outer router — `GET /api/health`, `GET/POST
-//! /ui/login` — plus a catch-all `404` for unknown `/api/*` paths. Everything
-//! else lives on a protected sub-router that carries [`auth::require_auth`]:
-//! the data-bearing `/api/*` routes, the operator panel (`/ui/admin/*`, T11 —
-//! interim home until T16 deletes it), and — as the outer router's fallback
-//! service — the static SPA hosting at `/` (T8, [`spa`]). New routes merge
-//! into the protected sub-router and inherit the auth layer automatically.
+//! [`router`] is the single entry point wired by `main`. It mounts the
+//! unauthenticated routes on the outer router — `GET /api/health`,
+//! `GET/POST /ui/login`, `POST /ui/logout` — plus a catch-all `404` for
+//! unknown `/api/*` paths. Everything else lives on a protected sub-router
+//! that carries [`auth::require_auth`]: the data-bearing `/api/*` routes
+//! and — as the outer router's fallback service — the static SPA hosting at
+//! `/` (T8, [`spa`]). The hosted SPA is the server's only real UI (T16
+//! deleted the interim askama panel); `/ui/login` remains the no-JS cookie
+//! gate. New routes merge into the protected sub-router and inherit the
+//! auth layer automatically.
 //!
 //! # Security-header split (T8)
 //!
 //! The outer router stamps nosniff + frame denial + no-referrer on **every**
 //! response (outermost layers). The CSP is split per surface:
 //!
-//! - `/api/*` + `/ui/*` (panel, login): strict no-JS policy
-//!   (`default-src 'none'` …) — the askama panel runs zero client JS and a
+//! - `/api/*` + `/ui/*` (login, logout): strict no-JS policy
+//!   (`default-src 'none'` …) — the login page runs zero client JS and a
 //!   future escaping regression must not become script execution.
 //! - SPA-hosted paths (`/`, client routes, assets): [`spa::SPA_CSP`] — a
 //!   JS-app policy stamped only on `text/html` responses (see [`spa`] for why
@@ -23,11 +25,11 @@
 //!
 //! # Auth boundary
 //!
-//! GOTCHA: `GET /api/health`, `GET /ui/login`, and `POST /ui/login` are the
-//! **only** unauthenticated routes. Every other path — API, panel, *and the
+//! GOTCHA: `GET /api/health`, `GET/POST /ui/login`, and `POST /ui/logout`
+//! are the **only** unauthenticated routes. Every other path — API *and the
 //! SPA's static files* — sits behind [`auth::require_auth`] (bearer header
-//! for the API, cookie for browsers). A new route mounted on the outer router
-//! (outside the auth layer) is a security bug.
+//! for the API, cookie for browsers). A new route mounted on the outer
+//! router (outside the auth layer) is a security bug.
 
 mod audio;
 mod auth;
@@ -97,16 +99,15 @@ pub(crate) const STRICT_CSP: &str =
 
 /// Build the application router.
 ///
-/// `/api/health` + `GET/POST /ui/login` + the unknown-API `404` sit on the
-/// outer router (no auth); every `/api/*` data route + the operator panel
-/// (`/ui/admin/*`) lives on the protected sub-router and inherits
+/// `/api/health` + `GET/POST /ui/login` + `POST /ui/logout` + the
+/// unknown-API `404` sit on the outer router (no auth); every `/api/*` data
+/// route lives on the protected sub-router and inherits
 /// [`auth::require_auth`] as well as the upload body-size limit
 /// ([`DefaultBodyLimit`] = `max_bundle_bytes`). The SPA static hosting
 /// ([`spa::spa_router`]) is the outer router's fallback service — it owns `/`
-/// and every client route, behind the same auth. The panel POST routes
-/// (`/ui/admin/books/{id}/synth`, …) wrap the same cores as the JSON API and
-/// return `303` redirects (Post/Redirect/Get) so plain browser forms work
-/// with no client JS.
+/// and every client route, behind the same auth. The interim askama panel
+/// (`/ui/admin/*`, T11) was deleted in T16; the hosted SPA replaces it and
+/// `/ui/login` (+ logout) remain the no-JS cookie gate.
 ///
 /// [`State<AppState>`]: axum::extract::State
 pub fn router(state: AppState) -> Router {
@@ -136,14 +137,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/session", get(session::session))
         .route("/api/voices", get(voices::list_voices))
         .route("/api/voices/{id}/fetch", post(voices::fetch_voice))
-        // ----- operator UI (T11) — interim home under /ui/admin until T16 ----
-        .route("/ui/admin", get(ui::index).post(ui::upload_book))
-        .route("/ui/admin/", get(ui::index))
-        .route("/ui/admin/books/{id}", get(ui::book_detail))
-        .route("/ui/admin/books/{id}/synth", post(ui::synth_book))
-        .route("/ui/admin/books/{id}/resynth", post(ui::resynth_book))
-        .route("/ui/admin/books/{id}/delete", post(ui::delete_book))
-        .route("/ui/admin/jobs", get(ui::jobs))
         .layer(from_fn_with_state(state.clone(), auth::require_auth))
         .layer(DefaultBodyLimit::max(state.settings.max_bundle_bytes))
         .layer(SetResponseHeaderLayer::if_not_present(
@@ -207,12 +200,14 @@ mod tests {
 
     /// Every response — API and UI, authed or not — carries the security
     /// headers. Pinned so a future layer reshuffle can't silently drop them.
+    /// (T16: the strict-CSP probe moved from the deleted `/ui/admin` panel to
+    /// a protected API route.)
     #[tokio::test]
     async fn responses_carry_security_headers() {
         let app = router(test_support::app_state("sekrit"));
         let req = Request::builder()
             .method("GET")
-            .uri("/ui/admin")
+            .uri("/api/session")
             .header(header::COOKIE, "taletrek_token=sekrit")
             .body(Body::empty())
             .expect("valid request");

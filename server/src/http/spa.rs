@@ -220,10 +220,10 @@ mod tests {
         assert!(body.contains("console.log"), "asset bytes: {body}");
     }
 
-    /// Missing static dir: `/` 404s (no crash) while the panel + API stay up —
-    /// the server is still useful headless.
+    /// Missing static dir: `/` 404s (no crash) while the login page + API
+    /// stay up — the server is still useful headless.
     #[tokio::test]
-    async fn missing_static_dir_keeps_api_and_admin_alive() {
+    async fn missing_static_dir_keeps_api_and_login_alive() {
         let state = crate::http::test_support::app_state(TOKEN);
         let app = router(state);
         let req = Request::builder()
@@ -235,14 +235,13 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = Request::builder()
-            .uri("/ui/admin")
-            .header(header::COOKIE, format!("taletrek_token={TOKEN}"))
+            .uri("/ui/login")
             .body(Body::empty())
             .expect("valid request");
         let resp = app.clone().oneshot(req).await.expect("router serves");
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_string(resp).await;
-        assert!(body.contains("<title>Library"), "panel still renders: {body}");
+        assert!(body.contains("Sign in"), "login page still renders: {body}");
     }
 
     /// The old `POST /` panel upload is gone: POSTs to `/` hit the static
@@ -275,17 +274,14 @@ mod tests {
         assert!(!body.contains("SPA-BOOT-MARKER"), "no HTML for API paths: {body}");
     }
 
-    /// The CSP split: `/ui/admin` HTML carries the strict no-JS policy, the
+    /// The CSP split (T16: the strict-CSP surface is now just `/ui/*` —
+    /// login/logout): the login page carries the strict no-JS policy, the
     /// SPA document carries the JS-app policy.
     #[tokio::test]
-    async fn ui_admin_keeps_strict_csp_spa_gets_js_csp() {
+    async fn ui_pages_keep_strict_csp_spa_gets_js_csp() {
         let dir = spa_dir();
         let app = app(&dir);
-        let req = Request::builder()
-            .uri("/ui/admin")
-            .header(header::COOKIE, format!("taletrek_token={TOKEN}"))
-            .body(Body::empty())
-            .expect("valid request");
+        let req = Request::builder().uri("/ui/login").body(Body::empty()).expect("valid request");
         let resp = app.clone().oneshot(req).await.expect("router serves");
         let csp = resp
             .headers()
@@ -294,7 +290,7 @@ mod tests {
             .unwrap_or("");
         assert!(
             csp.contains("default-src 'none'") && !csp.contains("script-src 'self'"),
-            "strict no-JS policy on the panel: {csp}"
+            "strict no-JS policy on the login page: {csp}"
         );
 
         let req = Request::builder()

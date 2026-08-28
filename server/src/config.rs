@@ -88,7 +88,7 @@ pub struct Settings {
     /// Directory holding the built SPA (`web/dist` after `pnpm build`) served
     /// at `/` with SPA history fallback (T8). Not required to exist: a
     /// missing/empty dir logs a boot warning and the server keeps running
-    /// headless (API + `/ui/admin` panel still work).
+    /// headless (API + login page still work).
     pub static_dir: PathBuf,
 }
 
