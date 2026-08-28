@@ -1,19 +1,32 @@
 /**
- * Server implementation of the datasource seam (ADR-0014, Effort 5 · T13):
+ * Server implementation of the datasource seam (ADR-0014, Effort 5 · T13+T14):
  * the SPA hosted by the personal server, talking same-origin HTTP with
  * implicit cookie auth (set by the `/ui/login` gate).
  *
- * Implemented here (T13) — the library surface: books list/get (BookDto →
- * SPA `Book`, position from T11), chapters (T9 wire shape → SPA `Chapter`),
- * progress PATCH (T11), delete, and audio-presence probing. Thrown as
- * "not available in hosted mode" stubs: the `SynthPipeline` operations (T14 —
- * upload/parse-orchestration/transform) and local-only library surfaces whose
- * hosted equivalents are later tasks (paragraph edits, original file access,
- * backup). The pipeline's *queries* (`getState`, `isActive`, …) return passive
- * values rather than throwing so mount-path subscribers (`useSyncExternalStore`
- * in `useUploadState` / the transform banner) stay inert in server mode.
+ * Library surface (T13): books list/get (BookDto → SPA `Book`, position from
+ * T11), chapters (T9 wire shape → SPA `Chapter`), progress PATCH (T11),
+ * delete, and audio-presence probing. Thrown as "not available in hosted
+ * mode" stubs: local-only library surfaces whose hosted equivalents are later
+ * tasks (paragraph edits, original file access, backup).
  *
- * # Audio probing strategy (decided here, per T13)
+ * Pipeline (T14): upload parses in the browser workers (ADR-0013), serializes
+ * the parsed book to an in-memory text-only bundle (`lib/bundle/writer` —
+ * writing text-only is small; G27's whole-archive-in-memory concern applies
+ * to *reading* full bundles, not this), POSTs it to `/api/books`, triggers
+ * server-side synth, and polls `GET /api/jobs/:id` into the same `JobState`
+ * shapes the local pipeline produces.
+ *
+ * # Job ownership — cancel only stops watching
+ *
+ * Synthesis runs **server-side**; `cancel()` stops the client's poll loop and
+ * returns the UI to idle but the job keeps running on the server. Closing the
+ * tab mid-job is the same case — reopen (or reload) and the boot recovery
+ * (`recoverInFlightJobs`, wired in `main.tsx`) re-adopts the in-flight job
+ * from `GET /api/jobs` so progress display resumes. The server's one-job-
+ * per-book guard is authoritative: `POST …/synth` answering 409 triggers
+ * adoption of the running job rather than an error.
+ *
+ * # Audio probing strategy (decided in T13)
  *
  * `getCachedParagraphIds` answers "which paragraphs have audio for voice V".
  * The server synthesizes a whole book in one job and rewrites its bundle on
@@ -48,11 +61,23 @@ import type {
   Chapter,
   VoiceId,
 } from '../../types'
-import { bookId, chapterId } from '../../types'
+import { bookId, chapterId, newBookId } from '../../types'
 import type { ImportReport } from '../backup'
 import type { BookAudio } from '../book-audio'
-import type { IngestResult } from '../ingest'
+import type { BookBundle } from '../bundle/manifest'
+import {
+  chapterToChapterText,
+  MANIFEST_SCHEMA_VERSION,
+  SPA_GENERATOR_APP,
+  WRITABLE_AUDIO_CODEC,
+} from '../bundle/manifest'
+import { writeBookBundle } from '../bundle/writer'
+import { type IngestResult, UnsupportedFileError } from '../ingest'
+import { parseInWorker } from '../parse/client'
+import { formatForFile } from '../parse/util'
+import { NORM_VERSION } from '../tts/normalize'
 import type { TtsEngine } from '../tts/types'
+import { DEFAULT_VOICE_ID } from '../tts/voices'
 import type {
   BookTransformState,
   CancelForBookResult,
@@ -119,6 +144,24 @@ export interface ChapterDto {
   idx: number
   title: string
   paragraphs: string[]
+}
+
+/**
+ * Wire shape of a job as served by `GET /api/jobs[/{id}]` — the pipeline's
+ * progress source (T14). `status`/`kind` serialize lowercase (JobStatus /
+ * JobKind serde impls server-side).
+ */
+export interface JobDto {
+  id: string
+  bookId: string
+  kind: 'synth' | 'resynth'
+  voice: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  done: number
+  total: number
+  error: string | null
+  createdAt: number
+  updatedAt: number
 }
 
 const FORMATS: ReadonlySet<string> = new Set(['pdf', 'epub', 'mobi', 'txt', 'md'])
@@ -191,8 +234,70 @@ async function getJson<T>(fetchImpl: typeof fetch, path: string): Promise<T> {
   return (await res.json()) as T
 }
 
+async function postJson<T>(fetchImpl: typeof fetch, path: string, body: unknown): Promise<T> {
+  const res = await api(fetchImpl, path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return (await res.json()) as T
+}
+
+/** `GET /api/books/{id}` → BookDto, or `undefined` on 404. */
+async function fetchBookDto(fetchImpl: typeof fetch, id: BookId): Promise<BookDto | undefined> {
+  try {
+    return await getJson<BookDto>(fetchImpl, `/api/books/${encodeURIComponent(id)}`)
+  } catch (e) {
+    if (notFound(e)) return undefined
+    throw e
+  }
+}
+
 function notFound(e: unknown): boolean {
   return e instanceof ServerApiError && e.status === 404
+}
+
+/**
+ * Build an in-memory **text-only** {@link BookBundle} for a book + chapters —
+ * the hosted upload/transform-egress shape (T14). `writeBookBundle` derives
+ * `audio.present`/`segmentCount` from the empty audio map and stamps the
+ * generator, so the manifest's audio/generator fields here are placeholders
+ * the writer overwrites. The stamped `book.voiceId` names the voice the
+ * client intends to synth under; the server re-stamps it authoritatively on
+ * job completion.
+ */
+function textOnlyBundle(
+  book: Book,
+  chapters: Chapter[],
+  voice: VoiceId,
+  meta: BookBundle['meta'] = {},
+): BookBundle {
+  return {
+    manifest: {
+      schemaVersion: MANIFEST_SCHEMA_VERSION,
+      kind: 'book',
+      book: {
+        id: book.id,
+        title: book.title,
+        sourceFormat: book.format,
+        chapterCount: chapters.length,
+        voiceId: voice,
+        createdAt: book.createdAt,
+        updatedAt: Date.now(),
+        ...(book.progressFraction !== undefined ? { progressFraction: book.progressFraction } : {}),
+      },
+      audio: {
+        present: false,
+        codec: WRITABLE_AUDIO_CODEC,
+        normVersion: Number(NORM_VERSION),
+        segmentCount: 0,
+      },
+      generator: { app: SPA_GENERATOR_APP, version: '' },
+    },
+    chapters: chapters.map(chapterToChapterText),
+    audio: new Map(),
+    meta,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -210,15 +315,6 @@ export function createServerDatasource(
   const f = opts.fetchImpl ?? fetch
   const bookPath = (id: BookId): string => `/api/books/${encodeURIComponent(id)}`
 
-  const fetchBookDto = async (id: BookId): Promise<BookDto | undefined> => {
-    try {
-      return await getJson<BookDto>(f, bookPath(id))
-    } catch (e) {
-      if (notFound(e)) return undefined
-      throw e
-    }
-  }
-
   const unavailable = (op: string): HostedModeUnavailableError => new HostedModeUnavailableError(op)
 
   const getAllBooks = async (): Promise<Book[]> => {
@@ -231,7 +327,7 @@ export function createServerDatasource(
     getAllBooks,
 
     async getBook(id: BookId) {
-      const dto = await fetchBookDto(id)
+      const dto = await fetchBookDto(f, id)
       return dto ? toBook(dto) : undefined
     },
 
@@ -298,7 +394,7 @@ export function createServerDatasource(
 
     // --- derived audio ---
     async getCachedParagraphIds(id: BookId, voice: VoiceId, chapters: Chapter[]) {
-      const dto = await fetchBookDto(id)
+      const dto = await fetchBookDto(f, id)
       if (!dto?.audioPresent || dto.voiceId !== voice) return new Set<string>()
       // Whole-book synth under one voice → every non-empty paragraph has
       // audio. See the module doc for the strategy decision.
@@ -367,99 +463,383 @@ export function createServerDatasource(
 }
 
 // ---------------------------------------------------------------------------
-// ServerSynthPipeline — stub until T14 (remote synth pipeline)
+// ServerSynthPipeline — the remote synth pipeline (T14)
 // ---------------------------------------------------------------------------
 
-/** Cached idle snapshots — `useSyncExternalStore` needs reference stability. */
-const IDLE_JOB: JobState = { type: 'idle' }
-const IDLE_TRANSFORM: BookTransformState = { type: 'idle' }
+export interface CreateServerSynthPipelineOptions {
+  /** Injectable for tests; defaults to the global `fetch`. */
+  fetchImpl?: typeof fetch
+  /**
+   * Voice stamped on text-only bundles at upload time (the server re-stamps
+   * the manifest on synth completion, so this is pre-synth metadata only).
+   */
+  defaultVoiceId?: VoiceId
+  /** `GET /api/jobs/:id` cadence in ms; tests pass small values. */
+  pollIntervalMs?: number
+}
 
-export function createServerSynthPipeline(): SynthPipeline {
-  const unavailable = (op: string): HostedModeUnavailableError => new HostedModeUnavailableError(op)
+/**
+ * The hosted `SynthPipeline`: parse in workers → POST text-only bundle →
+ * trigger server synth → poll the job into the local pipeline's `JobState`
+ * shapes. No wake lock, no PoolEngine, no mobile whole-book encode — the
+ * browser only watches; the server synthesizes.
+ */
+class RemoteSynthPipeline implements SynthPipeline {
+  private readonly f: typeof fetch
+  private readonly defaultVoice: VoiceId
+  private readonly pollIntervalMs: number
 
-  return {
-    ingestBook: async (): Promise<IngestResult> => {
-      throw unavailable('Upload')
-    },
+  private job: JobState = { type: 'idle' }
+  private readonly jobListeners = new Set<() => void>()
 
-    startJob: (_spec: JobSpec): void => {
-      throw unavailable('Synthesis')
-    },
+  private transform: BookTransformState = { type: 'idle' }
+  private readonly transformListeners = new Set<() => void>()
 
-    isActive: () => false,
-    canPause: () => false,
-    canRetry: () => false,
-    isRecovering: () => false,
+  /** Set by `cancel()` — observed between poll ticks; the server job keeps running. */
+  private stopPolling = false
+  /** Last accepted spec, re-run by `retry()`. */
+  private lastSpec: (JobSpec & { mode: 'initial' | 'resynth' }) | null = null
 
-    resume: async (): Promise<void> => {
-      throw unavailable('Resuming a paused job')
-    },
-
-    pause: (): void => {
-      throw unavailable('Pausing synthesis')
-    },
-
-    cancel: (): void => {
-      throw unavailable('Cancelling synthesis')
-    },
-
-    retry: (): void => {
-      throw unavailable('Retrying synthesis')
-    },
-
-    dismiss: (): void => {
-      throw unavailable('Dismissing the job banner')
-    },
-
-    /**
-     * No client-side job exists in hosted mode, so there is nothing to
-     * cancel before a delete — `no-op`. The server's own guard is
-     * authoritative: `DELETE` answers 409 while a synth job runs for the
-     * book.
-     */
-    cancelForBook: async (_bookId: BookId): Promise<CancelForBookResult> => ({ type: 'no-op' }),
-
-    subscribe:
-      (_listener: () => void): (() => void) =>
-      () => {},
-
-    getState: (): JobState => IDLE_JOB,
-
-    startTransform: async (_spec: TransformJobSpec, _deps: TransformRunDeps): Promise<void> => {
-      throw unavailable('Whole-book AI transform')
-    },
-
-    resumeTransform: async (): Promise<void> => {
-      throw unavailable('Resuming a transform')
-    },
-
-    pauseTransform: (): void => {
-      throw unavailable('Pausing a transform')
-    },
-
-    cancelTransform: async (): Promise<void> => {
-      throw unavailable('Cancelling a transform')
-    },
-
-    cancelTransformForBook: async (_bookId: BookId): Promise<CancelForBookResult> => ({
-      type: 'no-op',
-    }),
-
-    subscribeTransform:
-      (_listener: () => void): (() => void) =>
-      () => {},
-
-    getTransformState: (): BookTransformState => IDLE_TRANSFORM,
-
-    reparseChapters: async (): Promise<Chapter[]> => {
-      throw unavailable('Reprocessing from the original file')
-    },
+  constructor(opts: CreateServerSynthPipelineOptions = {}) {
+    this.f = opts.fetchImpl ?? fetch
+    this.defaultVoice = opts.defaultVoiceId ?? DEFAULT_VOICE_ID
+    this.pollIntervalMs = opts.pollIntervalMs ?? 1000
   }
+
+  // --- external stores (arrow fields: stable references for
+  // useSyncExternalStore) ---
+
+  getState = (): JobState => this.job
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.jobListeners.add(listener)
+    return () => {
+      this.jobListeners.delete(listener)
+    }
+  }
+
+  getTransformState = (): BookTransformState => this.transform
+
+  subscribeTransform = (listener: () => void): (() => void) => {
+    this.transformListeners.add(listener)
+    return () => {
+      this.transformListeners.delete(listener)
+    }
+  }
+
+  private setJobState(next: JobState): void {
+    this.job = next
+    for (const ln of this.jobListeners) ln()
+  }
+
+  isActive(): boolean {
+    return this.job.type === 'synthesizing' || this.job.type === 'cancelling'
+  }
+
+  canPause(): boolean {
+    // Server jobs run to completion — there is no cooperative pause.
+    return false
+  }
+
+  canRetry(): boolean {
+    return (
+      this.job.type === 'error' &&
+      (this.job.mode === 'resynth' || !!this.job.retryable) &&
+      this.lastSpec !== null
+    )
+  }
+
+  isRecovering(): boolean {
+    return false
+  }
+
+  dismiss(): void {
+    if (this.job.type === 'done' || this.job.type === 'error' || this.job.type === 'paused') {
+      this.setJobState({ type: 'idle' })
+    }
+  }
+
+  // --- upload ---
+
+  async ingestBook(file: File): Promise<IngestResult> {
+    const format = formatForFile(file.name)
+    if (!format) throw new UnsupportedFileError(file.name)
+    const parsed = await parseInWorker(file)
+    const now = Date.now()
+    const id = newBookId()
+    // Chapter ids use the server's derived scheme (`ch_<bookId>_<idx>`, T9) so
+    // the parse result agrees with every later `GET /chapters` fetch.
+    const chapters: Chapter[] = parsed.chapters.map((parsedChapter, index) => ({
+      id: chapterId(`ch_${id}_${index}`),
+      bookId: id,
+      index,
+      title: parsedChapter.title,
+      paragraphs: parsedChapter.paragraphs,
+    }))
+    const provisional: Book = {
+      id,
+      title: parsed.title,
+      format,
+      chapterCount: chapters.length,
+      createdAt: now,
+      updatedAt: now,
+    }
+    const bytes = await writeBookBundle(textOnlyBundle(provisional, chapters, this.defaultVoice))
+    const dto = await this.postBundle(id, bytes)
+    return { book: toBook(dto), chapters }
+  }
+
+  /** POST a text-only bundle as multipart — the idempotent-upsert egress. */
+  private async postBundle(id: BookId, bytes: Uint8Array): Promise<BookDto> {
+    const form = new FormData()
+    form.append(
+      'bundle',
+      // jszip hands back `Uint8Array<ArrayBufferLike>`; a Blob wants a plain
+      // ArrayBuffer part. generateAsync returns an exact-size buffer, so the
+      // view's underlying buffer is the whole payload.
+      new Blob([bytes.buffer as ArrayBuffer], { type: 'application/zip' }),
+      `${encodeURIComponent(id)}.taletrek`,
+    )
+    const res = await api(this.f, '/api/books', { method: 'POST', body: form })
+    const dtos = (await res.json()) as BookDto[]
+    const dto = dtos.find((d) => d.id === id) ?? dtos[0]
+    if (!dto) throw new ServerApiError('upload response carried no book', res.status)
+    return dto
+  }
+
+  // --- synth job ---
+
+  startJob(spec: JobSpec): void {
+    if (this.isActive()) throw new Error('A synthesis job is already running')
+    const resolved = { ...spec, mode: spec.mode ?? 'initial' } as JobSpec & {
+      mode: 'initial' | 'resynth'
+    }
+    this.lastSpec = resolved
+    this.stopPolling = false
+    // Flip synchronously so the re-entry guard above holds for immediate
+    // second calls (mirrors the local manager's contract).
+    this.setJobState({
+      type: 'synthesizing',
+      book: spec.book,
+      done: 0,
+      total: 0,
+      synthesizedParagraphIds: new Set(),
+      mode: resolved.mode,
+    })
+    void this.runJob(resolved)
+  }
+
+  private async runJob(spec: JobSpec & { mode: 'initial' | 'resynth' }): Promise<void> {
+    const { book, voiceId, mode } = spec
+    try {
+      const dto = await fetchBookDto(this.f, book.id)
+      if (!dto) {
+        throw new ServerApiError(`"${book.title}" is not on the server — upload it again`, 404)
+      }
+      // A book that already has audio takes the resynth endpoint (`synth`
+      // would 409 AlreadyFull). Covers the mode:'initial' race after another
+      // session's job completed.
+      const useResynth = mode === 'resynth' || dto.audioPresent
+      const trigger = `/api/books/${encodeURIComponent(book.id)}/${useResynth ? 'resynth' : 'synth'}`
+      try {
+        const { jobId } = await postJson<{ jobId: string }>(this.f, trigger, { voice: voiceId })
+        await this.pollLoop(jobId, book, mode)
+      } catch (e) {
+        if (e instanceof ServerApiError && e.status === 409) {
+          // One job per book server-side: another run (often this session's
+          // own cancelled watch, or a second tab) owns the book. Adopt it.
+          const adopted = await this.adoptInFlightForBook(book, mode)
+          if (adopted) return
+        }
+        throw e
+      }
+    } catch (e) {
+      if (this.stopPolling) return // cancelled before/during the trigger
+      this.setJobState({
+        type: 'error',
+        book,
+        message: e instanceof Error ? e.message : 'Synthesis failed',
+        mode,
+        retryable: true,
+      })
+    } finally {
+      // Cancel-safety net: if the trigger was in flight when `cancel()` fired,
+      // nothing else will complete the cancelling → idle transition.
+      if (this.stopPolling && this.job.type === 'cancelling') {
+        this.setJobState({ type: 'idle' })
+      }
+    }
+  }
+
+  /**
+   * Poll a server job into the local `JobState` shapes. `queued`/`running`
+   * tick `synthesizing.done/total`; terminal statuses settle the banner.
+   * Mid-`synthesizing` paragraph identity is unknowable client-side (the
+   * bundle is rewritten atomically at completion), so
+   * `synthesizedParagraphIds` stays empty — matching the T13 audio-probe
+   * contract that reports nothing until the job completes.
+   */
+  private async pollLoop(jobId: string, book: Book, mode: 'initial' | 'resynth'): Promise<void> {
+    const jobPath = `/api/jobs/${encodeURIComponent(jobId)}`
+    for (;;) {
+      if (this.stopPolling) break
+      let dto: JobDto
+      try {
+        dto = await getJson<JobDto>(this.f, jobPath)
+      } catch (e) {
+        if (e instanceof ServerApiError && e.isUnauthorized) {
+          this.setJobState({
+            type: 'error',
+            book,
+            message: 'Session expired — log in again to keep watching the job.',
+            mode,
+            retryable: true,
+          })
+          return
+        }
+        if (e instanceof ServerApiError && e.status === 404) {
+          this.setJobState({
+            type: 'error',
+            book,
+            message: 'The server job disappeared — retry synthesis.',
+            mode,
+            retryable: true,
+          })
+          return
+        }
+        // Transient (offline blip): keep watching — the server is the source
+        // of truth and the job does not pause when we can't see it.
+        await this.sleep()
+        continue
+      }
+      if (dto.status === 'succeeded') {
+        this.setJobState({ type: 'done', book, mode })
+        return
+      }
+      if (dto.status === 'failed') {
+        this.setJobState({
+          type: 'error',
+          book,
+          message: dto.error ?? 'Synthesis failed on the server',
+          mode,
+          retryable: true,
+        })
+        return
+      }
+      const s = this.job
+      if (!this.stopPolling && s.type === 'synthesizing') {
+        this.setJobState({
+          ...s,
+          done: dto.done,
+          total: dto.total,
+          synthesizedParagraphIds: new Set(),
+        })
+      }
+      await this.sleep()
+    }
+    if (this.job.type === 'cancelling') this.setJobState({ type: 'idle' })
+  }
+
+  /** True when a non-terminal job for the book exists (recent-50 window). */
+  private async findInFlightJob(bookId: BookId): Promise<JobDto | undefined> {
+    const jobs = await getJson<JobDto[]>(this.f, '/api/jobs').catch(() => [])
+    return jobs.find(
+      (j) => j.bookId === bookId && (j.status === 'queued' || j.status === 'running'),
+    )
+  }
+
+  /** Re-attach the poll loop to an already-running server job. */
+  private async adoptInFlightForBook(book: Book, mode: 'initial' | 'resynth'): Promise<boolean> {
+    const job = await this.findInFlightJob(book.id)
+    if (!job) return false
+    const s = this.job
+    if (!this.stopPolling && s.type === 'synthesizing') {
+      this.setJobState({ ...s, done: job.done, total: job.total })
+    }
+    await this.pollLoop(job.id, book, mode)
+    return true
+  }
+
+  /**
+   * Cancel the client's watch on the running job: stops polling and returns
+   * the banner to idle. **The server-side job keeps running** — synthesis is
+   * server-owned in hosted mode and there is no abort endpoint. Closing the
+   * tab has the same effect; reload (or the boot recovery) re-adopts the job
+   * from `GET /api/jobs`, and the book simply shows ready when it completes.
+   */
+  cancel(): void {
+    if (!this.isActive()) return
+    const s = this.job
+    if (s.type !== 'synthesizing') return // already cancelling
+    this.stopPolling = true
+    this.setJobState({ type: 'cancelling', book: s.book, mode: s.mode })
+  }
+
+  retry(): void {
+    if (this.job.type !== 'error' || !this.canRetry() || !this.lastSpec) return
+    this.startJob(this.lastSpec)
+  }
+
+  /**
+   * No client-side job bookkeeping exists hosted, so there is nothing to
+   * cancel before a delete — `no-op`. The server's own guard is
+   * authoritative: `DELETE` answers 409 while a synth job runs for the
+   * book.
+   */
+  async cancelForBook(_bookId: BookId): Promise<CancelForBookResult> {
+    return { type: 'no-op' }
+  }
+
+  // --- transform half (T14 follows-up in a second commit) ---
+
+  async resume(_bookId: BookId): Promise<void> {
+    throw new HostedModeUnavailableError('Resuming a paused job')
+  }
+
+  pause(): void {
+    throw new HostedModeUnavailableError('Pausing synthesis')
+  }
+
+  async startTransform(_spec: TransformJobSpec, _deps: TransformRunDeps): Promise<void> {
+    throw new HostedModeUnavailableError('Whole-book AI transform')
+  }
+
+  async resumeTransform(_bookId: BookId): Promise<void> {
+    throw new HostedModeUnavailableError('Resuming a transform')
+  }
+
+  pauseTransform(): void {
+    throw new HostedModeUnavailableError('Pausing a transform')
+  }
+
+  async cancelTransform(): Promise<void> {
+    throw new HostedModeUnavailableError('Cancelling a transform')
+  }
+
+  async cancelTransformForBook(_bookId: BookId): Promise<CancelForBookResult> {
+    return { type: 'no-op' }
+  }
+
+  async reparseChapters(_bookId: BookId): Promise<Chapter[]> {
+    // Hosted upload is browser-side (ADR-0013) and the original file is not
+    // stored server-side — there is nothing pristine to re-parse from.
+    throw new HostedModeUnavailableError('Reprocessing from the original file')
+  }
+
+  private sleep(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs))
+  }
+}
+
+export function createServerSynthPipeline(
+  opts: CreateServerSynthPipelineOptions = {},
+): RemoteSynthPipeline {
+  return new RemoteSynthPipeline(opts)
 }
 
 /** Default singletons for the provider (one server shape per session). */
 export const serverDatasource: LibraryDatasource = createServerDatasource()
-export const serverSynthPipeline: SynthPipeline = createServerSynthPipeline()
+export const serverSynthPipeline: RemoteSynthPipeline = createServerSynthPipeline()
 
 /**
  * Interim hosted playback engine (T13): occupies the players' engine slot in
