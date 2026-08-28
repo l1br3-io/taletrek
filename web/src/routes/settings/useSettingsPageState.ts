@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useDatasource } from '../../context/datasource'
 import { useOnline } from '../../hooks/useOnline'
-import { localDatasource } from '../../lib/datasource'
 import { ttsClient } from '../../lib/tts/client'
 import { CURATED_VOICES } from '../../lib/tts/voices'
 import type { VoiceId } from '../../types'
@@ -29,6 +29,7 @@ export function useSettingsPageState({
   const [booksCount, setBooksCount] = useState(0)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
+  const { library } = useDatasource()
   const online = useOnline()
   const cacheStats = useAudioCacheStats()
   const storageEstimate = useStorageEstimate()
@@ -42,10 +43,10 @@ export function useSettingsPageState({
   useEffect(() => {
     void refreshStored()
     void (async () => {
-      const books = await localDatasource.getAllBooks()
+      const books = await library.getAllBooks()
       setBooksCount(books.length)
     })()
-  }, [refreshStored])
+  }, [refreshStored, library])
 
   const handleDownload = useCallback(async (id: VoiceId) => {
     setDownloading({ id, progress: 0 })
@@ -69,40 +70,43 @@ export function useSettingsPageState({
   const handleClearCache = useCallback(async () => {
     setClearingCache(true)
     try {
-      await localDatasource.clearAudioCache()
-      await localDatasource.clearSegmentCache()
+      await library.clearAudioCache()
+      await library.clearSegmentCache()
       await cacheStats.refresh()
       await storageEstimate.refresh()
     } finally {
       setClearingCache(false)
     }
-  }, [cacheStats, storageEstimate])
+  }, [cacheStats, storageEstimate, library])
 
   const handleChangeBudget = useCallback(
     async (mb: number) => {
       const prevMb = audioCacheBudgetMb
       setAudioCacheBudgetMb(mb)
       if (mb < prevMb) {
-        await localDatasource.evictAudioCacheToBudget(mb * 1024 * 1024)
+        await library.evictAudioCacheToBudget(mb * 1024 * 1024)
         await cacheStats.refresh()
       }
     },
-    [audioCacheBudgetMb, setAudioCacheBudgetMb, cacheStats],
+    [audioCacheBudgetMb, setAudioCacheBudgetMb, cacheStats, library],
   )
 
-  const handleDeleteAllResult = useCallback(async (confirmed: boolean) => {
-    if (!confirmed) {
-      setDeleteDialogOpen(false)
-      return
-    }
-    setDeletingAll(true)
-    try {
-      await clearAllData()
-    } finally {
-      // Reload to a fresh app state — the DB, OPFS, caches, and SW are gone.
-      location.reload()
-    }
-  }, [])
+  const handleDeleteAllResult = useCallback(
+    async (confirmed: boolean) => {
+      if (!confirmed) {
+        setDeleteDialogOpen(false)
+        return
+      }
+      setDeletingAll(true)
+      try {
+        await clearAllData(library)
+      } finally {
+        // Reload to a fresh app state — the DB, OPFS, caches, and SW are gone.
+        location.reload()
+      }
+    },
+    [library],
+  )
 
   return {
     storedIds,

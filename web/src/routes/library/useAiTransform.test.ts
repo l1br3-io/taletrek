@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { DatasourceProvider } from '../../context/datasource'
 import type {
   AiTransformEngine,
   PronunciationCandidate,
@@ -25,6 +26,11 @@ vi.mock('../../lib/ai/client', () => ({
 }))
 
 import { getAiEngineForDef } from '../../lib/ai/client'
+
+/** renderHook with the (default-local) DatasourceProvider mounted. */
+function renderHookWithDs<T>(fn: () => T) {
+  return renderHook(fn, { wrapper: DatasourceProvider })
+}
 
 const mockGetEngine = vi.mocked(getAiEngineForDef)
 
@@ -123,7 +129,9 @@ describe('useAiTransform — happy path', () => {
     await putChapters([chapter])
 
     mockGetEngine.mockReturnValue(stubEngine())
-    const { result } = renderHook(() => useAiTransform({ ai: makeAiSettings(), defs: [def1] }))
+    const { result } = renderHookWithDs(() =>
+      useAiTransform({ ai: makeAiSettings(), defs: [def1] }),
+    )
     expect(result.current.state.type).toBe('idle')
 
     await act(async () => {
@@ -149,7 +157,7 @@ describe('useAiTransform — happy path', () => {
     await putChapters([chapter])
 
     mockGetEngine.mockReturnValue(stubEngine())
-    const { result } = renderHook(() =>
+    const { result } = renderHookWithDs(() =>
       useAiTransform({ ai: makeAiSettings(), defs: [def1, def2] }),
     )
     await act(async () => {
@@ -187,7 +195,7 @@ describe('useAiTransform — prepare + state edge cases', () => {
       onProgress(0.5)
       onProgress(1)
     })
-    const { result } = renderHook(() =>
+    const { result } = renderHookWithDs(() =>
       useAiTransform({ ai: makeAiSettings(), defs: [def1], prepare }),
     )
     await act(async () => {
@@ -199,7 +207,7 @@ describe('useAiTransform — prepare + state edge cases', () => {
 
   it('reaches error when prepare throws', async () => {
     mockGetEngine.mockReturnValue(stubEngine())
-    const { result } = renderHook(() =>
+    const { result } = renderHookWithDs(() =>
       useAiTransform({
         ai: makeAiSettings(),
         defs: [def1],
@@ -220,7 +228,9 @@ describe('useAiTransform — prepare + state edge cases', () => {
 
   it('stays idle when no ops are given', async () => {
     mockGetEngine.mockReturnValue(stubEngine())
-    const { result } = renderHook(() => useAiTransform({ ai: makeAiSettings(), defs: [def1] }))
+    const { result } = renderHookWithDs(() =>
+      useAiTransform({ ai: makeAiSettings(), defs: [def1] }),
+    )
     await act(async () => {
       await result.current.run({ book: makeBook(), chapters: [], ops: [] })
     })
@@ -228,7 +238,7 @@ describe('useAiTransform — prepare + state edge cases', () => {
   })
 
   it('errors when AI is not enabled', async () => {
-    const { result } = renderHook(() => useAiTransform({ ai: undefined, defs: [] }))
+    const { result } = renderHookWithDs(() => useAiTransform({ ai: undefined, defs: [] }))
     await act(async () => {
       await result.current.run({
         book: makeBook(),
@@ -241,7 +251,9 @@ describe('useAiTransform — prepare + state edge cases', () => {
 
   it('reaches error on a non-abort transform failure', async () => {
     mockGetEngine.mockReturnValue(stubEngine({ failWith: new Error('model exploded') }))
-    const { result } = renderHook(() => useAiTransform({ ai: makeAiSettings(), defs: [def1] }))
+    const { result } = renderHookWithDs(() =>
+      useAiTransform({ ai: makeAiSettings(), defs: [def1] }),
+    )
     await act(async () => {
       await result.current.run({
         book: makeBook(),
@@ -267,7 +279,9 @@ describe('useAiTransform — resolveChapters (reprocess)', () => {
     const resolveChapters = vi.fn(async () => [fresh])
 
     mockGetEngine.mockReturnValue(stubEngine())
-    const { result } = renderHook(() => useAiTransform({ ai: makeAiSettings(), defs: [def1] }))
+    const { result } = renderHookWithDs(() =>
+      useAiTransform({ ai: makeAiSettings(), defs: [def1] }),
+    )
     await act(async () => {
       await result.current.run({ book, resolveChapters, ops: [{ defId: def1.id, params: {} }] })
     })
@@ -286,7 +300,9 @@ describe('useAiTransform — resolveChapters (reprocess)', () => {
     const resolveChapters = vi.fn(async () => {
       throw new Error('Original file is no longer available')
     })
-    const { result } = renderHook(() => useAiTransform({ ai: makeAiSettings(), defs: [def1] }))
+    const { result } = renderHookWithDs(() =>
+      useAiTransform({ ai: makeAiSettings(), defs: [def1] }),
+    )
     await act(async () => {
       await result.current.run({ book, resolveChapters, ops: [{ defId: def1.id, params: {} }] })
     })
@@ -328,7 +344,9 @@ describe('useAiTransform — abort', () => {
     }
 
     mockGetEngine.mockReturnValue(engine)
-    const { result } = renderHook(() => useAiTransform({ ai: makeAiSettings(), defs: [def1] }))
+    const { result } = renderHookWithDs(() =>
+      useAiTransform({ ai: makeAiSettings(), defs: [def1] }),
+    )
     let runPromise!: Promise<void>
     act(() => {
       runPromise = result.current.run({

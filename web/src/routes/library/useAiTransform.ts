@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { useDatasource } from '../../context/datasource'
 import type { SynthMode } from '../../context/settings'
 import { getAiEngineForDef } from '../../lib/ai/client'
 import type {
@@ -8,7 +9,6 @@ import type {
   TransformOp,
 } from '../../lib/ai/types'
 import type { CleaningConfig } from '../../lib/clean/types'
-import { localDatasource, localSynthPipeline } from '../../lib/datasource'
 import type { Book, Chapter, VoiceId } from '../../types'
 
 /**
@@ -88,6 +88,7 @@ export function useAiTransform({
   cleaning?: CleaningConfig
   prepare?: (onProgress: (fraction: number) => void) => Promise<void>
 }): UseAiTransform {
+  const { library, synth } = useDatasource()
   const [state, setState] = useState<TransformState>({ type: 'idle' })
   const abortRef = useRef<AbortController | null>(null)
   const runningRef = useRef(false)
@@ -174,15 +175,15 @@ export function useAiTransform({
           working = next
           // Checkpoint after each op so a tab crash mid-run doesn't lose
           // completed ops (PRD: "long ops checkpoint to IndexedDB").
-          await localDatasource.putChapters(working)
+          await library.putChapters(working)
         }
         const processing: AppliedProcessing = {
           appliedAt: Date.now(),
           ops,
         }
-        await localDatasource.updateBookProcessing(book.id, processing)
+        await library.updateBookProcessing(book.id, processing)
         const chapterIndex = book.position?.chapterIndex ?? 0
-        await localDatasource.updateBookProgress(book.id, { chapterIndex, paragraphIndex: 0 }, 0)
+        await library.updateBookProgress(book.id, { chapterIndex, paragraphIndex: 0 }, 0)
         setState({
           type: 'done',
           message: `Transform applied — resumed at start of chapter ${chapterIndex + 1}.`,
@@ -200,12 +201,12 @@ export function useAiTransform({
               // silently eats it — leaving the user with no audio update
               // and no banner. The cache purge is also skipped so a future
               // manual resynth can run cleanly.
-              if (localSynthPipeline.isActive()) return
-              const keys = await localDatasource.getAudioCacheKeysByBook(book.id)
-              if (keys.length > 0) await localDatasource.deleteAudioCacheKeys(keys)
-              await localDatasource.deleteBookAudio(book.id)
+              if (synth.isActive()) return
+              const keys = await library.getAudioCacheKeysByBook(book.id)
+              if (keys.length > 0) await library.deleteAudioCacheKeys(keys)
+              await library.deleteBookAudio(book.id)
               const latest = { ...book, updatedAt: Date.now() }
-              localSynthPipeline.startJob({
+              synth.startJob({
                 book: latest,
                 chapters: working,
                 voiceId,
@@ -227,7 +228,7 @@ export function useAiTransform({
         abortRef.current = null
       }
     },
-    [ai, defs, synthMode, voiceId, cleaning, prepare],
+    [ai, defs, synthMode, voiceId, cleaning, prepare, library, synth],
   )
 
   return { state, run, abort }

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { DatasourceProvider } from '../context/datasource'
 import { SettingsProvider } from '../context/settings'
 import {
   _clearDBForTests,
@@ -69,16 +70,18 @@ function Capture() {
 
 function renderAt(path: string) {
   return render(
-    <SettingsProvider>
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/reader" element={<Reader />} />
-          <Route path="/reader/:bookId" element={<Reader />} />
-          <Route path="/library" element={<Capture />} />
-          <Route path="*" element={<Capture />} />
-        </Routes>
-      </MemoryRouter>
-    </SettingsProvider>,
+    <DatasourceProvider>
+      <SettingsProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/reader" element={<Reader />} />
+            <Route path="/reader/:bookId" element={<Reader />} />
+            <Route path="/library" element={<Capture />} />
+            <Route path="*" element={<Capture />} />
+          </Routes>
+        </MemoryRouter>
+      </SettingsProvider>
+    </DatasourceProvider>,
   )
 }
 
@@ -396,14 +399,16 @@ describe('Reader chapter refresh on M13 transform commits', () => {
     }
     // Force a re-render so the mock state is picked up.
     rerender(
-      <SettingsProvider>
-        <MemoryRouter initialEntries={[`/reader/${id}`]}>
-          <Routes>
-            <Route path="/reader/:bookId" element={<Reader />} />
-            <Route path="*" element={<Capture />} />
-          </Routes>
-        </MemoryRouter>
-      </SettingsProvider>,
+      <DatasourceProvider>
+        <SettingsProvider>
+          <MemoryRouter initialEntries={[`/reader/${id}`]}>
+            <Routes>
+              <Route path="/reader/:bookId" element={<Reader />} />
+              <Route path="*" element={<Capture />} />
+            </Routes>
+          </MemoryRouter>
+        </SettingsProvider>
+      </DatasourceProvider>,
     )
     // Reader should now show the rewritten paragraphs without remount.
     await waitFor(() => expect(screen.getByText('rewritten-0')).toBeInTheDocument())
@@ -430,14 +435,16 @@ describe('Reader chapter refresh on M13 transform commits', () => {
     await putChapters([{ id: chId, bookId: id, index: 0, title: 'Done', paragraphs: ['after'] }])
     transformState = { type: 'done', bookId: id }
     rerender(
-      <SettingsProvider>
-        <MemoryRouter initialEntries={[`/reader/${id}`]}>
-          <Routes>
-            <Route path="/reader/:bookId" element={<Reader />} />
-            <Route path="*" element={<Capture />} />
-          </Routes>
-        </MemoryRouter>
-      </SettingsProvider>,
+      <DatasourceProvider>
+        <SettingsProvider>
+          <MemoryRouter initialEntries={[`/reader/${id}`]}>
+            <Routes>
+              <Route path="/reader/:bookId" element={<Reader />} />
+              <Route path="*" element={<Capture />} />
+            </Routes>
+          </MemoryRouter>
+        </SettingsProvider>
+      </DatasourceProvider>,
     )
     await waitFor(() => expect(screen.getByText('after')).toBeInTheDocument())
     expect(screen.queryByText('before')).not.toBeInTheDocument()
@@ -461,14 +468,16 @@ describe('Reader chapter refresh on M13 transform commits', () => {
     // A different book's transform completes — shouldn't affect this reader.
     transformState = { type: 'done', bookId: newBookId() }
     rerender(
-      <SettingsProvider>
-        <MemoryRouter initialEntries={[`/reader/${id}`]}>
-          <Routes>
-            <Route path="/reader/:bookId" element={<Reader />} />
-            <Route path="*" element={<Capture />} />
-          </Routes>
-        </MemoryRouter>
-      </SettingsProvider>,
+      <DatasourceProvider>
+        <SettingsProvider>
+          <MemoryRouter initialEntries={[`/reader/${id}`]}>
+            <Routes>
+              <Route path="/reader/:bookId" element={<Reader />} />
+              <Route path="*" element={<Capture />} />
+            </Routes>
+          </MemoryRouter>
+        </SettingsProvider>
+      </DatasourceProvider>,
     )
     // Give the effect a tick in case it tried to run — then assert no change.
     await new Promise((r) => setTimeout(r, 10))

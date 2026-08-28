@@ -1,11 +1,7 @@
 import { Download, Upload } from 'lucide-react'
 import { useState } from 'react'
-import {
-  BackupTooLargeError,
-  CorruptBackupError,
-  type ImportReport,
-  localDatasource,
-} from '../../lib/datasource'
+import { useDatasource } from '../../context/datasource'
+import { BackupTooLargeError, CorruptBackupError, type ImportReport } from '../../lib/datasource'
 
 type BackupStatus =
   | { type: 'idle' }
@@ -23,12 +19,13 @@ function formatReport(report: ImportReport): string {
 }
 
 export function BackupSection({ onImported }: { onImported: () => void }) {
+  const { library } = useDatasource()
   const [status, setStatus] = useState<BackupStatus>({ type: 'idle' })
 
   const handleExport = async () => {
     setStatus({ type: 'busy', label: 'Preparing backup…' })
     try {
-      const blob = await localDatasource.exportBackup()
+      const blob = await library.exportBackup()
       const date = new Date().toISOString().slice(0, 10)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -57,7 +54,7 @@ export function BackupSection({ onImported }: { onImported: () => void }) {
     }
     setStatus({ type: 'busy', label: 'Importing…' })
     try {
-      const report = await localDatasource.importBackup(file)
+      const report = await library.importBackup(file)
       onImported()
       setStatus({ type: 'done', message: formatReport(report) })
     } catch (err) {

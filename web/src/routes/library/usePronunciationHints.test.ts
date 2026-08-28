@@ -1,9 +1,15 @@
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { DatasourceProvider } from '../../context/datasource'
 import type { AiTransformEngine, PronunciationCandidate } from '../../lib/ai/types'
 import { _clearDBForTests, _resetDBForTests, putChapters } from '../../lib/db'
 import { type BookId, bookId, chapterId } from '../../types'
 import { usePronunciationHints } from './usePronunciationHints'
+
+/** renderHook with the (default-local) DatasourceProvider mounted. */
+function renderHookWithDs<T>(fn: () => T) {
+  return renderHook(fn, { wrapper: DatasourceProvider })
+}
 
 function stubEngine(
   candidates: PronunciationCandidate[],
@@ -41,7 +47,7 @@ describe('usePronunciationHints', () => {
     const candidates: PronunciationCandidate[] = [
       { id: '1', find: 'Siobhan', replace: 'Shi-vawn', confidence: 0.9, category: 'proper-noun' },
     ]
-    const { result } = renderHook(() => usePronunciationHints(stubEngine(candidates)))
+    const { result } = renderHookWithDs(() => usePronunciationHints(stubEngine(candidates)))
     expect(result.current.state.type).toBe('idle')
 
     await act(async () => {
@@ -54,7 +60,7 @@ describe('usePronunciationHints', () => {
   })
 
   it('reaches error when the engine throws', async () => {
-    const { result } = renderHook(() =>
+    const { result } = renderHookWithDs(() =>
       usePronunciationHints(stubEngine([], { failWith: new Error('model offline') })),
     )
     await act(async () => {
@@ -67,7 +73,7 @@ describe('usePronunciationHints', () => {
   })
 
   it('errors when no engine is configured (AI disabled)', async () => {
-    const { result } = renderHook(() => usePronunciationHints(null))
+    const { result } = renderHookWithDs(() => usePronunciationHints(null))
     await act(async () => {
       await result.current.scan(BOOK)
     })
@@ -75,7 +81,7 @@ describe('usePronunciationHints', () => {
   })
 
   it('reset returns to idle', async () => {
-    const { result } = renderHook(() => usePronunciationHints(stubEngine([])))
+    const { result } = renderHookWithDs(() => usePronunciationHints(stubEngine([])))
     await act(async () => {
       await result.current.scan(BOOK)
     })
@@ -88,7 +94,7 @@ describe('usePronunciationHints', () => {
     await putChapters([
       { id: chapterId('c1'), bookId: BOOK, index: 0, title: 'C0', paragraphs: [] },
     ])
-    const { result } = renderHook(() => usePronunciationHints(stubEngine([])))
+    const { result } = renderHookWithDs(() => usePronunciationHints(stubEngine([])))
     await act(async () => {
       await result.current.scan(BOOK)
     })
@@ -100,7 +106,7 @@ describe('usePronunciationHints', () => {
 
   it('handles an empty chapter list gracefully', async () => {
     await putChapters([])
-    const { result } = renderHook(() => usePronunciationHints(stubEngine([])))
+    const { result } = renderHookWithDs(() => usePronunciationHints(stubEngine([])))
     await act(async () => {
       await result.current.scan(BOOK)
     })

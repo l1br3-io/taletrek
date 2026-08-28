@@ -1,8 +1,8 @@
 import { BookOpen, Pause, Play, RotateCcw, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { useDatasource } from '../context/datasource'
 import { useIsMobile } from '../hooks/useIsMobile'
-import { uploadManager } from '../lib/upload/manager'
 import { useUploadState } from '../lib/upload/useUpload'
 import { canKeepScreenAwake } from '../lib/wake-lock'
 
@@ -65,10 +65,11 @@ function useSecondTicker(active: boolean): void {
  * the reader (where Phase 2 streaming lets you play buffered paragraphs).
  */
 export function GlobalUploadBanner() {
-  const state = useUploadState()
+  const { synth } = useDatasource()
+  const state = useUploadState(synth)
   const navigate = useNavigate()
   const isMobile = useIsMobile()
-  const recovering = uploadManager.isRecovering()
+  const recovering = synth.isRecovering()
   const wakeLockSupported = canKeepScreenAwake()
   // Hook order must be stable across renders — call unconditionally. The
   // ticker is a no-op (no interval scheduled) unless we're actively
@@ -121,7 +122,7 @@ export function GlobalUploadBanner() {
           {canRetry && (
             <button
               type="button"
-              onClick={() => uploadManager.retry()}
+              onClick={() => synth.retry()}
               aria-label="Retry synthesis"
               className="inline-flex items-center gap-1.5 border border-danger px-3 py-1.5 text-xs font-medium transition-colors hover:bg-danger/10"
             >
@@ -131,7 +132,7 @@ export function GlobalUploadBanner() {
           )}
           <button
             type="button"
-            onClick={() => uploadManager.dismiss()}
+            onClick={() => synth.dismiss()}
             aria-label="Dismiss error"
             className="text-xs text-danger/70 hover:text-danger"
           >
@@ -162,7 +163,7 @@ export function GlobalUploadBanner() {
           </button>
           <button
             type="button"
-            onClick={() => uploadManager.dismiss()}
+            onClick={() => synth.dismiss()}
             aria-label="Dismiss"
             className="text-xs text-accent/70 hover:text-accent"
           >
@@ -185,7 +186,7 @@ export function GlobalUploadBanner() {
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => void uploadManager.resume(state.book.id)}
+            onClick={() => void synth.resume(state.book.id)}
             aria-label="Resume synthesis"
             className="inline-flex items-center gap-1.5 border border-accent px-3 py-1.5 text-xs font-medium transition-colors hover:bg-elevated"
           >
@@ -194,7 +195,7 @@ export function GlobalUploadBanner() {
           </button>
           <button
             type="button"
-            onClick={() => uploadManager.dismiss()}
+            onClick={() => synth.dismiss()}
             aria-label="Dismiss"
             className="text-xs text-accent/70 hover:text-accent"
           >
@@ -274,10 +275,10 @@ export function GlobalUploadBanner() {
             <BookOpen className="h-3.5 w-3.5" />
             Open
           </button>
-          {state.type === 'synthesizing' && uploadManager.canPause() && (
+          {state.type === 'synthesizing' && synth.canPause() && (
             <button
               type="button"
-              onClick={() => uploadManager.pause()}
+              onClick={() => synth.pause()}
               aria-label="Pause synthesis"
               className="inline-flex items-center gap-1.5 border border-accent px-3 py-1.5 text-xs font-medium transition-colors hover:bg-elevated"
             >
@@ -287,7 +288,7 @@ export function GlobalUploadBanner() {
           )}
           <button
             type="button"
-            onClick={() => uploadManager.cancel()}
+            onClick={() => synth.cancel()}
             disabled={cancelling || pausing}
             className="text-xs text-accent/70 transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-accent/70"
           >

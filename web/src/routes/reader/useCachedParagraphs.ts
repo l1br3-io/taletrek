@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { localDatasource } from '../../lib/datasource'
+import { useDatasource } from '../../context/datasource'
 import type { BookId, Chapter, VoiceId } from '../../types'
 
 /**
@@ -17,6 +17,7 @@ export function useCachedParagraphs(
   chapters: Chapter[],
   refreshToken: number,
 ): Set<string> {
+  const { library } = useDatasource()
   const [cachedIds, setCachedIds] = useState<Set<string>>(new Set())
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: refreshToken is a caller-controlled prop that changes when a synth job finishes
@@ -24,7 +25,7 @@ export function useCachedParagraphs(
     let cancelled = false
     void (async () => {
       try {
-        const ids = await localDatasource.getCachedParagraphIds(bookId, voiceId, chapters)
+        const ids = await library.getCachedParagraphIds(bookId, voiceId, chapters)
         if (!cancelled) setCachedIds(ids)
       } catch {
         if (!cancelled) setCachedIds(new Set())
@@ -33,7 +34,7 @@ export function useCachedParagraphs(
     return () => {
       cancelled = true
     }
-  }, [bookId, voiceId, chapters, refreshToken])
+  }, [bookId, voiceId, chapters, refreshToken, library])
 
   return cachedIds
 }

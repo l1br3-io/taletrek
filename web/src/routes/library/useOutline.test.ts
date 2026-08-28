@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { DatasourceProvider } from '../../context/datasource'
 import {
   _clearDBForTests,
   _resetDBForTests,
@@ -12,6 +13,11 @@ import {
 import type { ParseResult } from '../../lib/parse/types'
 import { type Book, bookId, type Chapter, chapterId } from '../../types'
 import { useOutline } from './useOutline'
+
+/** renderHook with the (default-local) DatasourceProvider mounted. */
+function renderHookWithDs<T>(fn: () => T) {
+  return renderHook(fn, { wrapper: DatasourceProvider })
+}
 
 vi.mock('../../lib/parse/client', () => ({
   parseInWorker: vi.fn(),
@@ -82,7 +88,7 @@ describe('useOutline — runWithPdfOutline (M10 Tier 1)', () => {
       ),
     )
 
-    const { result } = renderHook(() => useOutline())
+    const { result } = renderHookWithDs(() => useOutline())
     expect(result.current.state.type).toBe('idle')
 
     await act(async () => {
@@ -111,7 +117,7 @@ describe('useOutline — runWithPdfOutline (M10 Tier 1)', () => {
       mockParseResult([{ title: 'My PDF', paragraphs: ['just body, no outline'] }]),
     )
 
-    const { result } = renderHook(() => useOutline())
+    const { result } = renderHookWithDs(() => useOutline())
     await act(async () => {
       await result.current.runWithPdfOutline(book.id)
     })
@@ -130,7 +136,7 @@ describe('useOutline — runWithPdfOutline (M10 Tier 1)', () => {
     await putBook(book)
     await putChapters([makeChapter(['body'])])
 
-    const { result } = renderHook(() => useOutline())
+    const { result } = renderHookWithDs(() => useOutline())
     await act(async () => {
       await result.current.runWithPdfOutline(book.id)
     })
@@ -167,7 +173,7 @@ describe('useOutline — runWithAi flattens Tier-1 multi-chapter input (M10)', (
       { paragraphIndex: 3, title: 'Chapter 2' },
     ])
 
-    const { result } = renderHook(() => useOutline())
+    const { result } = renderHookWithDs(() => useOutline())
     await act(async () => {
       await result.current.runWithAi(book.id, detect)
     })
@@ -196,7 +202,7 @@ describe('useOutline — runWithAi flattens Tier-1 multi-chapter input (M10)', (
     )
 
     const detect = vi.fn(async () => [])
-    const { result } = renderHook(() => useOutline())
+    const { result } = renderHookWithDs(() => useOutline())
     await act(async () => {
       await result.current.runWithAi(book.id, detect)
     })
@@ -212,7 +218,7 @@ describe('useOutline — runWithAi flattens Tier-1 multi-chapter input (M10)', (
 
     vi.mocked(parseInWorker).mockRejectedValue(new Error('Worker exploded'))
 
-    const { result } = renderHook(() => useOutline())
+    const { result } = renderHookWithDs(() => useOutline())
     await act(async () => {
       await result.current.runWithAi(book.id, vi.fn())
     })
@@ -243,7 +249,7 @@ describe('useOutline — re-entrancy guard', () => {
         }),
     )
 
-    const { result } = renderHook(() => useOutline())
+    const { result } = renderHookWithDs(() => useOutline())
     let firstRun!: Promise<boolean>
     act(() => {
       firstRun = result.current.runWithPdfOutline(book.id)

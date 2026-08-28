@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
+import { useDatasource } from '../../context/datasource'
 import type { AiOutlineChapter } from '../../lib/ai/types'
-import { localDatasource } from '../../lib/datasource'
+
 import { parseInWorker } from '../../lib/parse/client'
 import { OriginalUnavailableError } from '../../lib/reprocess'
 import type { BookId, Chapter } from '../../types'
@@ -65,6 +66,7 @@ export interface UseOutline {
  * in AGENTS.md) on every run.
  */
 export function useOutline(): UseOutline {
+  const { library } = useDatasource()
   const [state, setState] = useState<OutlineState>({ type: 'idle' })
   const runningRef = useRef(false)
 
@@ -77,7 +79,7 @@ export function useOutline(): UseOutline {
       runningRef.current = true
       setState({ type: 'running' })
       try {
-        const stored = await localDatasource.getBookFile(bookId)
+        const stored = await library.getBookFile(bookId)
         if (!stored) throw new OriginalUnavailableError()
         const file = new File([stored.blob], stored.name, { type: stored.type })
         const result = await parseInWorker(file)
@@ -113,8 +115,8 @@ export function useOutline(): UseOutline {
           })
         }
 
-        await localDatasource.replaceBookChapters(bookId, newChapters)
-        await localDatasource.updateBookProgress(bookId, { chapterIndex: 0, paragraphIndex: 0 }, 0)
+        await library.replaceBookChapters(bookId, newChapters)
+        await library.updateBookProgress(bookId, { chapterIndex: 0, paragraphIndex: 0 }, 0)
 
         setState({
           type: 'done',
@@ -131,53 +133,56 @@ export function useOutline(): UseOutline {
         runningRef.current = false
       }
     },
-    [],
+    [library],
   )
 
-  const runWithPdfOutline = useCallback(async (bookId: BookId): Promise<boolean> => {
-    if (runningRef.current) return false
-    runningRef.current = true
-    setState({ type: 'running' })
-    try {
-      const stored = await localDatasource.getBookFile(bookId)
-      if (!stored) throw new OriginalUnavailableError()
-      const file = new File([stored.blob], stored.name, { type: stored.type })
-      const result = await parseInWorker(file)
+  const runWithPdfOutline = useCallback(
+    async (bookId: BookId): Promise<boolean> => {
+      if (runningRef.current) return false
+      runningRef.current = true
+      setState({ type: 'running' })
+      try {
+        const stored = await library.getBookFile(bookId)
+        if (!stored) throw new OriginalUnavailableError()
+        const file = new File([stored.blob], stored.name, { type: stored.type })
+        const result = await parseInWorker(file)
 
-      if (result.chapters.length < 2) {
+        if (result.chapters.length < 2) {
+          setState({
+            type: 'done',
+            message: 'PDF has no embedded outline — try AI instead.',
+          })
+          return false
+        }
+
+        const newChapters: Chapter[] = result.chapters.map((parsed, index) => ({
+          id: newChapterId(),
+          bookId,
+          index,
+          title: parsed.title,
+          paragraphs: parsed.paragraphs,
+        }))
+
+        await library.replaceBookChapters(bookId, newChapters)
+        await library.updateBookProgress(bookId, { chapterIndex: 0, paragraphIndex: 0 }, 0)
+
         setState({
           type: 'done',
-          message: 'PDF has no embedded outline — try AI instead.',
+          message: `PDF outline applied — ${newChapters.length} chapters.`,
+        })
+        return true
+      } catch (e) {
+        setState({
+          type: 'error',
+          message: e instanceof Error ? e.message : 'PDF outline extraction failed.',
         })
         return false
+      } finally {
+        runningRef.current = false
       }
-
-      const newChapters: Chapter[] = result.chapters.map((parsed, index) => ({
-        id: newChapterId(),
-        bookId,
-        index,
-        title: parsed.title,
-        paragraphs: parsed.paragraphs,
-      }))
-
-      await localDatasource.replaceBookChapters(bookId, newChapters)
-      await localDatasource.updateBookProgress(bookId, { chapterIndex: 0, paragraphIndex: 0 }, 0)
-
-      setState({
-        type: 'done',
-        message: `PDF outline applied — ${newChapters.length} chapters.`,
-      })
-      return true
-    } catch (e) {
-      setState({
-        type: 'error',
-        message: e instanceof Error ? e.message : 'PDF outline extraction failed.',
-      })
-      return false
-    } finally {
-      runningRef.current = false
-    }
-  }, [])
+    },
+    [library],
+  )
 
   const reset = useCallback(() => setState({ type: 'idle' }), [])
 

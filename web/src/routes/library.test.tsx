@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Layout } from '../components/Layout'
+import { DatasourceProvider } from '../context/datasource'
 import { DEFAULT_AI_SETTINGS, DEFAULT_SETTINGS, SettingsProvider } from '../context/settings'
 import { _resetAiEngineForTests } from '../lib/ai/client'
 import { clearAllKeys } from '../lib/ai/keyring'
@@ -135,16 +136,18 @@ function renderAt(path: string) {
     return <div data-testid="capture">{loc.pathname}</div>
   }
   return render(
-    <SettingsProvider>
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route element={<Layout />}>
-            <Route path="/library" element={<Library />} />
-            <Route path="*" element={<Capture />} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
-    </SettingsProvider>,
+    <DatasourceProvider>
+      <SettingsProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/library" element={<Library />} />
+              <Route path="*" element={<Capture />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </SettingsProvider>
+    </DatasourceProvider>,
   )
 }
 

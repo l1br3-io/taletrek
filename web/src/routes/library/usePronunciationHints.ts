@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
+import { useDatasource } from '../../context/datasource'
 import type { AiTransformEngine, PronunciationCandidate } from '../../lib/ai/types'
-import { localDatasource } from '../../lib/datasource'
 import type { BookId } from '../../types'
 
 /**
@@ -31,6 +31,7 @@ export interface UsePronunciationHints {
  * `AbortController` (bridge to the engine's `signal`).
  */
 export function usePronunciationHints(engine: AiTransformEngine | null): UsePronunciationHints {
+  const { library } = useDatasource()
   const [state, setState] = useState<HintsScanState>({ type: 'idle' })
   const abortRef = useRef<AbortController | null>(null)
 
@@ -51,7 +52,7 @@ export function usePronunciationHints(engine: AiTransformEngine | null): UsePron
       abortRef.current = controller
       setState({ type: 'loading' })
       try {
-        const chapters = await localDatasource.getChaptersByBook(bookId)
+        const chapters = await library.getChaptersByBook(bookId)
         const sample = chapters[0]?.paragraphs ?? []
         if (controller.signal.aborted) return
         const candidates = await engine.proposePronunciationHints(
@@ -71,7 +72,7 @@ export function usePronunciationHints(engine: AiTransformEngine | null): UsePron
         if (abortRef.current === controller) abortRef.current = null
       }
     },
-    [engine],
+    [engine, library],
   )
 
   return { state, scan, reset }

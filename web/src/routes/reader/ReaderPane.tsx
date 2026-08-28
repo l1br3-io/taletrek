@@ -1,11 +1,12 @@
 import { Locate } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useDatasource } from '../../context/datasource'
 import { useSettings } from '../../context/settings'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useOnline } from '../../hooks/useOnline'
 import { cleanChapters } from '../../lib/clean'
-import { localDatasource } from '../../lib/datasource'
+import { serverPlaybackEngine } from '../../lib/datasource'
 import { scrollIntoViewCenter, scrollToTop } from '../../lib/scroll'
 import { bookTransformManager } from '../../lib/transform/manager'
 import { useBookTransformState } from '../../lib/transform/useBookTransformState'
@@ -60,6 +61,7 @@ function ReaderPane({
   chapters: Chapter[]
   onParagraphChanged: (chapterId: ChapterId, rawParagraphIndex: number, text: string) => void
 }) {
+  const { mode, synth } = useDatasource()
   const { settings, update } = useSettings()
   const online = useOnline()
   const cleanedChapters = useMemo(
@@ -73,7 +75,7 @@ function ReaderPane({
   // surface buffer state so the player, ReaderView, and Outline can show
   // per-paragraph "ready/pending" indicators and the player skips its own
   // redundant primeAhead (the background job fills the cache).
-  const jobState = useUploadState()
+  const jobState = useUploadState(synth)
   const backgroundActive =
     (jobState.type === 'synthesizing' || jobState.type === 'voiceDownload') &&
     jobState.book.id === book.id
@@ -184,7 +186,10 @@ function ReaderPane({
       chapters: cleanedChapters,
       voiceId: settings.voiceId,
       playbackRate: settings.playbackRate,
-      engine: ttsClient,
+      // The engine slot is the playback seam (T15): local mode plays the
+      // on-device Piper client; hosted mode refuses on-device synthesis —
+      // remote audio-by-key fills this slot in T15.
+      engine: mode === 'server' ? serverPlaybackEngine : ttsClient,
       initialIndex,
       bookId: book.id,
       backgroundActive,
@@ -457,42 +462,44 @@ function ReaderPane({
 /** Bare `/reader` — redirect to the latest book (or the library when empty). */
 function ReaderRedirect() {
   const navigate = useNavigate()
+  const { library } = useDatasource()
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const latest = await localDatasource.getMostRecentBook()
+      const latest = await library.getMostRecentBook()
       if (cancelled) return
       navigate(latest ? `/reader/${latest.id}` : '/library', { replace: true })
     })()
     return () => {
       cancelled = true
     }
-  }, [navigate])
+  }, [navigate, library])
   return <p className="text-muted">Loading…</p>
 }
 
 /** `/reader/:bookId` — load by id, render the pane. */
 function ReaderLoader({ id }: { id: BookId }) {
   const navigate = useNavigate()
+  const { library } = useDatasource()
   const [load, setLoad] = useState<LoadState>({ type: 'loading' })
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const book = await localDatasource.getBook(id)
+      const book = await library.getBook(id)
       if (cancelled) return
       if (!book) {
         setLoad({ type: 'not-found' })
         return
       }
-      const chapters = await localDatasource.getChaptersByBook(id)
+      const chapters = await library.getChaptersByBook(id)
       if (cancelled) return
       setLoad({ type: 'ready', book, chapters })
     })()
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, library])
 
   useEffect(() => {
     if (load.type === 'not-found') navigate('/library', { replace: true })
@@ -526,20 +533,20 @@ function ReaderLoader({ id }: { id: BookId }) {
     if (transformTick === 'idle') return
     let cancelled = false
     void (async () => {
-      const fresh = await localDatasource.getChaptersByBook(id)
+      const fresh = await library.getChaptersByBook(id)
       if (cancelled) return
       setLoad((prev) => (prev.type === 'ready' ? { ...prev, chapters: fresh } : prev))
     })()
     return () => {
       cancelled = true
     }
-  }, [transformTick, id])
+  }, [transformTick, id, library])
 
   // Per-paragraph transform (F8): persist the new text and update the in-memory
   // chapters so the reader + player re-derive from the edited source.
   const handleParagraphChanged = useCallback(
     (chapterId: ChapterId, rawParagraphIndex: number, text: string) => {
-      void localDatasource.updateParagraph(chapterId, rawParagraphIndex, text)
+      void library.updateParagraph(chapterId, rawParagraphIndex, text)
       setLoad((prev) =>
         prev.type === 'ready'
           ? {
@@ -556,7 +563,7 @@ function ReaderLoader({ id }: { id: BookId }) {
           : prev,
       )
     },
-    [],
+    [library],
   )
 
   return (

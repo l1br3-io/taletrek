@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useDatasource } from '../../../context/datasource'
 import { useSettings } from '../../../context/settings'
-import { localDatasource } from '../../../lib/datasource'
 import { resolveMobileEngine } from '../../../lib/playback/engines'
 import type { TtsEngine } from '../../../lib/tts/types'
 import type { BookId, Chapter, VoiceId } from '../../../types'
@@ -48,6 +48,7 @@ export function usePlayer(
   args: UsePlayerArgs,
   opts: { isMobile: boolean },
 ): UseParagraphPlayerResult {
+  const { library } = useDatasource()
   const desktop = useDesktopPlayer(args)
   const preloaded = usePreloadedPlayer(args)
   const webAudio = useWebAudioPlayer(args)
@@ -72,7 +73,7 @@ export function usePlayer(
       return
     }
     let cancelled = false
-    localDatasource
+    library
       .getBookAudio(args.bookId)
       .then((audio) => {
         if (!cancelled) setHasBookAudio(audio !== undefined)
@@ -83,7 +84,7 @@ export function usePlayer(
     return () => {
       cancelled = true
     }
-  }, [args.bookId, opts.isMobile, engineId, args.bookAudioRefreshToken])
+  }, [args.bookId, opts.isMobile, engineId, args.bookAudioRefreshToken, library])
 
   if (!opts.isMobile) return desktop
   if (engineId === 'web-audio') return webAudio
