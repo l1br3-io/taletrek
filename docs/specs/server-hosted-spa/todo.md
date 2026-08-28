@@ -27,7 +27,7 @@
 
 ## Phase 3 — `ServerDatasource` + hosted UX
 - [x] T13: `resolve.ts` boot probe + `server.ts` library ops (`tasks/013-server-datasource.md`)
-- [ ] T14: Remote synth pipeline (`tasks/014-remote-synth-pipeline.md`)
+- [x] T14: Remote synth pipeline (`tasks/014-remote-synth-pipeline.md`)
 - [ ] T15: Remote playback (`tasks/015-remote-playback.md`)
 - [ ] T16: Hosted parity + delete askama panel (`tasks/016-hosted-parity-delete-panel.md`)
 - [ ] T17: SW `/api` network-only + affordances audit (`tasks/017-sw-scoping.md`)
@@ -35,6 +35,8 @@
 ### Checkpoint: End-to-end hosted flow — login → upload → server synth (tab closed) → reopen → play. Safari/Opus check (R2).
 
 > T13 verification notes (2026-08-28): `just dev` with a seeded server — probe 200 → `datasource mode: server`; 401 (no cookie) → `/ui/login` redirect, post-login cookie lands back on `/` in server mode; library lists the server book; reader loads chapters (lazy explode) + position PATCH round-trips (`position.progressFraction` piggybacks on the verbatim T11 body). Standalone check: `pnpm dev` with no server → proxy 502 → `datasource mode: local`, PWA boots identically. Hosted Play currently refuses with "On-device playback synthesis is not available while hosted by the server." (`serverPlaybackEngine` holds the T15 engine slot — no Piper/wasm downloads hosted). Audio probing decided per task: single `GET /api/books/:id` → `audioPresent && voiceId` match marks every non-empty paragraph (whole-book synth, bundle rewritten atomically at completion).
+
+> T14 verification notes (2026-08-28, real piper — `TALETREK_PIPER` seeded voice, served `web/dist` behind login, Chrome-driven): upload EPUB in hosted mode → browser parse → `POST /api/books` 201 → `POST …/synth` 202 → banner ticks `2/21 → …` → "'Caravan Nights' is ready." Failure path exercised for real (server started without `TALETREK_PIPER` → job `failed` → error banner carried the server's message; Retry after fixing env re-ran to green). R5 reload mid-job: 192-¶ book reloaded at 2/192 → boot recovery re-adopted, banner resumed `40/192`. Headline demo: closed the tab at ~40/192 → server ran to `succeeded 192/192` (curl-verified) → reopened → library shows the book ready (no banner), `audioPresent: true`. Design notes: `ingestBook` POSTs the text-only bundle at upload time (so `synthesizeOnUpload: off` + reader + library work without `startJob`); `startJob` never re-POSTs (probes dto → synth-or-resynth; 409 adopts the in-flight job); `cancel()` = stop polling only, job runs on (doc'd on the method); hosted transform runs client-side then re-POSTs + resynths under the book's current voice (probed pre-re-POST — the re-POST resets `audioPresent`). Known follow-ups for T16/T17: banner copy "Keep this tab open…" is wrong hosted (nothing pauses), and the Google-Fonts CSP console error is the known G29.
 
 ## Phase 4 — Deploy + ship
 - [ ] T18: Dockerfile builds SPA + docker e2e (`tasks/018-docker-builds-spa.md`)
