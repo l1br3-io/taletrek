@@ -79,11 +79,16 @@ docker load < tt.tar.gz
 
 ## 3. Run it
 
+Generate the token **first** and save it — the server never logs or echoes it
+again:
+
 ```
+TALETREK_TOKEN="$(openssl rand -hex 32)"
+echo "token: $TALETREK_TOKEN"    # ← copy into your password manager now
 docker run -d --name taletrek \
   --restart unless-stopped \
   -p 127.0.0.1:7878:7878 \
-  -e TALETREK_TOKEN="$(openssl rand -hex 32)" \
+  -e TALETREK_TOKEN="$TALETREK_TOKEN" \
   -v tt-data:/data \
   taletrek-server
 docker logs taletrek 2>&1 | head    # note the listening line; token is NOT logged
@@ -101,8 +106,10 @@ a book, close the tab, come back tomorrow — synthesis finished without you.
 ## 4. Operating
 
 - **Update:** `git pull && docker build -f server/Dockerfile -t taletrek-server . &&
-  docker rm -f taletrek &&` re-run the `docker run` above (the volume keeps
-  everything). For shipped images: build, `save`, `load`, swap.
+  docker rm -f taletrek &&` re-run the `docker run` above **with your saved
+  token** — a fresh `openssl rand` would mint a different credential and lock
+  you out (the volume keeps everything). For shipped images: build, `save`,
+  `load`, swap.
 - **Backup:** everything lives in the `tt-data` volume —
   `docker run --rm -v tt-data:/data -v $(pwd):/backup alpine tar czf /backup/tt-data.tgz /data`.
 - **Watch a synth job:** `docker logs -f taletrek`, or the job chip in the
