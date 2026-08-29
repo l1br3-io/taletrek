@@ -1,6 +1,7 @@
 ---
-status: active        # draft → active → shipped
+status: shipped       # draft → active → shipped
 started: 2026-08-25
+shipped: 2026-08-29
 ---
 
 # SPEC — Off-device synth track · Effort 5: Server-hosted SPA
