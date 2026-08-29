@@ -100,6 +100,21 @@ export default defineConfig({
         // first fetch so it's available offline thereafter — the app shell +
         // these binaries + the OPFS voice model together enable true offline.
         runtimeCaching: [
+          /**
+           * GOTCHA (T17 / R3 / G3): server-owned paths are network-only. In the
+           * hosted shape every `/api/*` fetch and the `/ui/login` cookie gate
+           * must hit the network or fail — a cached API response (or a
+           * SW-served shell for /ui/*) would show stale library data as
+           * current, or re-create the T16 post-logout redirect loop. Listed
+           * FIRST so it wins over any future, broader runtimeCaching pattern.
+           * `NetworkOnly` never calls cache.put on any status; a failed
+           * network request rejects (hosted mode is online-only by decision).
+           */
+          {
+            urlPattern: ({ url }) =>
+              url.pathname.startsWith('/api/') || url.pathname.startsWith('/ui/'),
+            handler: 'NetworkOnly',
+          },
           {
             urlPattern: ({ url }) => url.pathname.startsWith('/wasm/'),
             handler: 'CacheFirst',

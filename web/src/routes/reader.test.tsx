@@ -156,6 +156,31 @@ describe('Reader content', () => {
   })
 })
 
+describe('Reader — hosted load failure (T17)', () => {
+  it('renders an explicit error state when the server is unreachable (no eternal Loading)', async () => {
+    const rejecting = (async () => {
+      throw new TypeError('Failed to fetch')
+    }) as typeof fetch
+    vi.stubGlobal('fetch', rejecting)
+    try {
+      render(
+        <DatasourceProvider mode="server">
+          <SettingsProvider>
+            <MemoryRouter initialEntries={[`/reader/${newBookId()}`]}>
+              <Routes>
+                <Route path="/reader/:bookId" element={<Reader />} />
+              </Routes>
+            </MemoryRouter>
+          </SettingsProvider>
+        </DatasourceProvider>,
+      )
+      expect(await screen.findByText(/Couldn't load this book/i)).toBeInTheDocument()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
 describe('Reader resume (M5)', () => {
   it('highlights the resumed paragraph on mount', async () => {
     const id = newBookId()

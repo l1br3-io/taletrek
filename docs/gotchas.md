@@ -15,7 +15,7 @@ Design cached models/audio as re-hydratable; call `navigator.storage.persist()`.
 <a id="g3"></a>
 ### 3. Dev SW caches stale bundles
 
-When verifying source changes in-browser, unregister the SW or test via `pnpm preview` (production build) + hard reload.
+When verifying source changes in-browser, unregister the SW or test via `pnpm preview` (production build) + hard reload. Since Effort 5 (T17), the SW's runtime routes are **network-only for `/api/*` and `/ui/*`** (the rule lives in `web/vite.config.ts` `runtimeCaching`, listed first) — server data and the login gate are never SW-cached; only the app shell precache and the `/wasm/` runtime binaries are.
 
 <a id="g4"></a>
 ### 4. License: fully MIT

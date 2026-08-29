@@ -49,6 +49,7 @@ function resolveInitialIndex(
 type LoadState =
   | { type: 'loading' }
   | { type: 'not-found' }
+  | { type: 'error'; message: string }
   | { type: 'ready'; book: Book; chapters: Chapter[] }
 
 /** Playback view for a loaded book — owns the player hook (keyed by book.id). */
@@ -499,7 +500,13 @@ function ReaderLoader({ id }: { id: BookId }) {
       } catch (e) {
         // Mid-session cookie expiry → back to the login gate (T16). Local
         // mode never produces the 401 this checks for.
-        if (!redirectToLoginIfUnauthorized(e)) throw e
+        if (redirectToLoginIfUnauthorized(e)) return
+        // Any other failure (hosted offline, server down): an explicit error
+        // state — never an eternal "Loading…" (T17).
+        setLoad({
+          type: 'error',
+          message: e instanceof Error ? e.message : 'Failed to load book',
+        })
       }
     })()
     return () => {
@@ -576,6 +583,14 @@ function ReaderLoader({ id }: { id: BookId }) {
     <div className="space-y-6">
       {load.type === 'loading' && <p className="text-muted">Loading…</p>}
       {load.type === 'not-found' && <p className="text-muted">Book not found.</p>}
+      {load.type === 'error' && (
+        <div role="alert" className="border border-danger bg-danger/10 p-4 text-danger">
+          <p className="text-sm font-medium">Couldn't load this book.</p>
+          <p className="mt-1 text-sm">
+            {load.message} — reconnect or check the server, then reload.
+          </p>
+        </div>
+      )}
       {load.type === 'ready' && (
         <ReaderPane
           key={load.book.id}

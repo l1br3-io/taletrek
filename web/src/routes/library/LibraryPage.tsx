@@ -28,6 +28,7 @@ export function Library() {
     hints,
     list,
     refresh,
+    retryListLoad,
     runCtx,
     hintsTitle,
     parseState,
@@ -157,6 +158,32 @@ export function Library() {
       )}
 
       {list.type === 'loading' && <p className="text-muted">Loading…</p>}
+      {list.type === 'error' && (
+        <div role="alert" className="border border-danger bg-danger/10 p-4 text-danger">
+          <p className="text-sm font-medium">Can't reach your TaleTrek server.</p>
+          <p className="mt-1 text-sm">
+            {list.message} — reconnect or check the server, then try again.
+          </p>
+          <button
+            type="button"
+            onClick={retryListLoad}
+            className="mt-3 border border-danger px-3 py-1.5 text-xs font-medium transition-colors hover:bg-danger/10"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+      {/* Hosted + offline: already-rendered books are the last-known state —
+          label them as such (T17: never stale data masquerading as current).
+          The reconnect effect in useLibraryState re-syncs automatically. */}
+      {hosted && !online && list.type === 'ready' && (
+        <div
+          role="status"
+          className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600"
+        >
+          Offline — showing your library as it last loaded. It syncs when you reconnect.
+        </div>
+      )}
       {list.type === 'ready' && (
         <>
           {aiUnusableReason && (

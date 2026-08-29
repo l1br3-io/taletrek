@@ -17,6 +17,7 @@ beforeEach(() => {
     ...originalLocation,
     assign: assignMock,
   }
+  localStorage.clear()
 })
 
 afterEach(() => {
@@ -66,5 +67,64 @@ describe('resolveDatasourceMode', () => {
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed'))
     await expect(resolveDatasourceMode(fetchMock)).resolves.toEqual({ mode: 'local' })
     expect(assignMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('resolveDatasourceMode — hosted-shape marker (T17)', () => {
+  it('a 200 probe persists the hosted-shape marker', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(statusResponse(200))
+    await resolveDatasourceMode(fetchMock)
+    expect(localStorage.getItem('taletrek:hosted-shape')).toBe('1')
+  })
+
+  it('a 401 probe persists the marker too (the server exists — login pending)', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(statusResponse(401))
+    await resolveDatasourceMode(fetchMock)
+    expect(localStorage.getItem('taletrek:hosted-shape')).toBe('1')
+  })
+
+  it('a definitive 404 (origin is not a server) clears a stale marker', async () => {
+    localStorage.setItem('taletrek:hosted-shape', '1')
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(statusResponse(404, 'not found'))
+    await resolveDatasourceMode(fetchMock)
+    expect(localStorage.getItem('taletrek:hosted-shape')).toBeNull()
+  })
+
+  it('a 5xx answer keeps the marker (broken server ≠ static origin)', async () => {
+    localStorage.setItem('taletrek:hosted-shape', '1')
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(statusResponse(502, 'bad gateway'))
+    await expect(resolveDatasourceMode(fetchMock)).resolves.toEqual({ mode: 'local' })
+    expect(localStorage.getItem('taletrek:hosted-shape')).toBe('1')
+  })
+
+  it('unreachable + remembered hosted shape → server mode (offline reload stays hosted)', async () => {
+    localStorage.setItem('taletrek:hosted-shape', '1')
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed'))
+    await expect(resolveDatasourceMode(fetchMock)).resolves.toEqual({ mode: 'server' })
+    expect(assignMock).not.toHaveBeenCalled()
+  })
+
+  it('unreachable with no marker → local mode (standalone-PWA invariant)', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed'))
+    await expect(resolveDatasourceMode(fetchMock)).resolves.toEqual({ mode: 'local' })
+  })
+
+  it('unreachable + marker set with storage unreadable → local mode, no throw', async () => {
+    localStorage.setItem('taletrek:hosted-shape', '1')
+    const getter = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError')
+    })
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed'))
+    await expect(resolveDatasourceMode(fetchMock)).resolves.toEqual({ mode: 'local' })
+    getter.mockRestore()
+  })
+
+  it('a storage failure while persisting the marker never breaks resolution', async () => {
+    const setter = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError')
+    })
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(statusResponse(200))
+    await expect(resolveDatasourceMode(fetchMock)).resolves.toEqual({ mode: 'server' })
+    setter.mockRestore()
   })
 })
