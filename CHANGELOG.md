@@ -2,6 +2,14 @@
 
 Reverse-chronological history of what shipped. The current effort's spec lives at `docs/specs/<slug>/spec.md`; shipped efforts stay in place under `docs/specs/<slug>/` (the spec.md frontmatter flips to `status: shipped`).
 
+## Off-device synth track · Tier 3 completion (`server-hosted-spa`) · 2026-08-29
+
+Effort 5 makes the SPA a **live client of the personal server** — one codebase, two deployment shapes (ADR-0014): the unchanged offline-first PWA, and the same SPA **hosted by the server** with server-side persistence and native processing. Deploy the Docker image (it now builds the whole stack — server binary + SPA — in one `docker build`), open the origin, sign in with the token, and get the full TaleTrek UX: upload an EPUB, close the tab (synth keeps running on the server), reopen, press play. The server-rendered operator panel is gone — the hosted SPA is the UI. ([`docs/specs/server-hosted-spa/`](docs/specs/server-hosted-spa/spec.md); ADR-0014)
+
+How the shape picks itself: a boot probe of same-origin `GET /api/session` — authed → server mode (library, synth, playback all server-backed); 401 → the cookie login gate; unreachable → the standalone local-mode PWA, byte-identical to before. New server surface: `GET /api/session`, `GET /api/books/:id/chapters` (lazy chapter explode), `GET /api/books/:id/audio/:key` (content-addressed Opus segments), `PATCH /api/books/:id/progress`, `GET /api/voices`, `POST /ui/logout`. The service worker is scoped network-only for `/api/*` + `/ui/*` (no stale-library masquerade, no post-logout redirect loop) with explicit offline states ("Can't reach your server" / amber offline banner). Hosted settings swap the on-device voice manager for the server voice picker + logout; upload applies the cleaning config before the bundle write so parse text, reader text, and audio keys agree. Deploy guide: [`docs/deploy-digitalocean.md`](docs/deploy-digitalocean.md). Safari/Opus hosted playback remains a hardware-gated follow-up.
+
+Tiers now reachable: **(1)** SPA alone · **(2)** SPA + Desktop · **(3)** SPA + personal server — **live-hosted** (this; bundle exchange with the server still works).
+
 ## Off-device synth track · Tier 3 (`personal-server`) · 2026-08-24
 
 Effort 4 ships the **personal server** — `taletrek-server`, a Docker-first Rust/axum library server that turns synthesis into an always-on service ("close every device, synth keeps going"). Books upload as `.taletrek`/`.taletrek-lib` (idempotent upsert by bundle id), synth/resynth run as background jobs with progress polling, full bundles download back to the SPA; a server-rendered, JS-free operator UI (cookie login) covers the same loop in a browser. Shared cores were extracted into `crates/worker` (voices + rayon pool + manifest stamping) so desktop and server stamp through one path. ([`docs/specs/personal-server/`](docs/specs/personal-server/spec.md); ADR-0013)

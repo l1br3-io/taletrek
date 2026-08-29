@@ -1,5 +1,5 @@
 ---
-status: draft        # draft → active → shipped
+status: active        # draft → active → shipped
 started: 2026-08-25
 ---
 

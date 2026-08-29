@@ -48,14 +48,14 @@
 
 ## Phase 4 — Deploy + ship
 - [x] T18: Dockerfile builds SPA + docker e2e (`tasks/018-docker-builds-spa.md`)
-- [ ] T19: Deploy guide + runbook + CHANGELOG + final gates (`tasks/019-deploy-guide-ship.md`)
+- [x] T19: Deploy guide + runbook + CHANGELOG + final gates (`tasks/019-deploy-guide-ship.md`)
 
 ### Final gates (run @ T19, branch `server-hosted-spa`)
-- [ ] `cargo build` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` green
-- [ ] `pnpm verify` green
-- [ ] `docker build -f server/Dockerfile .` succeeds; `docker run` → login → hosted SPA → full walkthrough
-- [ ] Manual runbook walkthrough recorded below (real piper + ffmpeg)
-- [ ] `spec.md` `status:` flips `draft → active` on /build checkpoint; `shipped` on merge
+- [x] `cargo build` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` green *(2026-08-29)*
+- [x] `pnpm verify` green *(2026-08-29)*
+- [x] `docker build -f server/Dockerfile .` succeeds; `docker run` → login → hosted SPA → full walkthrough *(2026-08-29 @ `d550eee` — the §4 runbook walkthrough, browser-driven: login → server-mode boot → upload → tab-closed synth → reopen → Play/seek/reload-resume)*
+- [x] Manual runbook walkthrough recorded below (real piper + ffmpeg) *(2026-08-29 @ `d550eee` — [runbook.md §Passing criteria](runbook.md); Safari/Opus hardware check remains a human-only follow-up, explicitly annotated there)*
+- [x] `spec.md` `status:` flips `draft → active` on /build checkpoint *(done 2026-08-29)*; `shipped` on merge
 
 ## Follow-on (NOT this effort)
 - [ ] Offline-capable hosted mode / cross-mode sync
@@ -63,3 +63,4 @@
 - [ ] Cross-book content-addressed audio store + Range streaming
 - [ ] Remote-server mode for the standalone PWA (CORS + token in settings)
 - [ ] Worker-mode desktop queue; server-side raw-file parsing; multi-user
+- [ ] **Safari/Opus hosted playback on real hardware** (runbook §6 — human gate, open)

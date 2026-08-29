@@ -4,9 +4,7 @@
 
 ## Current effort
 
-**Off-device synth track — Effort 4: `personal-server`** (shipped 2026-08-24). High-level view: [`docs/off-device-synth-track.md`](docs/off-device-synth-track.md) (start there) → track decision [`docs/adrs/0013-off-device-synth-and-portable-bundles.md`](docs/adrs/0013-off-device-synth-and-portable-bundles.md) → format [`docs/bundle-format.md`](docs/bundle-format.md) → effort spec [`docs/specs/personal-server/spec.md`](docs/specs/personal-server/spec.md) → plan [`docs/specs/personal-server/plan.md`](docs/specs/personal-server/plan.md) → ordered tasks [`docs/specs/personal-server/todo.md`](docs/specs/personal-server/todo.md).
-
-The track moves synthesis off the phone onto standalone Rust apps (desktop + Docker server), with books flowing between apps as portable `.taletrek` bundles. The default offline-first PWA is unchanged. All four efforts (`portable-bundle-format`, `desktop-synth-app`, `spa-bundle-import-export`, `personal-server`) **shipped 2026-08-03 → 2026-08-24** — Tiers 1–3 all reachable. No effort is active; the next one starts at `/spec` on a fresh branch.
+**None — between efforts.** The off-device synth track is complete: all five efforts (`portable-bundle-format`, `desktop-synth-app`, `spa-bundle-import-export`, `personal-server`, `server-hosted-spa`) **shipped 2026-08-03 → 2026-08-29** — Tiers 1–3 all reachable, including the server **hosting the SPA itself** (ADR-0014). Track overview: [`docs/off-device-synth-track.md`](docs/off-device-synth-track.md) · track decisions: [ADR-0013](docs/adrs/0013-off-device-synth-and-portable-bundles.md) + [ADR-0014](docs/adrs/0014-server-hosted-spa-dual-shape.md) · format: [`docs/bundle-format.md`](docs/bundle-format.md) · deploy: [`docs/deploy-digitalocean.md`](docs/deploy-digitalocean.md) · last effort: [`docs/specs/server-hosted-spa/`](docs/specs/server-hosted-spa/spec.md) (runbook + todo recorded there). The next effort starts at `/spec` on a fresh branch.
 
 Live status always lives in the current effort's `spec.md` frontmatter (`status:`) + `todo.md` — **not here**.
 
@@ -58,9 +56,12 @@ web/              the PWA — Vite 8 + React 19 + TS + RR8 + Tailwind v4 + Biome
     context/        settings.tsx (SettingsProvider — low-freq Context)
     hooks/          useSetting
     lib/            db.ts (idb), storage.ts (persist), media-session.ts,
-                    crypto/ (aes.ts, prf.ts — ADR-0007 biometric key caching)
+                    crypto/ (aes.ts, prf.ts — ADR-0007 biometric key caching),
+                    datasource/ (local + server impls behind LibraryDatasource,
+                    resolve.ts boot probe — ADR-0014 dual shape)
 spike/piper/       throwaway Piper TTS validation app
-server/            the personal server — Rust + axum HTTP server (Docker-first, binary taletrek-server)
+server/            the personal server — Rust + axum HTTP server (Docker-first, binary taletrek-server;
+                   hosts the built SPA at / — image builds it, docs/deploy-digitalocean.md)
 desktop/           the headless synth CLI — Rust + clap (binary taletrek-desktop; synth + resynth)
 crates/synth/      shared pure core: bundle I/O, synth, encode, cache_key (the interchange format)
 crates/worker/     shared host-level: voice acquire + rayon pool + manifest stamping
