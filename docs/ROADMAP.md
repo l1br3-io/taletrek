@@ -1,7 +1,7 @@
 # Roadmap
 
 > Directional overview — no dates, no calendar. The *what's next*, not the spec.
-> **Current effort:** none active (between phases) — off-device synth track complete: all four efforts shipped 2026-08-03 → 2026-08-24, Tiers 1–3 reachable. The next effort starts at `/spec` on a fresh branch. Shipped specs live under [`docs/specs/`](./specs/).
+> **Current effort:** none active (between phases) — off-device synth track complete: all five efforts shipped 2026-08-03 → 2026-08-29, Tiers 1–3 all reachable (the server also hosts the SPA itself, ADR-0014). The next effort starts at `/spec` on a fresh branch. Shipped specs live under [`docs/specs/`](./specs/).
 > Companion: [`VISION.md`](./VISION.md) — the problem and goals.
 
 TaleTrek is a free, open-source **reading companion**: upload any ebook — PDF, EPUB, MOBI, or TXT — and TaleTrek reads it aloud using on-device text-to-speech. It strips links, images, and footnotes so only the story flows, then plays it as background audio that survives screen lock, app switching, and phone closure. You go for a run; your book comes with you. No app store, no subscription, no cloud — just a URL on iOS or Android.
@@ -89,7 +89,7 @@ Shipped efforts live under [`docs/specs/`](./specs/). Ship history: [`CHANGELOG.
 
 An **optional, self-hostable companion track** that moves the slow synthesis step off the phone onto standalone Rust apps, with books flowing between apps as portable `.taletrek` files. The default offline-first PWA (on-device Piper) is unchanged — this track is additive. See [`adrs/0013-off-device-synth-and-portable-bundles.md`](./adrs/0013-off-device-synth-and-portable-bundles.md).
 
-Four efforts, each shippable on its own:
+Five efforts, each shippable on its own:
 
 | # | Effort | State |
 | --- | --- | --- |
@@ -97,5 +97,6 @@ Four efforts, each shippable on its own:
 | T2 | `desktop-synth-app` — standalone Rust synth tool (import text-only bundle → export full bundle) | ✅ shipped ([spec](./specs/desktop-synth-app/spec.md)) · 2026-08-04 |
 | T3 | `spa-bundle-import-export` — TS bundle reader/writer + UI in the SPA | ✅ shipped ([spec](./specs/spa-bundle-import-export/spec.md)) · 2026-08-07 |
 | T4 | `personal-server` — Rust Docker library server + inline synth (worker-mode deferred to a follow-up) | ✅ shipped ([spec](./specs/personal-server/spec.md)) · 2026-08-24 |
+| T5 | `server-hosted-spa` — the server hosts the SPA itself; dual-shape boot (local ∨ server) per ADR-0014 | ✅ shipped ([spec](./specs/server-hosted-spa/spec.md)) · 2026-08-29 |
 
-Tiers: **(1)** SPA alone (on-device synth, exists today) · **(2)** SPA + Desktop (off-device synth via bundle exchange) · **(3)** + Server (central library, always-on synth, sharing).
+Tiers: **(1)** SPA alone (on-device synth, exists today) · **(2)** SPA + Desktop (off-device synth via bundle exchange) · **(3)** + Server (central library, always-on synth, sharing — complete: the server can also host the SPA, ADR-0014).
