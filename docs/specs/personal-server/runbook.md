@@ -193,6 +193,12 @@ docker run -d --name tt \
   taletrek-server
 ```
 
+> Since effort 5 (T18) the same command builds the **full stack**: a `node:24`
+> stage builds the SPA (`web/dist`) with the workspace-pinned pnpm and the
+> runtime bakes it at `/web-dist` (`TALETREK_STATIC_DIR`). No separate
+> `pnpm build` step for operators — one image serves the API, the login page,
+> and the hosted PWA at `/`.
+
 > `-p 127.0.0.1:7878:7878` keeps the container reachable from the host only.
 > To open it to the LAN (the Tier-3 "synth keeps going" deployment), publish
 > deliberately (`-p 7878:7878`) **and** set `TALETREK_TOKEN` to a long random
