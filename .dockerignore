@@ -1,24 +1,33 @@
-# Keep the Docker build context lean: only the Rust workspace is needed to
-# build `taletrek-server`. Everything below is excluded from the context sent
-# to the builder, which speeds up `docker build` and avoids cache-busting on
-# unrelated changes (web/, docs/, node_modules/, local target/ artifacts, …).
+# Keep the Docker build context lean. Two stages consume it: the Rust builder
+# (crates/ + server/ + desktop/) and the spa stage (web/ + workspace manifests,
+# since effort 5 the image builds and serves the PWA). Everything below is
+# excluded from the context sent to the builder, which speeds up `docker build`
+# and avoids cache-busting on unrelated changes (docs/, local artifacts, …).
 
 # --- Rust build output (the builder produces its own, hermetic copy) ---
 target/
 **/target/
 
-# --- JS / PWA workspace (not built into the server image) ---
-node_modules/
-web/
+# --- JS / PWA workspace: sources are needed by the spa stage — exclude only
+#     local artifacts (the container installs its own node_modules and
+#     regenerates the wasm mirror via web/scripts/mirror-wasm.mjs) ---
+**/node_modules/
 web/dist/
-web/.vite/
 web/dev-dist/
-spike/
-pnpm-lock.yaml
-pnpm-workspace.yaml
-package.json
+web/.vite/
+web/coverage/
+web/public/wasm/
+**/*.tsbuildinfo
+
+# --- Spikes: manifests only — pnpm-lock.yaml lists them as importers, so
+#     --frozen-lockfile needs them on disk; their sources/deps never enter
+#     any image (the spa stage installs with --filter @taletrek/web...) ---
+spike/**
+!spike/piper/package.json
+!spike/web-audio/package.json
+
+# --- Root JS config not needed inside any stage ---
 biome.json
-tsconfig.base.json
 wrangler.jsonc
 
 # --- Docs + planning (not needed at compile time) ---
@@ -46,7 +55,6 @@ crates/synth/tests/fixtures/
 .DS_Store
 Thumbs.db
 *.log
-*.tsbuildinfo
 .env
 .env.*
 !.env.example
