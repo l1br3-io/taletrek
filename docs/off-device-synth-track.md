@@ -1,6 +1,6 @@
 # Track — Off-device synthesis + portable bundles
 
-> **Status:** Active · Track decision: [`adrs/0013-off-device-synth-and-portable-bundles.md`](./adrs/0013-off-device-synth-and-portable-bundles.md) · **Start here**, then drill into the current effort's spec.
+> **Status:** Complete — all five efforts shipped (Tiers 1–3) · Track decision: [`adrs/0013-off-device-synth-and-portable-bundles.md`](./adrs/0013-off-device-synth-and-portable-bundles.md) · Amended by ADR-0014 (live SPA↔server for the hosted shape).
 
 ## The one-liner
 Move the slow, painful part — **synthesis** — off the phone onto standalone Rust apps, and let books flow between apps as portable `.taletrek` files. The default offline-first PWA (on-device Piper) stays unchanged. This track is **additive**.
@@ -58,10 +58,11 @@ Content-addressing means audio from *any* source dedups on import for free — a
 | 1 | [`portable-bundle-format`](./specs/portable-bundle-format/spec.md) | Format spec + Rust `crates/synth` crate (clean → Piper → encode + bundle I/O). No app. | ✅ shipped (2026-08-03) |
 | 2 | [`desktop-synth-app`](./specs/desktop-synth-app/spec.md) | Standalone Rust synth tool (text-only bundle in → full bundle out). | ✅ shipped (2026-08-04) → **Tier-2 milestone lands here** |
 | 3 | [`spa-bundle-import-export`](./specs/spa-bundle-import-export/spec.md) | TS bundle reader/writer + UI in the SPA. SPA's only new surface. | ✅ shipped (2026-08-07) → **closes the loop** |
-| 4 | [`personal-server`](./specs/personal-server/spec.md) | Rust Docker library server + inline synth (worker-mode job queue deferred to a follow-up). | 🔨 active (2026-08-09) → **Tier-3 milestone lands here** |
+| 4 | [`personal-server`](./specs/personal-server/spec.md) | Rust Docker library server + inline synth (worker-mode job queue deferred to a follow-up). | ✅ shipped (2026-08-24) → **Tier-3 milestone lands here** |
+| 5 | [`server-hosted-spa`](./specs/server-hosted-spa/spec.md) | The server hosts the SPA itself — live client, hosted mode, full-stack Docker image (ADR-0014 amends alt-2 for this shape). | ✅ shipped (2026-08-29) → **Tier-3 completion** |
 
 Task-level breakdown for all four: [`specs/portable-bundle-format/tasks/README.md`](./specs/portable-bundle-format/tasks/README.md).
-Current status: Effort 4 is built (T1–T12 + machine gates green; runbook walkthrough 2026-08-20 except the human-only SPA audio-plays check) — next `/review` → `/ship`.
+Current status: track complete — Tier 1 (SPA alone), Tier 2 (SPA + Desktop), Tier 3 (SPA + personal server, bundle exchange *and* live-hosted) all reachable. Follow-ons (not scheduled): offline-capable hosted mode + cross-mode sync, SSE/WS live job progress, cross-book content-addressed audio store with Range streaming, remote-server mode for the standalone PWA, worker-mode desktop queue, server-side raw-file parsing, multi-user.
 
 ## Locked decisions (from ADR-0013)
 - **Synth jobs live off the SPA** when a desktop/server is available. The SPA is a consumer.
@@ -72,8 +73,8 @@ Current status: Effort 4 is built (T1–T12 + machine gates green; runbook walkt
 - **Self-hosted trust model** — the server is the user's own (Docker on their box), not a TaleTrek-operated cloud. ADR-0004's "no backend" rejection was about a *TaleTrek-owned* backend; a user-owned one dissolves that objection.
 
 ## Resume pointers
-- **Decision:** [`adrs/0013-…`](./adrs/0013-off-device-synth-and-portable-bundles.md)
+- **Decision:** [`adrs/0013-…`](./adrs/0013-off-device-synth-and-portable-bundles.md), amended by [`adrs/0014-…`](./adrs/0014-server-hosted-spa-dual-shape.md)
 - **Format:** [`bundle-format.md`](./bundle-format.md)
-- **Current effort spec:** [`specs/desktop-synth-app/spec.md`](./specs/desktop-synth-app/spec.md)
-- **All tasks, in order:** [`specs/portable-bundle-format/tasks/README.md`](./specs/portable-bundle-format/tasks/README.md)
-- **Next action:** [`specs/desktop-synth-app/todo.md`](./specs/desktop-synth-app/todo.md) (Phase 1)
+- **Latest effort spec:** [`specs/server-hosted-spa/spec.md`](./specs/server-hosted-spa/spec.md) (shipped)
+- **Deploy the server:** [`deploy-digitalocean.md`](./deploy-digitalocean.md)
+- **Next action:** none on this track — see [`ROADMAP.md`](./ROADMAP.md) for what's next.
