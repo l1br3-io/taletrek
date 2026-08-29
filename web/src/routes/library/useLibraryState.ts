@@ -17,7 +17,10 @@ import { useAiTransform } from './useAiTransform'
 import { useOutline } from './useOutline'
 import { usePronunciationHints } from './usePronunciationHints'
 
-type ListState = { type: 'loading' } | { type: 'ready'; books: Book[] }
+type ListState =
+  | { type: 'loading' }
+  | { type: 'ready'; books: Book[] }
+  | { type: 'error'; message: string }
 
 type ParseState =
   | { type: 'idle' }
@@ -213,11 +216,35 @@ export function useLibraryState() {
     } catch (e) {
       // Mid-session cookie expiry → back to the login gate (T16).
       if (redirectToLoginIfUnauthorized(e)) return
-      throw e
+      // Failed load: an explicit error state when nothing is on screen (T17
+      // — hosted offline must never hang on "Loading…" or masquerade an
+      // empty local library). With books already rendered, keep them — the
+      // offline banner labels the data as last-loaded, and the
+      // online-transition effect below re-syncs on reconnect.
+      setList((prev) =>
+        prev.type === 'ready'
+          ? prev
+          : { type: 'error', message: e instanceof Error ? e.message : 'Failed to load library' },
+      )
     }
   }, [library])
 
   useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  // Hosted reconnect (T17): re-fetch the moment the browser reports the
+  // connection back — the library re-syncs without a reload.
+  const prevOnlineRef = useRef(online)
+  useEffect(() => {
+    const reconnected = hosted && !prevOnlineRef.current && online
+    prevOnlineRef.current = online
+    if (reconnected) void refresh()
+  }, [hosted, online, refresh])
+
+  /** Retry button on the error state — flip to loading and re-fetch. */
+  const retryListLoad = useCallback((): void => {
+    setList({ type: 'loading' })
     void refresh()
   }, [refresh])
 
@@ -590,6 +617,7 @@ export function useLibraryState() {
     hints,
     list,
     refresh,
+    retryListLoad,
     runCtx,
     hintsTitle,
     parseState,

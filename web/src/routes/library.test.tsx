@@ -1182,3 +1182,133 @@ describe('Library — hosted mode (T16 parity)', () => {
     })
   })
 })
+
+describe('Library — hosted offline states (T17)', () => {
+  function bookDto(id: string, title: string): Record<string, unknown> {
+    return {
+      id,
+      title,
+      author: null,
+      sourceFormat: 'txt',
+      voiceId: 'en_US-hfc_female-medium',
+      audioPresent: false,
+      chapterCount: 1,
+      createdAt: 1,
+      updatedAt: 2,
+      position: null,
+    }
+  }
+
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  /** A hosted-origin fetch stub: `/api/books` answered by `books`, everything
+   * else the library touches answered empty. */
+  function hostedFetch(books: () => unknown[]): typeof fetch {
+    return (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/books') return jsonResponse(books())
+      if (url === '/api/jobs') return jsonResponse([])
+      if (url === '/api/voices') return jsonResponse([])
+      throw new Error(`unexpected fetch: ${url}`)
+    }) as typeof fetch
+  }
+
+  function renderHostedAt(fetchStub: typeof fetch) {
+    vi.stubGlobal('fetch', fetchStub)
+    return render(
+      <DatasourceProvider mode="server">
+        <SettingsProvider>
+          <MemoryRouter initialEntries={['/library']}>
+            <Routes>
+              <Route element={<Layout />}>
+                <Route path="/library" element={<Library />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </SettingsProvider>
+      </DatasourceProvider>,
+    )
+  }
+
+  beforeEach(() => {
+    _resetServerVoicesCacheForTests()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    const wasOnline = navigator.onLine
+    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true })
+    if (!wasOnline) window.dispatchEvent(new Event('online'))
+  })
+
+  it('renders an explicit unreachable-server state when the initial fetch fails (no eternal spinner)', async () => {
+    const rejecting = (async () => {
+      throw new TypeError('Failed to fetch')
+    }) as typeof fetch
+    renderHostedAt(rejecting)
+
+    expect(await screen.findByText(/Can't reach your TaleTrek server/i)).toBeInTheDocument()
+    // No empty-library masquerade: the "library is empty" copy never appears.
+    expect(screen.queryByText(/Your library is empty/i)).not.toBeInTheDocument()
+  })
+
+  it('Try again recovers once the server answers', async () => {
+    let booksCalls = 0
+    const fetchStub = hostedFetch(() => {
+      booksCalls += 1
+      if (booksCalls === 1) throw new TypeError('Failed to fetch')
+      return [bookDto('bk-hosted', 'Back Online')]
+    })
+    renderHostedAt(fetchStub)
+
+    expect(await screen.findByText(/Can't reach your TaleTrek server/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }))
+    expect(await screen.findByText('Back Online')).toBeInTheDocument()
+  })
+
+  it('labels already-loaded data as offline instead of masquerading as current', async () => {
+    renderHostedAt(hostedFetch(() => [bookDto('bk-hosted', 'Cached View')]))
+    expect(await screen.findByText('Cached View')).toBeInTheDocument()
+
+    Object.defineProperty(navigator, 'onLine', { value: false, configurable: true })
+    await act(async () => {
+      window.dispatchEvent(new Event('offline'))
+    })
+
+    expect(
+      await screen.findByText(/Offline — showing your library as it last loaded/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Cached View')).toBeInTheDocument()
+  })
+
+  it('re-syncs without a reload when the connection returns', async () => {
+    let serveSecondBook = false
+    renderHostedAt(
+      hostedFetch(() =>
+        serveSecondBook
+          ? [bookDto('bk-hosted', 'First Book'), bookDto('bk-2', 'Fresh Book')]
+          : [bookDto('bk-hosted', 'First Book')],
+      ),
+    )
+    expect(await screen.findByText('First Book')).toBeInTheDocument()
+
+    // Drop offline, then the server list changes, then reconnect.
+    Object.defineProperty(navigator, 'onLine', { value: false, configurable: true })
+    await act(async () => {
+      window.dispatchEvent(new Event('offline'))
+    })
+    serveSecondBook = true
+    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true })
+    await act(async () => {
+      window.dispatchEvent(new Event('online'))
+    })
+
+    expect(await screen.findByText('Fresh Book')).toBeInTheDocument()
+    expect(screen.queryByText(/Offline — showing your library/i)).not.toBeInTheDocument()
+  })
+})
