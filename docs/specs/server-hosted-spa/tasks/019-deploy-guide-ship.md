@@ -11,9 +11,9 @@
 - [x] Final gates (todo.md §Final gates) all checked: workspace cargo build/clippy/test, `pnpm verify`, docker build+run walkthrough.
 
 **Verification:**
-- [ ] `python3 .opencode/harness/scripts/lint-plan.py` clean; `lint-frontmatter.py` clean.
-- [ ] All links in new docs resolve (`check-refs.py` if applicable).
-- [ ] todo.md fully flipped except human-only items explicitly annotated.
+- [x] `python3 .opencode/harness/scripts/lint-plan.py` clean; `lint-frontmatter.py` clean. *(2026-08-29)*
+- [x] All links in new docs resolve (`check-refs.py` — 275 files, clean). *(2026-08-29)*
+- [x] todo.md fully flipped except human-only items explicitly annotated. *(Safari/Opus §6 open — tracked as follow-on gate)*
 
 **Dependencies:** T18 (and everything)
 
