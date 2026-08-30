@@ -6,6 +6,12 @@ shipped: 2026-07-19
 
 # SPEC — M11: Pluggable Playback Engines, Pausable Synthesis, Mobile Synth Lockdown
 
+> **Post-ship note (2026-08-30, native pivot / ADR-0015):** the *playback-engines* half
+> survives — `lib/playback/engines.ts`, Web Audio default + FFmpeg fallback, are live in
+> the scoped-down SPA. The *pausable-synth* and *mobile synth lockdown* halves are
+> retired: the SPA no longer synthesizes at all, so `uploadManager`, `PoolEngine`, the
+> paused/resume job states, and the m4a encode gate were deleted with it.
+
 > Archived plan: [`plan.md`](./plan.md) · Checklist: [`todo.md`](./todo.md) ·
 > Decisions: [`docs/adrs/0010-playback-engine-architecture.md`](../../../docs/adrs/0010-playback-engine-architecture.md).
 

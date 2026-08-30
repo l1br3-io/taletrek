@@ -1,8 +1,7 @@
 # ADR-0006: Mobile MSE Video Streaming
 
-- **Status:** Accepted
+- **Status:** Accepted (historical — the MSE engine never shipped; its dormant scaffolding was removed by the native pivot, [`0015-native-pivot-rust-kernel-and-native-apps.md`](./0015-native-pivot-rust-kernel-and-native-apps.md))
 - **Date:** 2026-07-15
-- **Companion:** [`../specs/mobile-streaming-deferred/spec.md`](../specs/mobile-streaming-deferred/spec.md)
 
 ## Context
 

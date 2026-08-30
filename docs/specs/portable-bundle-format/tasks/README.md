@@ -1,6 +1,7 @@
 # Task Index — Off-device synth track
 
-> 🔼 **Track overview (the high-level view):** [`../../../off-device-synth-track.md`](../../../off-device-synth-track.md).
+> 🔼 **Track overview:** removed by the native pivot (ADR-0015) — this index is
+> the surviving record of the ordered task list.
 >
 > The full ordered task list across all four efforts. Do them in order; each
 > effort must ship before the next begins (each is a prerequisite for the next).

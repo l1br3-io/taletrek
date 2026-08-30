@@ -1,8 +1,8 @@
 # ADR-0003: AI Transform Architecture — dual-backend, in-browser default
 
-- **Status:** Partially superseded — the in-browser backend was removed (see [`0005-remove-in-browser-llm-backend.md`](./0005-remove-in-browser-llm-backend.md)). The cloud backend + `AiTransformEngine` interface + ADR-0004 key handling remain in force.
+- **Status:** Partially superseded — the in-browser backend was removed (see [`0005-remove-in-browser-llm-backend.md`](./0005-remove-in-browser-llm-backend.md)). The cloud backend + `AiTransformEngine` interface + ADR-0004 key handling remain in force. *(Historical — all AI transforms were removed from the SPA by the native pivot, [`0015-native-pivot-rust-kernel-and-native-apps.md`](./0015-native-pivot-rust-kernel-and-native-apps.md).)*
 - **Date:** 2026-07-12
-- **Companion:** [`../specs/ai-transforms/spec.md`](../specs/ai-transforms/spec.md), [`0004-api-key-threat-model.md`](./0004-api-key-threat-model.md)
+- **Companion:** [`0004-api-key-threat-model.md`](./0004-api-key-threat-model.md)
 
 ## Context
 

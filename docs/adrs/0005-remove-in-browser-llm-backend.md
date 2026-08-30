@@ -1,9 +1,8 @@
 # ADR-0005: Remove the in-browser LLM backend
 
-- **Status:** Accepted
+- **Status:** Accepted. *(Historical — all AI transforms were removed from the SPA by the native pivot, [`0015-native-pivot-rust-kernel-and-native-apps.md`](./0015-native-pivot-rust-kernel-and-native-apps.md).)*
 - **Date:** 2026-07-14
 - **Supersedes:** the in-browser half of [`0003-ai-transform-architecture.md`](./0003-ai-transform-architecture.md) (cloud backend + `AiTransformEngine` interface + ADR-0004 key handling remain in force)
-- **Companion:** [`../specs/ai-transforms/spec.md`](../specs/ai-transforms/spec.md)
 
 ## Context
 

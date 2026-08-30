@@ -1,8 +1,8 @@
 # ADR-0008: Trust pdfjs outline; AI is the only fallback
 
-- **Status:** Accepted (revised 2026-07-18 — supersedes the original 3-tier M10 design)
+- **Status:** Accepted (revised 2026-07-18 — supersedes the original 3-tier M10 design). *(Historical — PDF parsing was removed from the SPA by the native pivot, [`0015-native-pivot-rust-kernel-and-native-apps.md`](./0015-native-pivot-rust-kernel-and-native-apps.md).)*
 - **Date:** 2026-07-18
-- **Companion:** [`../specs/pdf-structure/spec.md`](../specs/pdf-structure/spec.md), [`0002-mit-piper-pipeline.md`](./0002-mit-piper-pipeline.md) (licensing)
+- **Companion:** [`0002-mit-piper-pipeline.md`](./0002-mit-piper-pipeline.md) (licensing)
 
 ## Context
 

@@ -1,8 +1,8 @@
 # ADR-0007: Biometric-gated key caching via WebAuthn PRF
 
-- **Status:** Accepted
+- **Status:** Accepted. *(Historical — biometric key caching was removed from the SPA by the native pivot, [`0015-native-pivot-rust-kernel-and-native-apps.md`](./0015-native-pivot-rust-kernel-and-native-apps.md).)*
 - **Date:** 2026-07-17
-- **Companion:** [`0004-api-key-threat-model.md`](./0004-api-key-threat-model.md) (augmented, not superseded), [`../specs/ai-transforms/spec.md`](../specs/ai-transforms/spec.md)
+- **Companion:** [`0004-api-key-threat-model.md`](./0004-api-key-threat-model.md) (augmented, not superseded)
 
 ## Context
 
