@@ -1,4 +1,5 @@
 import {
+  Apple,
   AudioLines,
   Bookmark,
   BookOpen,
@@ -6,13 +7,15 @@ import {
   CloudOff,
   Dumbbell,
   Eraser,
+  FileUp,
   Footprints,
   Headphones,
   Lock,
+  Monitor,
   Moon,
   PawPrint,
+  Smartphone,
   Train,
-  Upload,
 } from 'lucide-react'
 
 export const heroBadges = ['Free', 'MIT', 'Offline', 'by l1br3']
@@ -20,9 +23,9 @@ export const heroBadges = ['Free', 'MIT', 'Offline', 'by l1br3']
 export const steps = [
   {
     n: '01',
-    icon: Upload,
-    label: 'Upload',
-    desc: 'Bring a PDF, EPUB, MOBI, TXT, or Markdown file. It never leaves your device.',
+    icon: FileUp,
+    label: 'Bring',
+    desc: 'Drop an EPUB, PDF, MOBI, TXT, or Markdown file into the desktop processor. It never leaves your machine.',
   },
   {
     n: '02',
@@ -34,13 +37,13 @@ export const steps = [
     n: '03',
     icon: AudioLines,
     label: 'Synthesize',
-    desc: 'Piper neural speech renders each paragraph to audio, in your browser.',
+    desc: 'Piper and Kokoro neural voices render each paragraph in the Rust kernel, on your hardware.',
   },
   {
     n: '04',
     icon: Headphones,
     label: 'Listen',
-    desc: 'Pre-rendered chunks play through the audio element and survive screen lock.',
+    desc: 'The result — a single .taletrek file — plays in the phone apps with background audio that survives screen lock.',
   },
 ]
 
@@ -53,6 +56,50 @@ export const moments = [
   { icon: Moon, label: 'Falling asleep' },
 ]
 
+export const apps = [
+  {
+    icon: Monitor,
+    name: 'Desktop',
+    role: 'The processor',
+    status: 'First ship — in development',
+    desc: 'File in, audiobook out. Turn any ebook into a .taletrek with on-device synthesis.',
+    badge: 'Download — at first release',
+  },
+  {
+    icon: Smartphone,
+    name: 'Android',
+    role: 'The player',
+    status: 'Coming soon',
+    desc: 'Lock-screen controls, background audio, your whole library in your pocket.',
+    badge: 'Google Play',
+  },
+  {
+    icon: Apple,
+    name: 'iOS',
+    role: 'The player',
+    status: 'Coming soon',
+    desc: 'A free, open-source read-aloud app for iPhone — a category that barely exists.',
+    badge: 'App Store',
+  },
+]
+
+export const today = {
+  reader: {
+    title: 'Open a .taletrek',
+    desc: 'Already have a bundle? The web reader plays it right here — file-open only, nothing uploaded. Export any book back out as a .taletrek whenever you like.',
+    cta: 'Open your library',
+  },
+  cli: {
+    title: 'Build from source',
+    desc: 'Until the apps land, the Rust CLI does the heavy lifting: clone the repo, seed a voice, synth a text-only bundle into a voiced one.',
+    lines: [
+      'git clone https://github.com/l1br3-io/taletrek',
+      'cd taletrek && just setup',
+      'just synth book.taletrek book.synth.taletrek',
+    ],
+  },
+}
+
 export const features = [
   {
     icon: BookOpen,
@@ -62,12 +109,12 @@ export const features = [
   {
     icon: AudioLines,
     title: 'Neural voices',
-    desc: 'Multiple Piper voices, switchable at any time.',
+    desc: 'Piper and Kokoro voices via sherpa-onnx, switchable any time.',
   },
   {
     icon: Lock,
     title: 'Survives screen lock',
-    desc: 'Audio keeps playing after you lock your phone.',
+    desc: 'Native audio sessions keep the story going after you lock your phone.',
   },
   {
     icon: Eraser,
@@ -81,8 +128,8 @@ export const features = [
   },
   {
     icon: CloudOff,
-    title: 'Offline once loaded',
-    desc: 'After your voice downloads, no internet needed.',
+    title: 'Offline by default',
+    desc: 'Once voices are downloaded, no internet is ever needed.',
   },
 ]
 
@@ -101,19 +148,23 @@ export const comparison = {
 export const faqs = [
   {
     q: 'Is it really free?',
-    a: 'Yes. MIT-licensed, no ads, no subscription, no upsell. The speech engine (Piper) is open source too.',
+    a: 'Yes. MIT-licensed, no ads, no subscription, no upsell. The speech engine — sherpa-onnx with Piper and Kokoro voices — is open source too.',
   },
   {
     q: 'Will it keep playing when I lock my phone?',
-    a: 'Yes. Audio is pre-rendered and played through the standard audio element, which iOS and Android keep alive in the background. Browser readers that use the Web Speech API stop the moment the screen locks — TaleTrek does not.',
+    a: 'In the native apps, yes — audio runs through the platform’s background audio session with lock-screen controls. The web reader is a demo-class player: on iOS it pauses when the screen locks.',
+  },
+  {
+    q: 'What’s a .taletrek file?',
+    a: 'A single portable file carrying your book’s clean text and synthesized audio — the sole interchange format. Write it on the desktop, play it on any surface.',
   },
   {
     q: 'Where are my books stored?',
-    a: 'On your device, in the browser. Your book text and audio never leave your phone.',
+    a: 'On your devices. Books travel as .taletrek files you own; the web reader keeps imports in local storage on your device. Nothing is uploaded anywhere.',
   },
   {
     q: 'Which devices work?',
-    a: 'Any modern browser. Install TaleTrek as a PWA on iOS or Android for full-screen, offline playback with lock-screen controls.',
+    a: 'The desktop processor ships first; Android and iOS follow as free store downloads. Today, any modern browser can open a .taletrek in the web reader.',
   },
   {
     q: 'Can I help?',
