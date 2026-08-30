@@ -10,13 +10,8 @@ import { SettingsProvider } from './context/settings'
 // on first page load is captured even if the user hasn't opened Settings yet
 // (where the install affordance lives). See `lib/install-prompt.ts`.
 import './lib/install-prompt'
-import { resolveDatasourceMode, serverSynthPipeline } from './lib/datasource'
 import { isMediaSessionSupported, supportedMediaSessionActions } from './lib/media-session'
 import { requestPersistence } from './lib/storage'
-import {
-  reconcileInterruptedTransforms,
-  reconcileInterruptedUploads,
-} from './lib/upload/boot-sweep'
 import './styles/index.css'
 
 const router = createBrowserRouter(routes)
@@ -24,50 +19,19 @@ const router = createBrowserRouter(routes)
 const root = document.getElementById('root')
 if (!root) throw new Error('#root not found')
 
-// Best-effort boot sequence — runs before React mounts so the DB is reconciled
-// before any component reads from it (avoids a race where a user opens
-// /reader/<id> for a book the sweep is about to delete).
+// Best-effort boot sequence — runs before React mounts.
 //
-//   0. Resolve the deployment shape (ADR-0014): probe same-origin
-//      /api/session — authed 200 → server mode (ServerDatasource); 401 →
-//      redirect to /ui/login; unreachable/anything else → local mode. This
-//      is what keeps the standalone PWA unchanged: a static origin 404s and
-//      the app boots exactly as before. Resolved once, before render.
 //   1. Ask the browser to exempt our storage from eviction (granted/denied
 //      silently based on engagement).
-//   2. Reconcile interrupted uploads from a previous session (ADR-0009):
-//      clear stranded `uploading` flags or convert interrupted initial-mode
-//      jobs to paused. Silent — logs only. LOCAL MODE ONLY: hosted mode has
-//      no IndexedDB jobs to sweep.
-//   3. Reconcile interrupted whole-book AI transforms (M13 / ADR-0012):
-//      clear stranded `transforming` flags; if `transformJob` is present the
-//      book surfaces as Paused in the library. Silent — logs only. Local
-//      only, same reasoning.
-//   4. SERVER MODE: re-adopt any in-flight server synth job (T14 / R5) —
-//      closing the tab mid-synth never paused anything server-side, so the
-//      recent-jobs list is probed and a non-terminal job re-attaches to the
-//      pipeline's poll loop. Silent — logs only.
+//   2. Feature-detect the Media Session API.
 //
-// All best-effort; failures degrade gracefully and never block render.
+// The native pivot (ADR-0015) removed the dual-shape probe and the boot
+// sweeps — the reader is a local IndexedDB app, full stop. Failures degrade
+// gracefully and never block render.
 void (async () => {
-  const boot = await resolveDatasourceMode()
-  console.info('[taletrek] datasource mode:', boot.mode)
   const granted = await requestPersistence()
   if (!granted) console.info('[taletrek] storage persistence not granted; cache may be evicted')
-  if (boot.mode === 'local') {
-    await reconcileInterruptedUploads().catch((error) => {
-      console.info('[taletrek] boot-sweep (uploads) failed:', error)
-    })
-    await reconcileInterruptedTransforms().catch((error) => {
-      console.info('[taletrek] boot-sweep (transforms) failed:', error)
-    })
-  } else {
-    await serverSynthPipeline.recoverInFlightJobs().catch((error) => {
-      console.info('[taletrek] server job recovery failed:', error)
-    })
-  }
 
-  // Feature-detect the Media Session API (no playback until M2/M3).
   console.info('[taletrek] media session:', {
     supported: isMediaSessionSupported(),
     actions: supportedMediaSessionActions(),
@@ -75,7 +39,7 @@ void (async () => {
 
   createRoot(root).render(
     <StrictMode>
-      <DatasourceProvider mode={boot.mode}>
+      <DatasourceProvider>
         <SettingsProvider>
           <ErrorBoundary>
             <RouterProvider router={router} />

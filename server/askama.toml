@@ -1,5 +1,0 @@
-[general]
-# Templates live under `src/templates/` (kept with the Rust sources that declare
-# them) rather than the askama default `<crate>/templates/`. Each template is
-# referenced by its filename in `#[template(path = "...")]`.
-dirs = ["src/templates"]

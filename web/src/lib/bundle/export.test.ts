@@ -30,7 +30,7 @@ import {
   voiceId,
 } from '../../types'
 import { audioCacheKey } from '../audio-cache'
-import type { CleaningConfig } from '../clean/types'
+
 import {
   _clearDBForTests,
   _resetDBForTests,
@@ -50,12 +50,6 @@ import type { BookBundle, Manifest } from './manifest'
 const VOICE = voiceId('en_US-lessac-medium')
 const ALT_VOICE = voiceId('en_US-hfc_female-medium')
 
-const MIN_CLEANING: CleaningConfig = {
-  enabled: true,
-  filters: { urls: true, images: true, footnotes: true, pageNumbers: true },
-  pronunciation: [],
-}
-
 beforeEach(async () => {
   _resetDBForTests()
   await _clearDBForTests()
@@ -68,7 +62,6 @@ interface SeedOpts {
   chapters?: Array<{ title: string; paragraphs: string[] }>
   position?: Book['position']
   processing?: Book['processing']
-  uploadJob?: Book['uploadJob']
   withFile?: { name: string }
 }
 
@@ -96,7 +89,6 @@ async function seedBook(
     updatedAt: 2000,
     ...(opts.position !== undefined ? { position: opts.position } : {}),
     ...(opts.processing !== undefined ? { processing: opts.processing } : {}),
-    ...(opts.uploadJob !== undefined ? { uploadJob: opts.uploadJob } : {}),
   }
   await putBook(book)
   await putChapters(chapters)
@@ -162,7 +154,7 @@ describe('exportBookBundle — full export', () => {
     }
   })
 
-  it('throws NoAudioToExportError when the book owns no cached audio + has no uploadJob', async () => {
+  it('throws NoAudioToExportError when the book owns no cached audio', async () => {
     const { bookId } = await seedBook()
     await expect(exportBookBundle(bookId, { full: true })).rejects.toBeInstanceOf(
       NoAudioToExportError,
@@ -198,34 +190,6 @@ describe('exportBookBundle — text-only export', () => {
     const bundle = await exportBookBundle(bookId, { full: false })
 
     expect(bundle.manifest.book.voiceId).toBe(DEFAULT_VOICE_ID)
-  })
-
-  it('recovers the voice from a paused uploadJob when no audio is cached', async () => {
-    const bid = newBookId()
-    const book: Book = {
-      id: bid,
-      title: 'Paused',
-      format: 'txt',
-      chapterCount: 1,
-      createdAt: 1000,
-      updatedAt: 2000,
-      uploadJob: {
-        voiceId: VOICE,
-        cleaning: MIN_CLEANING,
-        mode: 'initial',
-        done: 0,
-        total: 10,
-        pausedAt: 5000,
-      },
-    }
-    await putBook(book)
-    await putChapters([
-      { id: newChapterId(), bookId: bid, index: 0, title: 'C1', paragraphs: ['Hi.'] },
-    ])
-
-    const bundle = await exportBookBundle(bid, { full: false })
-
-    expect(bundle.manifest.book.voiceId).toBe(VOICE)
   })
 })
 

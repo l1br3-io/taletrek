@@ -1,14 +1,4 @@
 export {
-  clearSegmentCache,
-  deleteSegmentKeys,
-  evictSegmentFraction,
-  evictSegmentToBudget,
-  getSegment,
-  getSegmentCacheSize,
-  getSegmentKeysByBook,
-  putSegment,
-} from '../audio-segment-cache'
-export {
   clearAudioCache,
   deleteAudioCacheKeys,
   evictAudioCacheFraction,
@@ -43,6 +33,7 @@ export {
   _resetDBForTests,
   AUDIO_CACHE_BUDGET_BYTES,
   clearAllStores,
+  clearSegmentCache,
   getDB,
   type SecureKeyringRecord,
   type TaleTrekDB,

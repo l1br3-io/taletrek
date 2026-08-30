@@ -1,6 +1,6 @@
 # ADR-0013: Off-device synthesis + portable bundles (self-hostable track)
 
-- **Status:** Accepted — alternative #2's v1 rejection since amended by [`0014-server-hosted-spa-dual-shape.md`](./0014-server-hosted-spa-dual-shape.md) (live connection for the server-hosted shape only)
+- **Status:** Accepted — the `.taletrek` format, `crates/synth`, and the desktop synth app **survive**; the personal-server tier (efforts T4/T5 of this track, and ADR-0014 with it) was **removed by the native pivot** — see [`0015-native-pivot-rust-kernel-and-native-apps.md`](./0015-native-pivot-rust-kernel-and-native-apps.md)
 - **Date:** 2026-07-31
 - **Supersedes:** the "proxy through a TaleTrek-owned backend" rejection in [`0004-api-key-threat-model.md`](./0004-api-key-threat-model.md) (alternative #5) and the launch-scope non-goals in [`../VISION.md`](../VISION.md) / `../../AGENTS.md` ("Cloud TTS/sync/store, accounts, multi-user, no backend").
 - **Companion:** [`../specs/portable-bundle-format/spec.md`](../specs/portable-bundle-format/spec.md) · [`../bundle-format.md`](../bundle-format.md)

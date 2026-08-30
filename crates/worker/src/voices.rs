@@ -1,5 +1,5 @@
 //! Voice catalog + resolve/download/cache — the shared worker stack used by
-//! both `taletrek-desktop` and `taletrek-server`.
+//! `taletrek-desktop` (and future host apps).
 //!
 //! Mirrors the SPA's curated English voice catalog (`web/src/lib/tts/voices.ts`)
 //! and the HuggingFace base + path map (`web/src/lib/tts/vendor/piper/models.ts`)

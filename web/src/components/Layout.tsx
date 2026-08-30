@@ -1,14 +1,12 @@
 import { Link, Outlet } from 'react-router'
 import { GITHUB_URL } from '../lib/site'
 import { GithubMark } from './GithubMark'
-import { GlobalUploadBanner } from './GlobalUploadBanner'
 import { Nav } from './Nav'
 
 export function Layout() {
   return (
     <div className="flex min-h-full flex-col">
       <Nav />
-      <GlobalUploadBanner />
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-4 sm:px-6 sm:py-8">
         <Outlet />
       </main>

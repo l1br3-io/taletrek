@@ -1,5 +1,4 @@
 import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
-import type { AiSettings, CloudProvider } from '../lib/ai/types'
 import type { CleaningConfig } from '../lib/clean/types'
 import { DEFAULT_CLEANING } from '../lib/clean/types'
 import { getSetting, setSetting, syncAudioCacheBudget } from '../lib/db'
@@ -9,30 +8,26 @@ import type { VoiceId } from '../types'
 
 export type Theme = 'dark' | 'sepia'
 
-/**
- * Pre-synthesis mode for newly uploaded books.
- * - `'off'` — skip pre-synth entirely; audio is synthesized on demand during reading.
- * - `'standard'` — pre-synth the whole book on upload, bounded by `audioCacheBudgetMb` (LRU eviction).
- * - `'no-limit'` — pre-synth with no eviction (power user; relies only on physical quota).
- */
-export type SynthMode = 'off' | 'standard' | 'no-limit'
-
 export interface Settings {
   /** Reading theme. */
   theme: Theme
   /** Reader font scale multiplier. */
   fontScale: number
-  /** Active TTS voice (curated catalog id). */
+  /**
+   * Default TTS voice id. Post-pivot (ADR-0015) the reader plays each book
+   * under its own `book.voiceId`; this remains the stored default for new
+   * library entries and the bundle-export fallback.
+   */
   voiceId: VoiceId
   /** Audio playback speed (0.5–2×); applied via `audio.playbackRate`. */
   playbackRate: number
-  /** Text-cleaning pipeline config (M4). */
+  /**
+   * Text-cleaning pipeline config. Load-bearing even with synthesis removed:
+   * audio-cache lookups are keyed on cleaned + normalized text, so this must
+   * reproduce the derivation the stored audio was written under.
+   */
   cleaning: CleaningConfig
-  /** AI post-processing config (M6). Absent on pre-M6 stored settings → falls back to the default (disabled). */
-  ai?: AiSettings
-  /** Pre-synthesize all paragraphs on upload so the first read is friction-free (default `'standard'`). */
-  synthesizeOnUpload: SynthMode
-  /** Audio cache budget in megabytes. Drives LRU eviction in the `audioCache` store (only when mode is `'standard'`). */
+  /** Audio cache budget in megabytes. Drives LRU eviction in the `audioCache` store. */
   audioCacheBudgetMb: number
   /**
    * Mobile playback engine (ADR-0010 / M11). `'auto'` → Web Audio (native) when
@@ -40,21 +35,12 @@ export interface Settings {
    * always per-paragraph `<audio>`. Surfaced in Settings → Advanced.
    */
   playbackEngine: PlaybackEngineSetting
-  /** Show the vConsole mobile-debug overlay (M9 iOS testing). Off by default. */
+  /** Show the vConsole mobile-debug overlay. Off by default. */
   vConsoleEnabled: boolean
 }
 
-/** Re-exported for existing importers; lives in `lib/clean` so lib-side
- * egress (the hosted pipeline's bundle write) can share one default. */
+/** Re-exported for existing importers; lives in `lib/clean`. */
 export { DEFAULT_CLEANING }
-
-/** M6 default: disabled end-to-end (no UI beyond the toggle, no modals, no downloads). */
-export const DEFAULT_AI_SETTINGS: AiSettings = {
-  enabled: false,
-  backend: 'cloud',
-  cloud: { providers: [], activeProviderId: null },
-  transformDefs: [],
-}
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'dark',
@@ -62,8 +48,6 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceId: DEFAULT_VOICE_ID,
   playbackRate: 1,
   cleaning: DEFAULT_CLEANING,
-  ai: DEFAULT_AI_SETTINGS,
-  synthesizeOnUpload: 'standard',
   audioCacheBudgetMb: 500,
   playbackEngine: 'auto',
   vConsoleEnabled: false,
@@ -72,69 +56,12 @@ export const DEFAULT_SETTINGS: Settings = {
 const SETTINGS_KEY = 'app'
 
 /**
- * Migrate AI settings from older shapes to the current cloud-only format.
- *
- * - Pre-M6 / missing: → `DEFAULT_AI_SETTINGS`.
- * - M6 pre-redesign: `cloud: { baseUrl, model }` (single provider) →
- *   `cloud: { providers: [{ id, presetId: 'custom', baseUrl, model }], activeProviderId }`.
- * - Removed local backend: `backend: 'in-browser'` → coerced to `'cloud'`
- *   (the on-device WebLLM engine was removed; see ADR-0005). `enabled` is kept
- *   as-stored — a user who had local-only enabled will see the cloud provider
- *   list (empty until they add one).
- * - Current: already in cloud-only shape → pass through.
- */
-function migrateAi(ai: unknown): AiSettings {
-  if (!ai || typeof ai !== 'object') return DEFAULT_AI_SETTINGS
-  const obj = ai as Partial<AiSettings>
-  const cloud = obj.cloud as Record<string, unknown> | undefined
-
-  if (cloud && typeof cloud.baseUrl === 'string' && !Array.isArray(cloud.providers)) {
-    const provider: CloudProvider = {
-      id: crypto.randomUUID(),
-      presetId: 'custom',
-      baseUrl: cloud.baseUrl,
-      model: typeof cloud.model === 'string' ? cloud.model : '',
-    }
-    return {
-      enabled: obj.enabled ?? false,
-      backend: 'cloud',
-      cloud: { providers: [provider], activeProviderId: provider.id },
-      transformDefs: [],
-    }
-  }
-
-  // Ensure required fields exist even if stored shape is partial. Coerce the
-  // removed `in-browser` backend to `cloud`.
-  return {
-    enabled: obj.enabled ?? false,
-    backend: 'cloud',
-    cloud: {
-      providers: Array.isArray(obj.cloud?.providers) ? obj.cloud.providers : [],
-      activeProviderId: obj.cloud?.activeProviderId ?? null,
-      biometricUnlock: obj.cloud?.biometricUnlock === true,
-    },
-    transformDefs: Array.isArray(obj.transformDefs) ? obj.transformDefs : [],
-  }
-}
-
-/**
- * Migrate stored settings forward. Currently handles:
- * - `synthesizeOnUpload: boolean → SynthMode` (true → `'standard'`, false/other → `'off'`).
- * - `ai.cloud: { baseUrl, model } → { providers: [...], activeProviderId }` (multi-provider).
- * - `playbackEngine`: coerce unknown/missing values to `'auto'` (M11).
- * Returns the merged + migrated settings. Pure given `stored`.
+ * Migrate stored settings forward. Currently handles: coercing an
+ * unknown/missing `playbackEngine` to `'auto'`. Returns the merged +
+ * migrated settings. Pure given `stored`.
  */
 function migrateSettings(stored: Partial<Settings> | undefined): Settings {
   const merged = { ...DEFAULT_SETTINGS, ...stored }
-  if (typeof merged.synthesizeOnUpload === 'boolean') {
-    merged.synthesizeOnUpload = merged.synthesizeOnUpload ? 'standard' : 'off'
-  } else if (
-    merged.synthesizeOnUpload !== 'off' &&
-    merged.synthesizeOnUpload !== 'standard' &&
-    merged.synthesizeOnUpload !== 'no-limit'
-  ) {
-    merged.synthesizeOnUpload = 'standard'
-  }
   if (
     merged.playbackEngine !== 'auto' &&
     merged.playbackEngine !== 'web-audio' &&
@@ -142,13 +69,7 @@ function migrateSettings(stored: Partial<Settings> | undefined): Settings {
   ) {
     merged.playbackEngine = 'auto'
   }
-  merged.ai = migrateAi(merged.ai)
   return merged
-}
-
-/** Resolve the audio-cache budget (bytes) for a synth mode. `Infinity` disables eviction. */
-export function synthModeBudgetBytes(mode: SynthMode, mb: number): number {
-  return mode === 'no-limit' ? Infinity : mb * 1024 * 1024
 }
 
 export type SettingsState = { type: 'loading' } | { type: 'ready'; settings: Settings }
@@ -178,9 +99,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       const merged = migrateSettings(stored)
       setSettings(merged)
       setState({ type: 'ready', settings: merged })
-      void syncAudioCacheBudget(
-        synthModeBudgetBytes(merged.synthesizeOnUpload, merged.audioCacheBudgetMb),
-      )
+      void syncAudioCacheBudget(merged.audioCacheBudgetMb * 1024 * 1024)
     })()
     return () => {
       cancelled = true
@@ -219,15 +138,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const next = { ...settings, ...patch }
     setSettings(next)
     const writes: Promise<unknown>[] = [setSetting(SETTINGS_KEY, next)]
-    if (
-      next.synthesizeOnUpload !== settings.synthesizeOnUpload ||
-      next.audioCacheBudgetMb !== settings.audioCacheBudgetMb
-    ) {
-      writes.push(
-        syncAudioCacheBudget(
-          synthModeBudgetBytes(next.synthesizeOnUpload, next.audioCacheBudgetMb),
-        ),
-      )
+    if (next.audioCacheBudgetMb !== settings.audioCacheBudgetMb) {
+      writes.push(syncAudioCacheBudget(next.audioCacheBudgetMb * 1024 * 1024))
     }
     await Promise.all(writes)
   }
@@ -237,9 +149,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const merged = migrateSettings(stored)
     setSettings(merged)
     setState({ type: 'ready', settings: merged })
-    void syncAudioCacheBudget(
-      synthModeBudgetBytes(merged.synthesizeOnUpload, merged.audioCacheBudgetMb),
-    )
+    void syncAudioCacheBudget(merged.audioCacheBudgetMb * 1024 * 1024)
   }
 
   const value: SettingsContextValue = { state, settings, update, reload }

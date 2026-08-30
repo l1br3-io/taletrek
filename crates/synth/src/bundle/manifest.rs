@@ -79,7 +79,9 @@ pub struct AudioMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Generator {
-    /// `taletrek-spa` / `taletrek-desktop` / `taletrek-server`.
+    /// Producing app id — `taletrek-desktop` (CLI) today; the desktop GUI and
+    /// mobile apps stamp their own ids via the same seam. Historical bundles
+    /// may carry `taletrek-spa` or `taletrek-server`.
     pub app: String,
     /// App version.
     pub version: String,

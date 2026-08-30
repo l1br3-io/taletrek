@@ -1,9 +1,29 @@
-import type { AppliedProcessing, TransformOp } from './lib/ai/types'
-import type { CleaningConfig } from './lib/clean/types'
-
 export type BookId = string & { readonly __brand: 'BookId' }
 export type ChapterId = string & { readonly __brand: 'ChapterId' }
 export type VoiceId = string & { readonly __brand: 'VoiceId' }
+
+/** Id of a transform definition. Historical (M6 AI transforms, removed by
+ * the native pivot — ADR-0015); retained because `AppliedProcessing` is
+ * part of the `.taletrek` manifest format and stored book records. */
+export type TransformDefId = string
+
+/** Construct a {@link TransformDefId} from a raw string. */
+export function transformDefId(value: string): TransformDefId {
+  return value as TransformDefId
+}
+
+/** A single scheduled transform op — definition id + runtime params. Format-compat. */
+export interface TransformOp {
+  defId: TransformDefId
+  params: Record<string, string | number>
+}
+
+/** Last applied processing on a book; serialized into `meta/processing.json`
+ * inside `.taletrek` bundles. Format-compat. */
+export interface AppliedProcessing {
+  appliedAt: number
+  ops: TransformOp[]
+}
 
 export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'txt' | 'md'
 
@@ -30,90 +50,14 @@ export interface Book {
   position?: BookPosition
   /** Fraction of paragraphs consumed (0..1), for the library progress bar (M5). */
   progressFraction?: number
-  /** Last applied AI processing (M6); `undefined` = unprocessed. Originals stay recoverable via `getBookFile` + re-parse. */
+  /**
+   * Voice the book's audio was synthesized under. Set at bundle import (the
+   * manifest's `book.voiceId`); legacy pre-pivot books may lack it — callers
+   * fall back to the stored default voice.
+   */
+  voiceId?: VoiceId
+  /** Last applied processing (historical, M6-era); `undefined` = unprocessed. Part of the bundle format. */
   processing?: AppliedProcessing
-  /** True while upload (synth + concat+encode) is in progress. Library badges it. */
-  uploading?: boolean
-  /**
-   * A synthesis job paused mid-book (ADR-0010 / M11). When present, the book is
-   * resumable from the library. `uploading` is `false` while paused, so the boot
-   * sweep (ADR-0009) ignores it — only explicit user pause becomes resumable;
-   * true interruptions stay sweep-governed.
-   */
-  uploadJob?: PersistedUploadJob
-  /**
-   * True while a whole-book AI streaming transform (M13 / ADR-0012) is running.
-   * Library badges it; reader blocks Play while set.
-   */
-  transforming?: boolean
-  /**
-   * A whole-book AI transform job, persisted on the book record (M13 /
-   * ADR-0012). When present, the book is resumable from the library. Mirrors
-   * `uploadJob`: `transforming` is `false` while paused, so the boot sweep's
-   * transform pass ignores explicit pauses; true interruptions stay governed.
-   */
-  transformJob?: PersistedTransformJob
-}
-
-/**
- * A paused synthesis job's resumable spec, persisted on the book record.
- * Resume reloads chapters from IDB and re-runs this spec; the M8 cache
- * fast-forwards through already-synthesized paragraphs.
- *
- * Persisted from `runJob` start (not only on explicit pause) so an
- * interrupted initial upload (iOS tab eviction, crash) survives the
- * ADR-0009 boot sweep as a resumable paused book. `done` is bumped per-¶;
- * `lastFlatIndex` / `lastChapterTitle` / etc. carry the paragraph the
- * synth died on so the post-eviction library card can show it.
- */
-export interface PersistedUploadJob {
-  voiceId: VoiceId
-  cleaning: CleaningConfig
-  /** `'initial'` (fresh upload) or `'resynth'` (re-synthesize). */
-  mode: 'initial' | 'resynth'
-  /** Paragraphs synthesized before the pause (best-effort, for UI display). */
-  done: number
-  /** Total paragraphs in the job (best-effort, for UI display). */
-  total: number
-  /** Date.now() at pause time. */
-  pausedAt: number
-  /** Flat index of the paragraph currently (or last) being synthesized. */
-  lastFlatIndex?: number
-  /** Chapter title where the synth is/was sitting. */
-  lastChapterTitle?: string
-  /** Paragraph-within-chapter (1-based, non-empty paragraphs only) of the last attempt. */
-  lastParagraphInChapter?: number
-  /** Total non-empty paragraphs in the chapter containing the last attempt. */
-  lastChapterTotal?: number
-}
-
-/**
- * A paused whole-book AI transform's resumable spec (M13 / ADR-0012). Resume
- * reloads chapters from IDB and re-runs this spec from `(currentOpIndex,
- * currentChapterIndex)`; already-committed chapters survive any interruption
- * (the M8 audio cache is content-addressed, so cached paragraphs fast-forward
- * for free).
- *
- * Granularity is **chapter-level** (the unit at which `engine.transform`
- * commits and `putChapters` writes). Within-chapter state is never persisted —
- * chunks only commit at their boundary, so an interrupted chunk has no partial
- * state to reconcile.
- */
-export interface PersistedTransformJob {
-  /** Ordered list of transform ops to apply (each feeds the next). */
-  ops: TransformOp[]
-  voiceId: VoiceId
-  cleaning: CleaningConfig
-  /** Outer-loop index (which op to resume from). */
-  currentOpIndex: number
-  /** Inner-loop index (which chapter to resume from, within the working set). */
-  currentChapterIndex: number
-  /** Chapter-units completed across all ops (for UI progress). */
-  done: number
-  /** Total chapter-units across all ops (for UI progress). */
-  total: number
-  /** Date.now() at pause time. */
-  pausedAt: number
 }
 
 export interface Chapter {

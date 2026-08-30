@@ -4,8 +4,8 @@
 //!
 //! # The single stamping-path invariant
 //!
-//! Both hosts — the desktop CLI (`taletrek-desktop`) and the personal server
-//! (`taletrek-server`) — stamp `generator.app` through this one module. The
+//! Every host — today the desktop CLI (`taletrek-desktop`), soon the desktop
+//! GUI and mobile apps — stamps `generator.app` through this one module. The
 //! producer string is a **parameter** ([`synth_and_stamp`] / [`resynth_and_stamp`]
 //! take `generator_app: &str`); it is never hardcoded here. A new host that
 //! stamps a different `generator.app` without routing through this module would
@@ -16,7 +16,7 @@
 //!
 //! This module is pure: no file I/O, no network. The desktop's
 //! `write_book_bundle_file` wraps the lib's in-memory writer with a buffered
-//! file write; the server (effort 4, later task) will do its own store write.
+//! file write; future hosts wrap their own stores.
 //! Accordingly [`StampError`] has **no** `WriteFile` variant — file errors stay
 //! host-side. Both stamp functions write the effective synth voice into
 //! `manifest.book.voiceId` so the stamped manifest and the content-addressed
@@ -39,15 +39,15 @@ use crate::{synth_all_paragraphs, ProgressSink, SynthJobError};
 /// can hint at what's already there.
 ///
 /// `input` is whatever display string the caller supplied (an input path on the
-/// desktop CLI, a book id on the server) so the message stays useful in both
-/// hosts.
+/// desktop CLI, whatever id a future host uses) so the message stays useful in
+/// every host.
 #[derive(Debug, Error)]
 #[error(
     "input bundle `{input}` already contains audio (voice `{voice}`); use resynth to re-voice it"
 )]
 pub struct FullInputError {
     /// Caller-supplied display string identifying the offending bundle
-    /// (input path on desktop, book id on server).
+    /// (e.g. the input path on the desktop CLI).
     pub input: String,
     /// The voice the existing audio was synth'd under (`book.voiceId`).
     pub voice: String,
@@ -75,7 +75,8 @@ pub enum StampError {
 /// Refuse an already-full bundle for `synth`. `synth` only accepts text-only
 /// input (`audio.present == false`); re-voicing an existing bundle is what
 /// `resynth` is for. The error carries the caller-supplied `label` (input path
-/// on the desktop CLI, book id on the server) + the existing `book.voiceId` so
+/// on the desktop CLI, whatever id a future host uses) + the existing
+/// `book.voiceId` so
 /// the message can point the user at `resynth`.
 pub fn refuse_full_input(bundle: &BookBundle, label: &str) -> Result<(), FullInputError> {
     if bundle.manifest.audio.present {
@@ -129,15 +130,15 @@ fn stamp_full_manifest(bundle: &mut BookBundle, codec: AudioCodec, generator_app
 /// across all tasks.
 ///
 /// `generator_app` is stamped into the manifest's `generator.app`; it is a
-/// parameter (not a constant here) so the desktop and server hosts route their
-/// distinct producer strings through this one path. The version is the running
+/// parameter (not a constant here) so every host routes its distinct producer
+/// string through this one path. The version is the running
 /// crate version (`CARGO_PKG_VERSION`).
 ///
 /// Aborts on the first paragraph error (lifted as [`StampError::Synth`]).
 ///
 /// `progress`, when `Some`, is forwarded to the synth engine for per-paragraph
 /// `synth [n/total] pct%` lines. `None` is silent.
-#[allow(clippy::too_many_arguments)] // 8 args: the `generator_app` parameter is the host-portability seam this module exists for (T3); grouping would hide the API the desktop/server wrappers mirror.
+#[allow(clippy::too_many_arguments)] // 8 args: the `generator_app` parameter is the host-portability seam this module exists for (T3); grouping would hide the API the host wrappers mirror.
 pub fn synth_and_stamp<R, E, F>(
     bundle: &mut BookBundle,
     voice_id: &str,
@@ -186,7 +187,7 @@ where
 /// [`StampError::Synth`]), matching `synth`'s v1 semantics.
 ///
 /// `progress` is forwarded to the synth engine for per-paragraph progress.
-#[allow(clippy::too_many_arguments)] // mirrors synth_and_stamp's signature so the desktop/server wrappers forward 1:1; `generator_app` is the host-portability seam (T3).
+#[allow(clippy::too_many_arguments)] // mirrors synth_and_stamp's signature so the host wrappers forward 1:1; `generator_app` is the host-portability seam (T3).
 pub fn resynth_and_stamp<R, E, F>(
     bundle: &mut BookBundle,
     new_voice_id: &str,

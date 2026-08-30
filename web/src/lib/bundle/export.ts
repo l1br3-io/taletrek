@@ -89,7 +89,7 @@ export async function exportBookBundle(
 
   const chapters = await getChaptersByBook(bookId)
   const ownedKeys = new Set(await getAudioCacheKeysByBook(bookId))
-  const recoveredVoice = await recoverVoice(ownedKeys, book.uploadJob?.voiceId)
+  const recoveredVoice = await recoverVoice(ownedKeys)
 
   const audio = new Map<string, Uint8Array>()
   let voice: VoiceId
