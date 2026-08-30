@@ -1,5 +1,5 @@
 ---
-status: active        # draft → active → shipped   (specify phase ran in-session 2026-08-30; direction approved)
+status: shipped       # draft → active → shipped   (shipped 2026-08-30; merged as fast-forward — flip done post-merge)
 started: 2026-08-30
 ---
 
