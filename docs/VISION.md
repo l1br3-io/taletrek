@@ -4,11 +4,11 @@
 > **Owner:** TaleTrek Team — **l1br3** *(pronounced "libre")*
 > **Tagline:** *"Every story is a journey."*
 
-TaleTrek is a free, open-source **reading companion** — a product of the **l1br3** organization (pronounced "libre") — that turns any ebook into an audiobook you can listen to anywhere. Upload a PDF, EPUB, MOBI, or TXT file and TaleTrek reads it aloud using text-to-speech that runs entirely on your device — no cloud, no API keys, no subscriptions. It strips out links, images, footnotes, and other noise so only the story flows, then plays it as background audio that survives screen lock, app switching, and phone closure. You go for a run; your book comes with you.
+TaleTrek is a free, open-source **reading companion** — a product of the **l1br3** organization (pronounced "libre") — that turns any ebook or document into an audiobook you can listen to anywhere. Feed it an EPUB, PDF, DOCX, HTML, Markdown, or plain-text file and TaleTrek reads it aloud using text-to-speech that runs entirely on your device — no cloud, no API keys, no subscriptions. It strips out links, images, footnotes, and other noise so only the story flows, then plays it as background audio that survives screen lock, app switching, and phone closure. You go for a run; your book comes with you.
 
-TaleTrek ships as a **Progressive Web App (PWA)**: no app store, no install friction, no $99/year developer fee. Open a URL on iOS or Android, pick a book, and start listening. Add it to your home screen and it behaves like a native app — offline, full-screen, with lock-screen playback controls. The entire pipeline — file parsing, text cleaning, speech synthesis, and audio playback — runs in the browser. Nothing leaves your device.
+TaleTrek is a **Rust kernel with platform-native apps**: one shared core (parsing, synthesis, encoding) exposed to SwiftUI on iOS, Jetpack Compose on Android, and a native desktop UI — each app speaking its platform's own idiom. Synthesis runs in-process via the OSS [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) engine (Piper and Kokoro voices), and native audio sessions make background playback, lock-screen controls, and car integration first-class. Books travel between surfaces as portable `.taletrek` files — the sole interchange format. The desktop processor is the workhorse (file in → synth → `.taletrek` out); the phone apps are players; the **web is a landing page plus a `.taletrek` reader** — file-open only, no upload, no synthesis, no accounts. Apps ship to the stores as free downloads. Nothing leaves your device.
 
-The app is free. The TTS engine is free. The books are yours. That's the disruption: competitors charge $15+ for a one-time purchase or lock you into cloud-based subscription TTS; TaleTrek charges nothing and lets your phone do all the work. Open-source, offline-first, and yours to fork.
+The app is free. The TTS engine is free. The books are yours. That's the disruption: competitors charge $15+ for a one-time purchase or lock you into cloud-based subscription TTS; TaleTrek charges nothing and lets your device do all the work. Open-source, offline-first, and yours to fork.
 
 **Product positioning:** *"Your books, read aloud — anywhere, hands-free. Free, by l1br3."*
 
@@ -33,30 +33,30 @@ The core pains:
 5. **Privacy concerns** — cloud-based TTS sends your personal reading material to third-party servers.
 6. **Cost** — recurring subscriptions or one-time purchases for features that should be free and open.
 
-TaleTrek solves this by running a neural TTS engine (Piper) entirely in the browser via WebAssembly, pre-rendering text into audio chunks, and playing them through the standard `<audio>` element — which iOS and Android **both guarantee** will keep playing in the background. No cloud, no cost, no compromise.
+TaleTrek solves this with one Rust kernel doing parsing, cleaning, and synthesis in-process via sherpa-onnx — pre-rendering text into audio and playing it through native audio sessions that iOS and Android **both guarantee** keep running in the background. The story arrives on your phone as a `.taletrek` bundle; native apps (and, in demo class, the web reader) play it hands-free. No cloud, no cost, no compromise. This is the native pivot of [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md): the product problem was never hard — the browser platform was, so the pipeline moved into a kernel.
 
 ---
 
 ## Goals
 
-The launch read-aloud core — upload any ebook format, clean the audio stream, speak it on-device, play it background-safe on any screen, fully offline, for free — has shipped. Ship history lives in [`CHANGELOG.md`](../CHANGELOG.md); the current phase and forward direction live in [`ROADMAP.md`](./ROADMAP.md). This vision no longer tracks feature checkboxes — it states the *why* that the rest of the planning hierarchy decomposes.
+The read-aloud core — parse any document, clean the audio stream, speak it on-device, play it background-safe, fully offline, for free — is the product. The kernel re-foundations it off the web platform's constraints. Ship history lives in [`CHANGELOG.md`](../CHANGELOG.md); the current phase and forward direction live in [`ROADMAP.md`](./ROADMAP.md). This vision does not track feature checkboxes — it states the *why* that the rest of the planning hierarchy decomposes.
 
 ### Non-goals (explicitly out of scope)
 
-**At launch — NOT shipping:**
+**Not shipping in the native launch:**
 
-- Cloud-based TTS voices — all synthesis runs on-device via Piper WASM; no audio is sent to or processed by a server.
-- A hosted cloud library or sync — books live in the browser's IndexedDB; no account, no TaleTrek-operated cloud. (Self-hostable personal-server sync is a later, opt-in track — see [ADR-0013](./adrs/0013-off-device-synth-and-portable-bundles.md).)
+- Cloud-based TTS voices — all synthesis runs in-process via sherpa-onnx; no audio or text is sent to or processed by a server.
+- A hosted cloud library or sync — books live on the device (or travel as `.taletrek` files the user manages); no account, no TaleTrek-operated cloud. (The former self-hosted personal-server track was deleted by [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md); any sync/cloud return requires a new ADR.)
 - Online ebook store or library integration — users bring their own files.
 - Real-time speech recognition / voice commands.
 - Multi-user or social features (sharing notes, ratings, reading groups).
-- Native app store distribution — the product is a PWA; a native wrapper (Capacitor) is a possible future direction, not a launch goal.
+- On-device mobile synthesis and AI transforms — later, as desktop-processor features, once the kernel is proven; transforms require re-synth so they belong where synthesis lives.
 
 **Across all phases — NOT building:**
 
-- Paid tiers or subscriptions — the app is always free; sustainability comes from community contributions and the open-source model, never paywalls.
-- Cloud dependency for the *default* experience — the entire read-aloud pipeline works offline; the internet is only needed for the initial page load and optional voice model downloads.
-- A TaleTrek-operated hosted cloud or multi-tenant SaaS — there is no TaleTrek-run backend. (An **optional, self-hostable companion track** — desktop synth app + personal Docker server — is in scope as of [ADR-0013](./adrs/0013-off-device-synth-and-portable-bundles.md); it is user-owned, off by default, and never weakens the offline-first PWA.)
+- Paid tiers or subscriptions — the apps are always free downloads; sustainability comes from community contributions and the open-source model, never paywalls.
+- Cloud dependency for the *default* experience — the entire read-aloud pipeline works offline; the internet is only needed to download the apps and optional voice models.
+- A TaleTrek-operated hosted cloud or multi-tenant SaaS — there is no TaleTrek-run backend, and the web reader is deliberately file-open-only.
 - DRM circumvention — TaleTrek reads files the user already has; it does not strip or bypass copy protection.
 
 ---
@@ -65,12 +65,12 @@ The launch read-aloud core — upload any ebook format, clean the audio stream, 
 
 | Persona | Description | Key need |
 |---------|-------------|----------|
-| **The Jogger / Runner** *(primary)* | Wants to listen to books while exercising; phone is locked, earbuds in, hands free | Background playback that survives screen lock; lock-screen controls; skip junk so the story flows uninterrupted |
-| **The Commuter** | Walks, cycles, or takes transit; wants hands-free reading | Upload once, listen on the go; resume where they left off |
-| **The iOS User** | Wants a free, open-source TTS reader on iPhone — a category that barely exists | Works on iOS without an app store, without paying, without background playback dying |
+| **The Jogger / Runner** *(primary)* | Wants to listen to books while exercising; phone is locked, earbuds in, hands free | Native background playback that survives screen lock; lock-screen controls; skip junk so the story flows uninterrupted |
+| **The Commuter** | Walks, cycles, or takes transit; wants hands-free reading | Synth on the desktop once, listen on the go anywhere; resume where they left off |
+| **The iOS User** | Wants a free, open-source TTS reader on iPhone — a category that barely exists | A native App Store app, free, with background playback that actually works |
 | **The Privacy-Conscious Reader** | Doesn't want their reading material sent to cloud TTS servers | Entirely on-device processing; nothing leaves the phone |
 | **The Budget Reader** | Can't justify $15–20 for Voice Dream Reader or a cloud TTS subscription | Free, forever — no purchase, no trial, no upsell |
-| **The Open-Source Advocate** | Values FOSS; may want to fork, contribute, or self-host | MIT-licensed, hackable, community-driven |
+| **The Open-Source Advocate** | Values FOSS; may want to fork or contribute | MIT-licensed, hackable, community-driven |
 
 ---
 
