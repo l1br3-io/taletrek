@@ -1,7 +1,7 @@
 # TaleTrek Bundle Format (`*.taletrek`)
 
-> **Status:** Canonical spec · v1 (`schemaVersion: 1`) · *2026-08-07: "byte-compatible archives" wording → "mutual round-trip conformance" (clarification only; format unchanged — see Design invariant 2 + §Conformance rules).*
-> **Owners:** all three apps (SPA / TS, desktop / Rust, server / Rust) MUST conform.
+> **Status:** Canonical spec · v1 (`schemaVersion: 1`) · *2026-08-07: "byte-compatible archives" wording → "mutual round-trip conformance" (clarification only; format unchanged — see Design invariant 2 + §Conformance rules).* *2026-08-30: server references reworded host-neutral after the native pivot (ADR-0015).*
+> **Owners:** every app that reads or writes bundles (SPA / TS, desktop / Rust, and any future native app built on the Rust kernel) MUST conform. Historical `taletrek-server` bundles remain valid v1 archives.
 > Origin ADR: [`adrs/0013-off-device-synth-and-portable-bundles.md`](./adrs/0013-off-device-synth-and-portable-bundles.md).
 
 A **bundle** is the portable interchange unit for one book (or a whole library) between the TaleTrek apps. It is a compressed archive: a manifest, the cleaned text, and (optionally) content-addressed audio. The same container carries both a *text-only* book (parsed, pre-synth) and a *full* book (synth'd, with audio).
@@ -15,7 +15,7 @@ A **bundle** is the portable interchange unit for one book (or a whole library) 
 
 ## Book bundle — `*.taletrek`
 
-A uncompressed-then-gzipped tar is NOT used; the container is a **ZIP archive** (deflate). ZIP is natively readable in all three stacks (Rust `zip`, JS `fflate`/browser `DecompressionStream`, and is stream-friendly). Extension: `.taletrek`.
+A uncompressed-then-gzipped tar is NOT used; the container is a **ZIP archive** (deflate). ZIP is natively readable in every conforming stack (Rust `zip`, JS `fflate`/browser `DecompressionStream`, and is stream-friendly). Extension: `.taletrek`.
 
 ```
 book.taletrek  (ZIP)
@@ -54,7 +54,7 @@ book.taletrek  (ZIP)
     "segmentCount": 312
   },
   "generator": {
-    "app": "taletrek-desktop",   // taletrek-spa | taletrek-desktop | taletrek-server
+    "app": "taletrek-desktop",   // taletrek-spa | taletrek-desktop | taletrek-server (historical)
     "version": "0.1.0"
   }
 }
@@ -125,7 +125,7 @@ Conformance is **mutual round-trip, not byte-identity**: a conforming writer pro
 - **Write:** must emit `manifest.json` with `schemaVersion: 1`, `text.json`, and (if full) at least one `audio/` entry whose codec matches the manifest.
 - **Read:** must accept a text-only bundle (`audio.present === false` or missing `audio/`). Must refuse a `schemaVersion` it does not understand with a typed error, not a silent best-effort load.
 - **Audio codec:** Opus is the default for v1 (best size/quality for speech). M4A is permitted (iOS-native). WAV is permitted but discouraged. Readers must support Opus + M4A.
-  - *Rust crate encoder note:* `crates/synth` ships its Opus encoder as an ffmpeg subprocess (`-c:a libopus`, OGG/Opus on stdout) behind an `Encoder` trait. This avoids a hard dependency on `libopus` dev headers (the native `audiopus`/`opus` crates require them to link); `ffmpeg` is already expected wherever off-device synth runs (desktop/server). A native-Opus impl can replace it behind the same trait without touching the pipeline. Default bitrate 24 kbps (mono speech).
+  - *Rust crate encoder note:* `crates/synth` ships its Opus encoder as an ffmpeg subprocess (`-c:a libopus`, OGG/Opus on stdout) behind an `Encoder` trait. This avoids a hard dependency on `libopus` dev headers (the native `audiopus`/`opus` crates require them to link); `ffmpeg` is already expected wherever off-device synth runs (desktop and any native host built on the kernel). A native-Opus impl can replace it behind the same trait without touching the pipeline. Default bitrate 24 kbps (mono speech).
 - **IDs:** book/chapter IDs are preserved across export/import when present; if an importer finds a collision with an existing book, it allocates a new id and ingests as a separate book (never overwrites silently).
 
 ## Versioning

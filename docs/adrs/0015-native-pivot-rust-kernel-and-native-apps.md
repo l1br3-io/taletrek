@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-30
-- **Supersedes:** [`0014-server-hosted-spa-dual-shape.md`](./0014-server-hosted-spa-dual-shape.md) — **deleted**; its subject (the personal server + hosted SPA) no longer exists. Also narrows [`0013-off-device-synth-and-portable-bundles.md`](./0013-off-device-synth-and-portable-bundles.md): the `.taletrek` format and desktop synth survive; the personal-server tier (efforts T4/T5 of that track) is removed.
+- **Supersedes:** `0014-server-hosted-spa-dual-shape.md` — **deleted**; its subject (the personal server + hosted SPA) no longer exists. Also narrows [`0013-off-device-synth-and-portable-bundles.md`](./0013-off-device-synth-and-portable-bundles.md): the `.taletrek` format and desktop synth survive; the personal-server tier (efforts T4/T5 of that track) is removed.
 - **Amends:** [`../VISION.md`](../VISION.md) and [`../ROADMAP.md`](../ROADMAP.md) (rewritten in the `native-pivot` effort)
 - **Companion:** [`../ideas/native-pivot.md`](../ideas/native-pivot.md) (the why + locked stack) · [`../specs/native-pivot/spec.md`](../specs/native-pivot/spec.md) (execution)
 

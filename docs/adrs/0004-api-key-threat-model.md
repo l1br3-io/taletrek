@@ -1,8 +1,8 @@
 # ADR-0004: API key threat model — in-memory only
 
-- **Status:** Accepted (default tier). **Augmented** by [`0007-biometric-key-caching.md`](./0007-biometric-key-caching.md) — an opt-in biometric-caching tier was added in M6.1. The in-memory default, the CSP allowlist as primary defence, and the threat-model framing below all remain authoritative.
+- **Status:** Accepted (default tier). **Augmented** by [`0007-biometric-key-caching.md`](./0007-biometric-key-caching.md) — an opt-in biometric-caching tier was added in M6.1. The in-memory default, the CSP allowlist as primary defence, and the threat-model framing below all remain authoritative. *(Historical — the key-handling feature this guards was removed from the SPA by the native pivot, [`0015-native-pivot-rust-kernel-and-native-apps.md`](./0015-native-pivot-rust-kernel-and-native-apps.md).)*
 - **Date:** 2026-07-12
-- **Companion:** [`../specs/ai-transforms/spec.md`](../specs/ai-transforms/spec.md), [`0003-ai-transform-architecture.md`](./0003-ai-transform-architecture.md), [`0007-biometric-key-caching.md`](./0007-biometric-key-caching.md)
+- **Companion:** [`0003-ai-transform-architecture.md`](./0003-ai-transform-architecture.md), [`0007-biometric-key-caching.md`](./0007-biometric-key-caching.md)
 
 ## Context
 

@@ -27,7 +27,7 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
-  # Rust workspace — synth + worker + desktop + server.
+  # Rust workspace — synth + worker + desktop.
   # Blocks PRs. No real piper/ffmpeg (those are #[ignore]d; see `integration`).
   rust:
     runs-on: ubuntu-latest
@@ -46,20 +46,9 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-  # Server Docker image — catches Dockerfile / context drift cheaply.
-  # Build only; never pushes. Mirrors the runbook's build command.
-  docker:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build server image
-        run: docker build -f server/Dockerfile -t taletrek-server:ci .
-
   # Real-piper/ffmpeg integration tests. MANUAL ONLY (workflow_dispatch) and
   # never blocks PRs (continue-on-error). Runs the #[ignore]d e2e tests in
-  # desktop/ + server/, which spin real binaries and assert Opus output.
-  # The Playwright SPA<->server suite (planned, Phase 3) will hook in here too.
+  # desktop/, which spin real binaries and assert Opus output.
   integration:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
