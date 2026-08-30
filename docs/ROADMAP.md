@@ -1,12 +1,12 @@
 # Roadmap
 
 > Directional overview — no dates, no calendar. The *what's next*, not the spec.
-> **Current effort:** none active (between phases) — off-device synth track complete: all five efforts shipped 2026-08-03 → 2026-08-29, Tiers 1–3 all reachable (the server also hosts the SPA itself, ADR-0014). The next effort starts at `/spec` on a fresh branch. Shipped specs live under [`docs/specs/`](./specs/).
+> **Current effort:** [`native-pivot`](./specs/native-pivot/spec.md) — effort 1 of the native track (below), active since 2026-08-30: purge the old product, re-found the repo on the Rust-kernel direction. The decision: [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md). The why + locked stack: [`ideas/native-pivot.md`](./ideas/native-pivot.md).
 > Companion: [`VISION.md`](./VISION.md) — the problem and goals.
 
-TaleTrek is a free, open-source **reading companion**: upload any ebook — PDF, EPUB, MOBI, or TXT — and TaleTrek reads it aloud using on-device text-to-speech. It strips links, images, and footnotes so only the story flows, then plays it as background audio that survives screen lock, app switching, and phone closure. You go for a run; your book comes with you. No app store, no subscription, no cloud — just a URL on iOS or Android.
+TaleTrek is a free, open-source **reading companion**: turn any ebook or document into an audiobook using an OSS neural TTS engine (sherpa-onnx — Piper + Kokoro voices) running in-process in a Rust kernel. It strips links, images, and footnotes so only the story flows, then plays it as background audio that survives screen lock, app switching, and phone closure. You go for a run; your book comes with you. Free app-store downloads, no subscription, no cloud — one kernel, three native apps, and a web landing page + `.taletrek` reader.
 
-The launch scope is **locked to the read-aloud core**: upload, parse, clean, speak, and play in the background. Everything else is deferred.
+The track's scope is **locked to the read-aloud core**: parse, clean, synth, and play in the background. Everything else is deferred.
 
 ---
 
@@ -45,14 +45,34 @@ browsable index. The next effort starts on a fresh branch with a fresh
 
 | Theme | What it means |
 |-------|---------------|
-| **Upload** | Accept any common ebook format and extract clean, readable text — the pipeline starts here |
-| **Speak** | On-device neural TTS (Piper, via WebAssembly) with voice choice and speed control — no cloud, no cost |
-| **Jog** | Background-safe playback that survives screen lock, app switch, and phone closure — the hands-free experience that defines the product |
+| **Ingest** | Accept any common ebook/document format and extract clean, readable text in `crates/parse` — the pipeline starts here |
+| **Speak** | In-process neural TTS via sherpa-onnx (Piper + Kokoro voices) with voice choice and speed control — no cloud, no cost |
+| **Jog** | Background-safe playback through native audio sessions (Media3 / AVFoundation) — the hands-free experience that defines the product |
 | **Clean** | Strip links, images, footnotes, and noise — only the story flows through the speaker |
 
 ---
 
-## Milestones
+## Active track — Native pivot: Rust kernel + platform-native apps (ADR-0015)
+
+One kernel (`crates/parse` + `crates/synth` + `crates/worker`) exposed via **UniFFI** to thin platform-native apps; `.taletrek` v1 bundles are the sole interchange; the web is a landing page + reader. Ship order: desktop synth processor → Android → iOS, free downloads on the stores. See [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md) and [`ideas/native-pivot.md`](./ideas/native-pivot.md).
+
+Five efforts, dependency-aware:
+
+| # | Effort | State |
+| --- | --- | --- |
+| 1 | `native-pivot` — purge + re-foundation: ADR-0015, server deletion, SPA scoped down to reader + landing, docs rewrite, landing v1 | 🚧 active ([spec](./specs/native-pivot/spec.md)) |
+| 2 | `kernel-parse` — `crates/parse` (EPUB/TXT/HTML/MD/DOCX/PDF; MOBI open) + CLI file→bundle — closes the interim no-producer gap | planned |
+| 3 | `desktop-synth-gui` — the processor app (GUI + CLI); egui vs Tauri decided in its spec | planned |
+| 4 | `android-app` — Jetpack Compose + Media3 player; kernel via UniFFI; free Play Store download | planned |
+| 5 | `ios-app` — SwiftUI + AVFoundation player; kernel via UniFFI; free App Store download ($99/yr accepted) | planned |
+
+**Interim gap (accepted, pre-release):** until effort 2, nothing converts ebooks into bundles — the desktop CLI is bundle→bundle and the web reader only opens existing `.taletrek` files.
+
+---
+
+## Milestone history
+
+The read-aloud core shipped as an offline-first PWA (2026-03 → 2026-08), then ADR-0015 pivoted the product onto the native track above — carrying the `.taletrek` format, the Rust synth crates, and the reader forward.
 
 | # | Milestone | State |
 |---|-----------|-------|
@@ -62,41 +82,26 @@ browsable index. The next effort starts on a fresh branch with a fresh
 | M3 | Jog Mode | ✅ shipped |
 | M4 | Clean Reading | ✅ shipped |
 | M5 | Library & Offline | ✅ shipped |
-| M6 | AI Transforms | ✅ shipped |
-| M6.1 | Biometric Key Caching | ✅ shipped |
+| M6 | AI Transforms | ✅ shipped (purged from the web by ADR-0015; may return as a desktop-processor feature) |
+| M6.1 | Biometric Key Caching | ✅ shipped (deleted with the SPA upload pipeline, ADR-0015) |
 | M7 | Reader UX & Mobile | ✅ shipped |
 | M8 | Audio Cache | ✅ shipped |
-| M8.1 | iOS Huge-Book Upload Resilience | ✅ shipped |
-| M9 | Mobile Streaming Playback | ⏸ deferred ([ADR-0010](./adrs/0010-playback-engine-architecture.md)); superseded for the common case by M11 |
-| M10 | PDF Structure Extraction | ✅ shipped ([ADR-0008](./adrs/0008-pdf-structure-extraction.md)) |
+| M8.1 | iOS Huge-Book Upload Resilience | ✅ shipped (upload pipeline deleted, ADR-0015) |
+| M9 | Mobile Streaming Playback | ⏸ never shipped; scaffolding deleted ([ADR-0010](./adrs/0010-playback-engine-architecture.md)) |
+| M10 | PDF Structure Extraction | ✅ shipped ([ADR-0008](./adrs/0008-pdf-structure-extraction.md); SPA parsing deleted, ADR-0015 — structure extraction returns in `crates/parse`) |
 | M11 | Pluggable Playback Engines, Pausable Synthesis | ✅ shipped ([ADR-0010](./adrs/0010-playback-engine-architecture.md)) |
-| M12 | Parallel Synthesis | ✅ shipped ([ADR-0011](./adrs/0011-parallel-synthesis-pool.md)) |
-| M13 | Whole-Book Streaming Transform | ✅ shipped ([ADR-0012](./adrs/0012-whole-book-streaming-transform.md)) |
+| M12 | Parallel Synthesis | ✅ shipped ([ADR-0011](./adrs/0011-parallel-synthesis-pool.md); in-browser pool deleted — the rayon pool in `crates/worker` is its heir) |
+| M13 | Whole-Book Streaming Transform | ✅ shipped ([ADR-0012](./adrs/0012-whole-book-streaming-transform.md); transforms purged, ADR-0015) |
 
-Shipped efforts live under [`docs/specs/`](./specs/). Ship history: [`CHANGELOG.md`](../CHANGELOG.md). ADRs live in [`docs/adrs/`](./adrs/); runtime gotchas in [`docs/gotchas.md`](./gotchas.md).
+The off-device synth track ([ADR-0013](./adrs/0013-off-device-synth-and-portable-bundles.md)) shipped five efforts 2026-08-03 → 2026-08-29: `portable-bundle-format`, `desktop-synth-app`, `spa-bundle-import-export`, `personal-server`, `server-hosted-spa`. ADR-0015 narrowed it — the bundle format, desktop synth, and SPA bundle import/export survive as the native track's foundation; the personal-server tier was purged. **Specs of purged efforts were deleted from `docs/specs/` (ADR-0015); specs of surviving behavior remain** — playback engines, bundle import/export, library, reader UX, audio cache, clean reading. Ship history: [`CHANGELOG.md`](../CHANGELOG.md). ADRs live in [`docs/adrs/`](./adrs/); runtime gotchas in [`docs/gotchas.md`](./gotchas.md) (17 of 29 retired in place by the pivot).
 
 ---
 
 ## Future directions *(not current priorities)*
 
-- **Native wrappers** — package the PWA with Capacitor for optional App Store / Play Store distribution.
 - **Reading intelligence** — bookmark syncing, skip-by-paragraph/chapter, sleep timers.
-- **Platform & ecosystem** — cross-platform desktop app, browser extension, CarPlay/Bluetooth casting.
-- **Advanced voices** — additional open-source TTS engines (Coqui, eSpeak), custom voice training, multilingual books.
+- **On-device mobile synthesis** — phones synth their own books, once the kernel is proven.
+- **AI transforms on the desktop processor** — the purged transforms return where re-synth lives.
+- **Platform & ecosystem** — browser extension, CarPlay/Bluetooth casting.
+- **Advanced voices** — additional open-source voice models (custom voice training, multilingual books) via sherpa-onnx.
 - **Accessibility** — high-contrast themes, dyslexia-friendly fonts, screen-reader-optimized navigation.
-
-## Active track — Off-device synthesis + portable bundles (ADR-0013)
-
-An **optional, self-hostable companion track** that moves the slow synthesis step off the phone onto standalone Rust apps, with books flowing between apps as portable `.taletrek` files. The default offline-first PWA (on-device Piper) is unchanged — this track is additive. See [`adrs/0013-off-device-synth-and-portable-bundles.md`](./adrs/0013-off-device-synth-and-portable-bundles.md).
-
-Five efforts, each shippable on its own:
-
-| # | Effort | State |
-| --- | --- | --- |
-| T1 | `portable-bundle-format` — format spec + Rust `crates/synth` crate | ✅ shipped ([spec](./specs/portable-bundle-format/spec.md)) · 2026-08-03 |
-| T2 | `desktop-synth-app` — standalone Rust synth tool (import text-only bundle → export full bundle) | ✅ shipped ([spec](./specs/desktop-synth-app/spec.md)) · 2026-08-04 |
-| T3 | `spa-bundle-import-export` — TS bundle reader/writer + UI in the SPA | ✅ shipped ([spec](./specs/spa-bundle-import-export/spec.md)) · 2026-08-07 |
-| T4 | `personal-server` — Rust Docker library server + inline synth (worker-mode deferred to a follow-up) | ✅ shipped ([spec](./specs/personal-server/spec.md)) · 2026-08-24 |
-| T5 | `server-hosted-spa` — the server hosts the SPA itself; dual-shape boot (local ∨ server) per ADR-0014 | ✅ shipped ([spec](./specs/server-hosted-spa/spec.md)) · 2026-08-29 |
-
-Tiers: **(1)** SPA alone (on-device synth, exists today) · **(2)** SPA + Desktop (off-device synth via bundle exchange) · **(3)** + Server (central library, always-on synth, sharing — complete: the server can also host the SPA, ADR-0014).
