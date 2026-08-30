@@ -1,5 +1,4 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb'
-import type { AesEnvelope } from '../../lib/crypto/aes'
 import type {
   AudioCacheRecord,
   AudioSegmentRecord,
@@ -10,6 +9,16 @@ import type {
   ChapterId,
   VoiceId,
 } from '../../types'
+
+/**
+ * Historical (ADR-0007) ciphertext envelope shape. The `secureKeyring` store
+ * survives in the schema for existing databases; nothing reads it since the
+ * native pivot (ADR-0015) removed the biometric keyring.
+ */
+export interface AesEnvelope {
+  iv: Uint8Array
+  ciphertext: Uint8Array
+}
 
 /**
  * TaleTrek IndexedDB schema.
@@ -161,6 +170,17 @@ export async function clearAllStores(): Promise<void> {
   const db = await getDB()
   const present = ALL_STORE_NAMES.filter((s) => db.objectStoreNames.contains(s))
   await Promise.all(present.map((s) => db.clear(s as (typeof ALL_STORE_NAMES)[number])))
+}
+
+/**
+ * Delete every `audioSegments` entry (the historical M9 fMP4 cache). Returns
+ * the count removed. Kept for the Settings clear-cache flow + legacy data.
+ */
+export async function clearSegmentCache(): Promise<number> {
+  const db = await getDB()
+  const count = await db.count('audioSegments')
+  await db.clear('audioSegments')
+  return count
 }
 
 /** All store names the schema knows about — `clearAllStores` skips any that a

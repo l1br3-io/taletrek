@@ -1,30 +1,8 @@
-import {
-  AudioLines,
-  Download,
-  List,
-  MoreVertical,
-  Pencil,
-  Play,
-  SpellCheck,
-  Trash2,
-  Wand2,
-} from 'lucide-react'
+import { Download, MoreVertical, Pencil, Trash2 } from 'lucide-react'
 import { Menu } from '../../components/Menu'
 import type { Book, BookId } from '../../types'
-import type { AiUnusableReason } from './AiStatusChip'
 
 const DAY = 86_400_000
-
-/**
- * Per-book synthesis status chip (T16, hosted): live in-flight progress,
- * a persisted failure, or "audio ready" after a job completed (including
- * while this session was away). Local mode surfaces the same information
- * via `uploading`/`uploadJob` on the book record instead.
- */
-export type SynthStatusChip =
-  | { status: 'running'; done: number; total: number }
-  | { status: 'failed'; message?: string }
-  | { status: 'ready' }
 
 /** Render an `updatedAt` timestamp as a short relative label. Pure given `now`. */
 export function formatRelativeTime(ts: number, now: number = Date.now()): string {
@@ -46,66 +24,12 @@ interface BookCardProps {
   onDelete: (id: BookId) => void
   /** When provided, shows a "Rename" action on the card. */
   onRename?: (id: BookId) => void
-  /** When provided (AI enabled), shows a "Transform" action on the card. */
-  onTransform?: (id: BookId) => void
-  /** When provided (AI enabled), shows a "Hints" action on the card. */
-  onPronunciation?: (id: BookId) => void
-  /** When provided, shows a "Re-process outline" action (hidden for EPUB — already has TOC). */
-  onOutline?: (id: BookId) => void
-  /** When provided (synth mode enabled), shows a "Synthesize" action on the card. */
-  onResynthesize?: (id: BookId) => void
-  /** When provided, resumes a paused synthesis job for the book (ADR-0010 / M11). */
-  onResume?: (id: BookId) => void
   /** When provided, shows an "Export bundle" action on the card. */
   onExportBundle?: (id: BookId) => void
-  /**
-   * Hosted-mode synthesis status for this book (T16): renders a status chip
-   * next to the title. Omit in local mode (book-record badges cover it).
-   */
-  synthStatus?: SynthStatusChip
-  /**
-   * When `false`, AI menu items (Transform / Pronunciation) render with an amber
-   * dot to flag "enabled but not usable right now" — click still fires the
-   * handler, which opens an explanatory sheet. See `FeatureUnavailableSheet`.
-   */
-  aiUsable?: boolean
-  /**
-   * Specific reason AI is enabled-but-not-usable right now. Drives the
-   * `title` tooltip on flagged AI items so the user knows the fix before
-   * they click. `null` when AI is fully usable OR fully disabled.
-   */
-  aiUnusableReason?: AiUnusableReason | null
 }
 
-export function BookCard({
-  book,
-  onOpen,
-  onDelete,
-  onRename,
-  onTransform,
-  onPronunciation,
-  onOutline,
-  onResynthesize,
-  onResume,
-  onExportBundle,
-  synthStatus,
-  aiUsable = true,
-  aiUnusableReason = null,
-}: BookCardProps) {
+export function BookCard({ book, onOpen, onDelete, onRename, onExportBundle }: BookCardProps) {
   const pct = Math.round((book.progressFraction ?? 0) * 100)
-  const showOutline = onOutline && book.format !== 'epub'
-  const aiFlagged = !aiUsable && (onTransform || onPronunciation)
-  const aiFlaggedTitle = aiFlagged
-    ? aiUnusableReason === 'offline'
-      ? 'AI is offline — reconnect to use'
-      : aiUnusableReason === 'no-provider'
-        ? 'No AI provider — add one in Settings → AI'
-        : aiUnusableReason === 'no-key'
-          ? "Provider's API key missing — re-enter in Settings → AI"
-          : aiUnusableReason === 'misconfigured'
-            ? 'AI provider not responding — check Settings → AI'
-            : 'AI is enabled but not usable right now'
-    : undefined
 
   const actionsMenu = (
     <Menu
@@ -124,45 +48,6 @@ export function BookCard({
     >
       {(close) => (
         <>
-          {onResume && book.uploadJob && (
-            <button
-              type="button"
-              onClick={() => {
-                onResume(book.id)
-                close()
-              }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm text-accent transition-colors hover:bg-elevated"
-              aria-label={`Resume synthesis for ${book.title}`}
-            >
-              <Play className="h-4 w-4" /> Resume synthesis
-            </button>
-          )}
-          {onResynthesize && (
-            <button
-              type="button"
-              onClick={() => {
-                onResynthesize(book.id)
-                close()
-              }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
-              aria-label={`Synthesize ${book.title}`}
-            >
-              <AudioLines className="h-4 w-4" /> Synthesize
-            </button>
-          )}
-          {showOutline && (
-            <button
-              type="button"
-              onClick={() => {
-                onOutline?.(book.id)
-                close()
-              }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
-              aria-label={`Re-process outline for ${book.title}`}
-            >
-              <List className="h-4 w-4" /> Re-process outline
-            </button>
-          )}
           {onRename && (
             <button
               type="button"
@@ -174,42 +59,6 @@ export function BookCard({
               aria-label={`Rename ${book.title}`}
             >
               <Pencil className="h-4 w-4" /> Rename
-            </button>
-          )}
-          {onTransform && (
-            <button
-              type="button"
-              onClick={() => {
-                onTransform(book.id)
-                close()
-              }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
-              aria-label={`Transform ${book.title}${aiFlagged ? ' (AI not ready)' : ''}`}
-              title={aiFlaggedTitle}
-            >
-              <Wand2 className="h-4 w-4" /> Transform
-              {aiFlagged && (
-                <span className="ml-auto h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
-              )}
-            </button>
-          )}
-          {onPronunciation && (
-            <button
-              type="button"
-              onClick={() => {
-                onPronunciation(book.id)
-                close()
-              }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-elevated"
-              aria-label={`Review pronunciation for ${book.title}${
-                aiFlagged ? ' (AI not ready)' : ''
-              }`}
-              title={aiFlaggedTitle}
-            >
-              <SpellCheck className="h-4 w-4" /> Hints
-              {aiFlagged && (
-                <span className="ml-auto h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
-              )}
             </button>
           )}
           <div className="my-1 border-t border-line" />
@@ -258,49 +107,7 @@ export function BookCard({
             ❯
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium text-fg">
-              {book.title}
-              {book.uploading && (
-                <span className="ml-2 inline-flex items-center rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-medium text-accent">
-                  Uploading…
-                </span>
-              )}
-              {synthStatus?.status === 'running' && (
-                <span className="ml-2 inline-flex items-center rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-medium text-accent">
-                  {synthStatus.total > 0
-                    ? `Synthesizing ${synthStatus.done}/${synthStatus.total}`
-                    : 'Synthesizing…'}
-                </span>
-              )}
-              {synthStatus?.status === 'failed' && (
-                <span
-                  className="ml-2 inline-flex items-center rounded-full bg-danger/20 px-2 py-0.5 text-[10px] font-medium text-danger"
-                  title={synthStatus.message}
-                >
-                  Synthesis failed
-                </span>
-              )}
-              {synthStatus?.status === 'ready' && (
-                <span className="ml-2 inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-medium text-accent">
-                  Audio ready
-                </span>
-              )}
-              {book.uploadJob && !book.uploading && (
-                <span className="ml-2 inline-flex items-center rounded-full bg-warning/20 px-2 py-0.5 text-[10px] font-medium text-warning">
-                  Paused
-                </span>
-              )}
-              {book.uploadJob &&
-                !book.uploading &&
-                book.uploadJob.lastChapterTitle &&
-                typeof book.uploadJob.lastParagraphInChapter === 'number' &&
-                typeof book.uploadJob.lastChapterTotal === 'number' && (
-                  <span className="ml-1 text-[10px] text-muted">
-                    (at “{book.uploadJob.lastChapterTitle.slice(0, 20)}” ¶
-                    {book.uploadJob.lastParagraphInChapter}/{book.uploadJob.lastChapterTotal})
-                  </span>
-                )}
-            </span>
+            <span className="block truncate font-medium text-fg">{book.title}</span>
             <span className="mt-0.5 flex items-center gap-2 text-xs text-muted">
               <span>{book.format}</span>
               <span aria-hidden>·</span>

@@ -9,8 +9,7 @@
  * attached by the conversion helpers below, **not** by these interfaces.
  */
 
-import type { BookId, Chapter, ChapterId } from '../../types'
-import type { AppliedProcessing } from '../ai/types'
+import type { AppliedProcessing, BookId, Chapter, ChapterId } from '../../types'
 
 /** Bundle format schema version this SPA reads + writes. Frozen at v1. */
 export const MANIFEST_SCHEMA_VERSION = 1 as const
@@ -34,7 +33,9 @@ export const READABLE_AUDIO_CODECS: readonly AudioCodec[] = ['opus', 'm4a', 'wav
 /** Codec the SPA writer emits for v1 (format doc default; best size/quality for speech). */
 export const WRITABLE_AUDIO_CODEC: AudioCodec = 'opus'
 
-/** `generator.app` enumeration — which TaleTrek app produced the archive. */
+/** `generator.app` enumeration — which TaleTrek app produced the archive.
+ *  `taletrek-server` is historical (personal server removed by the native
+ *  pivot, ADR-0015); existing bundles may still carry it. */
 export type GeneratorApp = 'taletrek-spa' | 'taletrek-desktop' | 'taletrek-server'
 
 /** Generator tag the SPA stamps on every bundle it writes. */

@@ -1,78 +1,23 @@
 /**
  * Datasource seam — the boundary between the UI and wherever books,
- * chapters, audio, and synthesis actually live (ADR-0014).
+ * chapters, and audio live.
  *
- * Contract:
- * - UI (`routes/`, `components/`, `hooks/`, `context/`) imports data access
- *   from `lib/datasource` only — never `lib/db`, the upload/transform
- *   managers, or `lib/ingest` directly. Lib internals keep direct `lib/db`
- *   access: they sit behind this seam as the local implementation.
- * - Settings and the secure keyring stay **out**: they remain client-side
- *   IndexedDB in both modes (`context/settings.tsx` + `lib/ai/secure-keyring`
- *   consumers are the locked allowlist).
- * - Implementations: `LocalDatasource` (IndexedDB, the unchanged offline-first
- *   PWA) and `ServerDatasource` (same-origin HTTP, the server-hosted shape).
- *   Resolved once at boot by `resolve.ts` — never per-call.
- * - Methods return plain promises matching existing call sites; the UI keeps
- *   owning its variant states (`{ type: 'loading' } | …`). Job and transform
- *   progress use the shared variant unions re-exported below.
+ * Post-pivot (ADR-0015) there is exactly one implementation: the local
+ * IndexedDB reader (`local.ts`). The seam stays so a future host (sync
+ * server, native shell) can slot in without touching callers.
  *
- * Every member maps 1:1 onto an existing `lib/db` / manager capability with a
- * live UI caller — no speculative surface. Extend only alongside a caller.
+ * Contract: UI (`routes/`, `components/`, `hooks/`, `context/`) imports
+ * data access from `lib/datasource` only — never `lib/db` directly. Lib
+ * internals keep direct `lib/db` access: they sit behind this seam as the
+ * local implementation. Every member maps 1:1 onto an existing `lib/db`
+ * capability with a live UI caller — no speculative surface.
  */
 
 import type { Book, BookFile, BookId, BookPosition, Chapter, ChapterId, VoiceId } from '../../types'
-import type { AiSettings, AppliedProcessing, TransformDefinition } from '../ai/types'
 import type { ImportOptions, ImportReport } from '../backup'
 import type { BookAudio } from '../book-audio'
-import type { IngestResult } from '../ingest'
-import type { BookTransformState, TransformJobSpec } from '../transform/manager'
-import type { JobSpec, JobState } from '../upload/manager'
 
-export type {
-  BookAudio,
-  BookTransformState,
-  ImportOptions,
-  ImportReport,
-  IngestResult,
-  JobSpec,
-  JobState,
-  TransformJobSpec,
-}
-
-/**
- * Discriminated result of cancelling whatever a pipeline is running for a
- * book (used by library delete). `'blocked'` means another book's job is
- * active — the caller should refuse the delete and surface why.
- */
-export type CancelForBookResult =
-  | { type: 'cancelled' }
-  | { type: 'no-op' }
-  | { type: 'blocked'; activeBookTitle: string }
-
-/**
- * A recent synthesis job, as surfaced for per-book status chips (T16). The
- * hosted pipeline maps `GET /api/jobs`; local answers `[]` — local job
- * state is already carried on book records (`uploading` / `uploadJob`), so
- * there is no separate list to report.
- */
-export interface RecentJob {
-  id: string
-  bookId: BookId
-  kind: 'synth' | 'resynth'
-  status: 'queued' | 'running' | 'succeeded' | 'failed'
-  done: number
-  total: number
-  error: string | null
-}
-
-/** Client-side inputs a whole-book transform run needs (AI settings are
- * always local — keys never leave the browser, in either mode). */
-export interface TransformRunDeps {
-  ai: AiSettings
-  defs: TransformDefinition[]
-  synthEnabled: boolean
-}
+export type { BookAudio, ImportOptions, ImportReport }
 
 /**
  * Library reads/writes the UI performs: books, chapters, original files,
@@ -96,8 +41,6 @@ export interface LibraryDatasource {
   deleteBookCascade(id: BookId): Promise<void>
   /** Lightweight progress write — sets position + fraction, bumps `updatedAt`. */
   updateBookProgress(id: BookId, position: BookPosition, progressFraction: number): Promise<void>
-  /** Set (or clear, via `undefined`) a book's applied-processing record. */
-  updateBookProcessing(id: BookId, processing: AppliedProcessing | undefined): Promise<void>
 
   // --- chapters ---
   /** All chapters for a book, ordered by chapter index. */
@@ -119,7 +62,7 @@ export interface LibraryDatasource {
   // --- original file ---
   /**
    * The book's original uploaded file, or `undefined` when evicted/never
-   * stored. Outline re-detection reads this; absence degrades those flows.
+   * stored.
    */
   getBookFile(id: BookId): Promise<BookFile | undefined>
 
@@ -133,7 +76,7 @@ export interface LibraryDatasource {
   /** The book's whole-book audio record (mobile preloaded player), if encoded. */
   getBookAudio(bookId: BookId): Promise<BookAudio | undefined>
 
-  // --- derived audio: invalidation (transform → resynth) ---
+  // --- derived audio: invalidation ---
   /** All audio-cache keys owned by a book. */
   getAudioCacheKeysByBook(bookId: BookId): Promise<string[]>
   /** Delete specific audio-cache entries by key. Returns the count removed. */
@@ -156,14 +99,14 @@ export interface LibraryDatasource {
   /**
    * Wipe every datasource-owned store (books, chapters, files, audio cache,
    * segments, …) in one pass. The Settings device-wipe flow calls this
-   * alongside clearing voices/SW/caches/web-storage, then reloads.
+   * alongside clearing SW/caches/web-storage, then reloads.
    */
   clearAllStores(): Promise<void>
 
   // --- backup & transfer (Settings) ---
   /**
    * Full data export (settings + books + chapters + files; audio cache
-   * excluded — it regenerates) as a JSON `Blob`.
+   * excluded — it re-enters via bundle import) as a JSON `Blob`.
    */
   exportBackup(): Promise<Blob>
   /**
@@ -172,88 +115,4 @@ export interface LibraryDatasource {
    * `BackupTooLargeError` (re-exported from `lib/datasource`).
    */
   importBackup(blob: Blob, opts?: ImportOptions): Promise<ImportReport>
-}
-
-/**
- * Upload/transform/synth orchestration the UI triggers. The job half
- * (start/pause/resume/cancel + state) mirrors the local upload manager;
- * the transform half mirrors the streaming book-transform manager. State
- * is external-store compatible (`subscribe` + `get…State`) for
- * `useSyncExternalStore`.
- */
-export interface SynthPipeline {
-  // --- upload + synth job ---
-  /**
-   * Parse an uploaded file in workers and persist the resulting book +
-   * chapters (wherever "persist" lives in this mode). Throws
-   * `UnsupportedFileError` for unrecognized types; propagates parse errors.
-   */
-  ingestBook(file: File): Promise<IngestResult>
-  /**
-   * Start a synthesis job for a known book + chapters. `'initial'` mode
-   * cascades on failure; `'resynth'` keeps the book and offers retry.
-   * Throws if a job is already active.
-   */
-  startJob(spec: JobSpec): void
-  /** True while a job is running (or tearing down after cancel/pause). */
-  isActive(): boolean
-  /** Resume the paused job persisted on a book record. No-op if absent/active. */
-  resume(bookId: BookId): Promise<void>
-  /** Request a cooperative pause — observed at the next paragraph boundary. */
-  pause(): void
-  /** Whether the active job can be paused (for UI affordances). */
-  canPause(): boolean
-  /** Cancel the active job. */
-  cancel(): void
-  /** Re-run the last job spec (valid from retryable error states). */
-  retry(): void
-  /** Whether a retry is available in the current state. */
-  canRetry(): boolean
-  /** Dismiss a settled (done/error/paused) job banner. */
-  dismiss(): void
-  /** True while recovering from a long tab-hide (presumed phone lock). */
-  isRecovering(): boolean
-  /**
-   * Cancel any in-progress job for this book and wait for settle, so a
-   * cascade-delete can't race the pipeline's writes. `'blocked'` when
-   * another book's job is active.
-   */
-  cancelForBook(bookId: BookId): Promise<CancelForBookResult>
-  /** External-store subscription for job-state changes. */
-  subscribe(listener: () => void): () => void
-  /** Current job state (variant union — see `JobState`). */
-  getState(): JobState
-  /**
-   * Recent synthesis jobs across books (newest first, server-truncated) —
-   * drives per-book status chips in hosted mode. Local answers `[]`.
-   */
-  listRecentJobs(): Promise<RecentJob[]>
-
-  // --- whole-book AI transform (streaming) ---
-  /**
-   * Submit a streaming whole-book transform. Operational failures surface
-   * via `getTransformState()` (error variant), not throws. When synth is
-   * enabled the pipeline chains its own resynth on completion.
-   */
-  startTransform(spec: TransformJobSpec, deps: TransformRunDeps): Promise<void>
-  /** Resume the paused transform persisted on a book record. */
-  resumeTransform(bookId: BookId, deps: TransformRunDeps): Promise<void>
-  /** Pause the running transform (cooperative — commits keep). */
-  pauseTransform(): void
-  /** Cancel the running or paused transform. Already-committed chapters keep. */
-  cancelTransform(): Promise<void>
-  /** As `cancelForBook`, for the transform pipeline (delete flow). */
-  cancelTransformForBook(bookId: BookId): Promise<CancelForBookResult>
-  /** External-store subscription for transform-state changes. */
-  subscribeTransform(listener: () => void): () => void
-  /** Current transform state (variant union — see `BookTransformState`). */
-  getTransformState(): BookTransformState
-
-  // --- re-processing ---
-  /**
-   * Recover pristine chapters for a book — locally by re-parsing the stored
-   * original file (throws `OriginalUnavailableError` when evicted). Used by
-   * reprocess flows so transforms don't stack on prior output.
-   */
-  reparseChapters(bookId: BookId): Promise<Chapter[]>
 }

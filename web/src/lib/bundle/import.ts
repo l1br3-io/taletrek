@@ -153,6 +153,7 @@ export async function importBookBundle(bundle: BookBundle): Promise<ImportBundle
     chapterCount: bundle.chapters.length,
     createdAt: bundle.manifest.book.createdAt,
     updatedAt: bundle.manifest.book.updatedAt,
+    voiceId: voiceId(bundle.manifest.book.voiceId),
     ...(bundle.meta.position !== undefined ? { position: bundle.meta.position } : {}),
     ...(bundle.manifest.book.progressFraction !== undefined
       ? { progressFraction: bundle.manifest.book.progressFraction }

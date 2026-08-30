@@ -44,16 +44,6 @@ export default defineConfig({
     port: 8253,
     strictPort: true,
     allowedHosts: ['lodge-loop-massive-greatest.trycloudflare.com'],
-    // Server-hosted shape in dev (`just dev`): same-origin `/api` + the login
-    // form proxy to the personal server, so the boot probe and the 401 →
-    // /ui/login redirect behave exactly like the hosted build. Only /ui/login
-    // of the panel is proxied — post-login lands on `/`, which Vite serves.
-    // With no server running the proxy errors, which the probe treats as
-    // unreachable → local mode (standalone PWA unchanged).
-    proxy: {
-      '/api': 'http://127.0.0.1:7878',
-      '/ui/login': 'http://127.0.0.1:7878',
-    },
   },
   plugins: [
     react(),
@@ -90,41 +80,6 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         cleanupOutdatedCaches: true,
-        // Server-owned paths must never resolve to the offline SPA shell:
-        // `/ui/login` is the no-JS cookie gate (a SW-served index.html there
-        // makes the unauthed probe redirect back into itself — an endless
-        // navigation loop after logout), and `/api/*` answers as JSON or
-        // nothing. T16; the audit in T17 keeps watch on this list.
-        navigateFallbackDenylist: [/^\/api\//, /^\/ui\//],
-        // The Piper WASM runtime (~39 MB) is too large to precache. Cache it on
-        // first fetch so it's available offline thereafter — the app shell +
-        // these binaries + the OPFS voice model together enable true offline.
-        runtimeCaching: [
-          /**
-           * GOTCHA (T17 / R3 / G3): server-owned paths are network-only. In the
-           * hosted shape every `/api/*` fetch and the `/ui/login` cookie gate
-           * must hit the network or fail — a cached API response (or a
-           * SW-served shell for /ui/*) would show stale library data as
-           * current, or re-create the T16 post-logout redirect loop. Listed
-           * FIRST so it wins over any future, broader runtimeCaching pattern.
-           * `NetworkOnly` never calls cache.put on any status; a failed
-           * network request rejects (hosted mode is online-only by decision).
-           */
-          {
-            urlPattern: ({ url }) =>
-              url.pathname.startsWith('/api/') || url.pathname.startsWith('/ui/'),
-            handler: 'NetworkOnly',
-          },
-          {
-            urlPattern: ({ url }) => url.pathname.startsWith('/wasm/'),
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'piper-wasm',
-              expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
       },
       // Enable the SW in dev so offline/PWA behavior is testable locally.
       devOptions: {

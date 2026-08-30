@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  type AppliedProcessing,
   type AudioCacheRecord,
   type Book,
   type BookFile,
   type Chapter,
   newBookId,
   newChapterId,
+  transformDefId,
   voiceId,
 } from '../types'
-import { type AppliedProcessing, transformDefId } from './ai/types'
 import {
   _clearDBForTests,
   _resetDBForTests,

@@ -1,5 +1,4 @@
-import type { Book, BookId, BookPosition } from '../../types'
-import type { AppliedProcessing } from '../ai/types'
+import type { AppliedProcessing, Book, BookId, BookPosition } from '../../types'
 import { getDB } from './connection'
 
 /** Read a book by id, or `undefined` if absent. */
