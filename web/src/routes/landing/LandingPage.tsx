@@ -2,7 +2,16 @@ import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 import { GithubMark } from '../../components/GithubMark'
 import { GITHUB_URL } from '../../lib/site'
-import { comparison, faqs, features, heroBadges, moments, steps } from './landing-content'
+import {
+  apps,
+  comparison,
+  faqs,
+  features,
+  heroBadges,
+  moments,
+  steps,
+  today,
+} from './landing-content'
 
 function Eyebrow({ children }: { children: ReactNode }) {
   return (
@@ -18,7 +27,7 @@ function TerminalDemo() {
     <div className="border border-line bg-surface font-mono text-sm" aria-hidden>
       <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-xs">
         <span className="text-accent">❯~</span>
-        <span className="text-fg/80">taletrek play dune.epub</span>
+        <span className="text-fg/80">taletrek process dune.epub</span>
       </div>
       <div className="space-y-2 px-4 py-4">
         <div className="flex gap-3">
@@ -32,6 +41,12 @@ function TerminalDemo() {
         <div className="flex gap-3">
           <span className="w-12 shrink-0 text-muted">voice</span>
           <span className="text-fg/90">piper · en_US · lessac · medium</span>
+        </div>
+        <div className="flex gap-3">
+          <span className="w-12 shrink-0 text-muted">done</span>
+          <span className="text-fg/90">
+            <span className="text-accent">dune.taletrek</span> — send it to your phone
+          </span>
         </div>
         <div className="flex gap-3 pt-1">
           <span className="text-accent">▸</span>
@@ -69,9 +84,9 @@ export function Landing() {
             Every story is a <span className="italic text-accent">journey</span>.
           </h1>
           <p className="max-w-xl text-base leading-relaxed text-fg/90">
-            Upload a book or document and your phone reads it aloud with on-device neural speech. No
-            cloud, no subscription, no app store. TaleTrek strips the noise so only the story flows
-            — then keeps playing after you lock the screen.
+            One kernel, every screen. The desktop processor turns any ebook into an audiobook with
+            on-device neural speech; the phone apps keep reading after you lock the screen. No
+            cloud, no subscription, nothing leaves your machine.
           </p>
           <ul className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs uppercase tracking-[0.18em] text-muted">
             {heroBadges.map((b) => (
@@ -128,8 +143,8 @@ export function Landing() {
         <Eyebrow>The thesis</Eyebrow>
         <p className="max-w-3xl font-reader text-3xl leading-[1.18] text-fg sm:text-4xl">
           Audiobooks cost money. Browser readers stop when the screen locks.{' '}
-          <span className="text-accent">TaleTrek does neither</span> — your phone does all the work,
-          offline, for free.
+          <span className="text-accent">TaleTrek does neither</span> — your device does all the
+          work, offline, for free.
         </p>
       </section>
 
@@ -148,6 +163,73 @@ export function Landing() {
             </li>
           ))}
         </ol>
+      </section>
+
+      {/* The apps */}
+      <section className="space-y-6">
+        <Eyebrow>The apps</Eyebrow>
+        <div className="max-w-3xl space-y-4">
+          <p className="font-reader text-3xl leading-[1.18] text-fg sm:text-4xl">
+            One kernel. <span className="text-accent">Three native apps.</span>
+          </p>
+          <p className="max-w-xl text-sm leading-relaxed text-muted">
+            Parsing, synthesis, and encoding live in a shared Rust core; each app speaks its
+            platform&apos;s own idiom. All free downloads.
+          </p>
+        </div>
+        <ul className="grid gap-px overflow-hidden border border-line bg-line sm:grid-cols-3">
+          {apps.map((a) => (
+            <li key={a.name} className="flex flex-col gap-3 bg-bg p-6">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <a.icon className="h-5 w-5 text-accent" aria-hidden />
+                  <h3 className="font-medium text-fg">{a.name}</h3>
+                </div>
+                <span className="border border-line px-2 py-1 text-right font-mono text-[10px] uppercase tracking-[0.14em] text-muted">
+                  {a.status}
+                </span>
+              </div>
+              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">{a.role}</p>
+              <p className="text-sm leading-relaxed text-muted">{a.desc}</p>
+              <span className="mt-auto inline-flex w-fit items-center border border-dashed border-line px-3 py-1.5 font-mono text-xs text-muted">
+                {a.badge}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Today */}
+      <section className="space-y-6">
+        <Eyebrow>Use it today</Eyebrow>
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="flex flex-col gap-4 border border-line bg-surface p-6">
+            <h3 className="font-medium text-fg">
+              Open a <span className="text-accent">.taletrek</span>
+            </h3>
+            <p className="text-sm leading-relaxed text-muted">{today.reader.desc}</p>
+            <Link
+              to="/library"
+              className="mt-auto inline-flex w-fit items-center gap-2 bg-accent px-4 py-2 text-sm font-medium text-bg transition-opacity hover:opacity-90"
+            >
+              {today.reader.cta} <span aria-hidden>→</span>
+            </Link>
+          </div>
+          <div className="flex flex-col gap-4 border border-line bg-surface p-6">
+            <h3 className="font-medium text-fg">{today.cli.title}</h3>
+            <p className="text-sm leading-relaxed text-muted">{today.cli.desc}</p>
+            <pre className="mt-auto overflow-x-auto border border-line bg-bg px-4 py-3 font-mono text-xs leading-relaxed text-fg/90">
+              {today.cli.lines.map((line) => (
+                <div key={line}>
+                  <span className="text-accent" aria-hidden>
+                    ❯{' '}
+                  </span>
+                  {line}
+                </div>
+              ))}
+            </pre>
+          </div>
+        </div>
       </section>
 
       {/* Features */}
