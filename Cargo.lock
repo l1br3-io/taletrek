@@ -741,6 +741,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "taletrek-parse"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "taletrek-synth"
 version = "0.1.0"
 dependencies = [
