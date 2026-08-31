@@ -110,6 +110,38 @@ fn html_parses_to_exact_book() {
 }
 
 #[test]
+fn epub_parses_to_exact_book() {
+    let bytes = include_bytes!("../testdata/book.epub");
+    let book = parse_source(bytes, SourceFormat::Epub, Some("book.epub")).expect("epub parses");
+    assert_eq!(
+        book,
+        ParsedBook {
+            title: "The Lighthouse".to_owned(),
+            author: Some("Mara Idun".to_owned()),
+            source_format: SourceFormat::Epub,
+            chapters: vec![
+                ParsedChapter {
+                    title: "First Light".to_owned(),
+                    paragraphs: vec![
+                        "The keeper lit the lamp at dusk, as he had for thirty years. See for the official record."
+                            .to_owned(),
+                        "He re-read the old log twice before breakfast.".to_owned(),
+                    ],
+                },
+                ParsedChapter {
+                    title: "The Storm Approaches".to_owned(),
+                    paragraphs: vec![
+                        "The glass fell all day, and the wind turned to the north.".to_owned(),
+                        "A sail appeared on the horizon — see the log at — and held its bearing."
+                            .to_owned(),
+                    ],
+                },
+            ],
+        }
+    );
+}
+
+#[test]
 fn parse_output_is_clean_idempotent() {
     let fixtures: &[(&[u8], SourceFormat, &str)] = &[
         (
@@ -126,6 +158,11 @@ fn parse_output_is_clean_idempotent() {
             include_bytes!("../testdata/article.html"),
             SourceFormat::Html,
             "article.html",
+        ),
+        (
+            include_bytes!("../testdata/book.epub"),
+            SourceFormat::Epub,
+            "book.epub",
         ),
     ];
     for &(bytes, format, hint) in fixtures {

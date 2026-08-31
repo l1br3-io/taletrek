@@ -13,12 +13,14 @@ path = "src/lib.rs"
 
 [dependencies]
 pulldown-cmark = { version = "0.13", default-features = false }
+quick-xml = "0.42"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 taletrek-synth = { path = "../synth" }
 uuid = { version = "1", features = ["v4"] }
 scraper = "0.27.0"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [lints]
 workspace = true

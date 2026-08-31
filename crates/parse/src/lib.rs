@@ -23,6 +23,7 @@
 mod bundle;
 mod clean;
 mod detect;
+mod epub;
 mod html;
 mod md;
 mod txt;
@@ -76,12 +77,35 @@ pub struct ParsedChapter {
     pub paragraphs: Vec<String>,
 }
 
+impl std::fmt::Display for SourceFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SourceFormat::Epub => "epub",
+            SourceFormat::Txt => "txt",
+            SourceFormat::Html => "html",
+            SourceFormat::Md => "md",
+            SourceFormat::Docx => "docx",
+            SourceFormat::Pdf => "pdf",
+        })
+    }
+}
+
 /// Failures that can occur while parsing a source document.
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
     /// The format has no parser yet (parsers land one task at a time).
     #[error("no parser implemented for this source format yet")]
     UnsupportedFormat(SourceFormat),
+    /// The container is structurally invalid — a corrupt zip, a missing
+    /// package document — so parsing cannot proceed. The
+    /// encoding-never-fails rule only covers text; containers can fail.
+    #[error("malformed {format} source: {detail}")]
+    Malformed {
+        /// The format whose container was invalid.
+        format: SourceFormat,
+        /// What exactly is wrong.
+        detail: String,
+    },
 }
 
 /// Fallback title (crate-shared) when neither the document nor the filename
@@ -144,6 +168,7 @@ pub fn parse_source(
         SourceFormat::Txt => txt::parse_txt(bytes, hint),
         SourceFormat::Md => md::parse_md(bytes, hint),
         SourceFormat::Html => html::parse_html(bytes, hint),
+        SourceFormat::Epub => return epub::parse_epub(bytes, hint).map(|book| clean_book(&book)),
         other => return Err(ParseError::UnsupportedFormat(other)),
     };
     Ok(clean_book(&parsed))
@@ -155,7 +180,7 @@ mod tests {
 
     #[test]
     fn unsupported_formats_error_until_their_parser_lands() {
-        for format in [SourceFormat::Epub, SourceFormat::Docx, SourceFormat::Pdf] {
+        for format in [SourceFormat::Docx, SourceFormat::Pdf] {
             let err = parse_source(b"x", format, None).unwrap_err();
             assert!(matches!(err, ParseError::UnsupportedFormat(got) if got == format));
         }

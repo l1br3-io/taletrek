@@ -83,7 +83,6 @@ pub enum Block {
 /// blocks: chrome (`script`/`style`/`nav`/`aside`/`header`/`footer`) never
 /// enters by construction, and bare text between block elements is not
 /// content. Empty blocks (whitespace-only, image-only) are dropped here.
-#[allow(dead_code)] // the EPUB chapter-body seam (T8); single-file HTML reaches the same walk via `blocks_of` so the document parses once.
 pub fn extract_blocks(html: &str) -> Vec<Block> {
     let document = Html::parse_document(html);
     blocks_of(&document)
