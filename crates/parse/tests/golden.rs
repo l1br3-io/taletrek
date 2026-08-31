@@ -75,6 +75,41 @@ fn md_parses_to_exact_book() {
 }
 
 #[test]
+fn html_parses_to_exact_book() {
+    let bytes = include_bytes!("../testdata/article.html");
+    let book = parse_source(bytes, SourceFormat::Html, Some("article.html")).expect("html parses");
+    assert_eq!(
+        book,
+        ParsedBook {
+            title: "The Lighthouse Log".to_owned(),
+            author: None,
+            source_format: SourceFormat::Html,
+            chapters: vec![
+                ParsedChapter {
+                    title: "The Keeper’s Morning".to_owned(),
+                    paragraphs: vec![
+                        "The keeper trimmed the lamp at dawn, as he had for thirty years. He re-read the old log twice before breakfast."
+                            .to_owned(),
+                        "The sea was calm — unnaturally calm — as if it “knew”.".to_owned(),
+                        "Fitness of the Day".to_owned(),
+                        "He counted the gulls twice — once at eight, and again at noon.".to_owned(),
+                        "Then he noted the bearing due west in entry.".to_owned(),
+                    ],
+                },
+                ParsedChapter {
+                    title: "The Storm Arrives".to_owned(),
+                    paragraphs: vec![
+                        "It broke at midnight — all wind and salt — and the keeper held the door shut until “the worst of it” had passed."
+                            .to_owned(),
+                        "LOG 1852-11-03 03:00 wind: storm, force 10".to_owned(),
+                    ],
+                },
+            ],
+        }
+    );
+}
+
+#[test]
 fn parse_output_is_clean_idempotent() {
     let fixtures: &[(&[u8], SourceFormat, &str)] = &[
         (
@@ -86,6 +121,11 @@ fn parse_output_is_clean_idempotent() {
             include_bytes!("../testdata/book.md"),
             SourceFormat::Md,
             "book.md",
+        ),
+        (
+            include_bytes!("../testdata/article.html"),
+            SourceFormat::Html,
+            "article.html",
         ),
     ];
     for &(bytes, format, hint) in fixtures {

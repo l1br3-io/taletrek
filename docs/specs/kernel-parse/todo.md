@@ -6,7 +6,7 @@
 - [x] T4 — `bundle.rs`: ParsedBook → text-only BookBundle → [`tasks/004-text-only-bundle.md`](./tasks/004-text-only-bundle.md)
 - [x] T5 — CLI `parse` subcommand + `just parse-fixture` → [`tasks/005-cli-parse.md`](./tasks/005-cli-parse.md)
 - [x] T6 — MD parser (`pulldown-cmark`) → [`tasks/006-md-parser.md`](./tasks/006-md-parser.md)
-- [ ] T7 — HTML parser (`scraper`) → [`tasks/007-html-parser.md`](./tasks/007-html-parser.md)
+- [x] T7 — HTML parser (`scraper`) → [`tasks/007-html-parser.md`](./tasks/007-html-parser.md)
 - [ ] T8 — EPUB parser (zip + quick-xml + html core) → [`tasks/008-epub-parser.md`](./tasks/008-epub-parser.md)
 - [ ] T9 — DOCX parser (zip + quick-xml) → [`tasks/009-docx-parser.md`](./tasks/009-docx-parser.md)
 - [ ] T10 — PDF parser (per T2 verdict) → [`tasks/010-pdf-parser.md`](./tasks/010-pdf-parser.md)
