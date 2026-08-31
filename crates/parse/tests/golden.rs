@@ -142,6 +142,42 @@ fn epub_parses_to_exact_book() {
 }
 
 #[test]
+fn docx_parses_to_exact_book() {
+    let bytes = include_bytes!("../testdata/doc.docx");
+    let book = parse_source(bytes, SourceFormat::Docx, Some("doc.docx")).expect("docx parses");
+    assert_eq!(
+        book,
+        ParsedBook {
+            title: "The Lighthouse Log".to_owned(),
+            author: Some("Mara Idun".to_owned()),
+            source_format: SourceFormat::Docx,
+            chapters: vec![
+                ParsedChapter {
+                    title: "doc".to_owned(),
+                    paragraphs: vec!["The log opens with a note from the keeper.".to_owned()],
+                },
+                ParsedChapter {
+                    title: "First Light".to_owned(),
+                    paragraphs: vec![
+                        "The keeper lit the lamp at dusk, as he had for thirty years.".to_owned(),
+                        "The Second Watch".to_owned(),
+                        "He re-read the old log twice before breakfast.".to_owned(),
+                        "See for the official record.".to_owned(),
+                    ],
+                },
+                ParsedChapter {
+                    title: "The Storm Approaches".to_owned(),
+                    paragraphs: vec![
+                        "The glass fell all day, and the wind turned to the north.".to_owned(),
+                        "A sail appeared on the horizon and held its bearing due west.".to_owned(),
+                    ],
+                },
+            ],
+        }
+    );
+}
+
+#[test]
 fn parse_output_is_clean_idempotent() {
     let fixtures: &[(&[u8], SourceFormat, &str)] = &[
         (
@@ -163,6 +199,11 @@ fn parse_output_is_clean_idempotent() {
             include_bytes!("../testdata/book.epub"),
             SourceFormat::Epub,
             "book.epub",
+        ),
+        (
+            include_bytes!("../testdata/doc.docx"),
+            SourceFormat::Docx,
+            "doc.docx",
         ),
     ];
     for &(bytes, format, hint) in fixtures {

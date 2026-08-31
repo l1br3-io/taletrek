@@ -23,6 +23,7 @@
 mod bundle;
 mod clean;
 mod detect;
+mod docx;
 mod epub;
 mod html;
 mod md;
@@ -169,6 +170,7 @@ pub fn parse_source(
         SourceFormat::Md => md::parse_md(bytes, hint),
         SourceFormat::Html => html::parse_html(bytes, hint),
         SourceFormat::Epub => return epub::parse_epub(bytes, hint).map(|book| clean_book(&book)),
+        SourceFormat::Docx => return docx::parse_docx(bytes, hint).map(|book| clean_book(&book)),
         other => return Err(ParseError::UnsupportedFormat(other)),
     };
     Ok(clean_book(&parsed))
@@ -180,10 +182,8 @@ mod tests {
 
     #[test]
     fn unsupported_formats_error_until_their_parser_lands() {
-        for format in [SourceFormat::Docx, SourceFormat::Pdf] {
-            let err = parse_source(b"x", format, None).unwrap_err();
-            assert!(matches!(err, ParseError::UnsupportedFormat(got) if got == format));
-        }
+        let err = parse_source(b"x", SourceFormat::Pdf, None).unwrap_err();
+        assert!(matches!(err, ParseError::UnsupportedFormat(got) if got == SourceFormat::Pdf));
     }
 
     #[test]
