@@ -1,6 +1,7 @@
 //! End-to-end integration for `taletrek-desktop`: a real `piper` + real
 //! `ffmpeg` + real Piper voice model turn a text-only `.taletrek` fixture into
-//! a full Opus bundle.
+//! a full Opus bundle — plus (kernel-parse T11) the parse→synth two-step and
+//! the chained `synth --input <source>` one-command path over a TXT source.
 //!
 //! Both tests are `#[ignore]`d and gated exactly like effort 1's
 //! `real_piper_synthesizes_opus` (`crates/synth/tests/synth_integration.rs`):
@@ -314,4 +315,135 @@ fn real_resynth_revoices_full_bundle() {
             "resynth segment must start with OGG magic"
         );
     }
+}
+
+/// Write a small TXT source fixture at `path`: two `Chapter …` heading lines
+/// → two chapters, each with one distinct paragraph → exactly 2 content-
+/// addressed segments after synth.
+fn write_txt_source(path: &Path) {
+    fs::write(
+        path,
+        "Chapter One\n\nThe quick brown fox jumps over the lazy dog.\n\nChapter Two\n\nPack my box with five dozen liquor jugs.",
+    )
+    .expect("txt source write succeeds");
+}
+
+/// Assert the full-audio invariants every kernel-parse e2e run must hold:
+/// manifest flipped to full Opus at the current norm version, desktop
+/// generator stamped, `expected_segments` content-addressed segments, and
+/// every segment a real OGG/Opus stream (proves piper + ffmpeg both ran).
+fn assert_full_opus_bundle(bundle: &BookBundle, expected_segments: u32) {
+    assert!(bundle.manifest.audio.present, "audio.present must be true");
+    assert_eq!(bundle.manifest.audio.codec, AudioCodec::Opus);
+    assert_eq!(
+        bundle.manifest.audio.norm_version,
+        NORM_VERSION.parse::<u32>().unwrap()
+    );
+    assert_eq!(bundle.manifest.generator.app, "taletrek-desktop");
+    assert_eq!(bundle.manifest.audio.segment_count, expected_segments);
+    assert_eq!(
+        bundle.audio.len(),
+        usize::try_from(expected_segments).unwrap()
+    );
+    assert!(!bundle.audio.is_empty(), "segments must exist");
+    for (key, seg) in &bundle.audio {
+        assert_eq!(seg.key, *key, "segment key must match map key");
+        assert_eq!(seg.codec, AudioCodec::Opus);
+        assert!(
+            seg.bytes.starts_with(OGG_MAGIC),
+            "segment `{key}` must start with OGG magic `OggS`; got first 4 bytes {:?}",
+            &seg.bytes[..seg.bytes.len().min(4)]
+        );
+    }
+}
+
+/// End-to-end (kernel-parse T11): the two-step path through the parse crate —
+/// `parse` a TXT source into a text-only bundle, then `synth` that bundle.
+/// Proves the artifacts the chained path is measured against: both commands
+/// exit clean and the final bundle is full Opus audio.
+#[test]
+#[ignore = "requires piper + ffmpeg on PATH and TALETREK_VOICE_PATH; see docs/specs/desktop-synth-app/runbook.md"]
+fn parse_then_synth_txt_two_step_produces_full_opus_bundle() {
+    let Some((piper, ffmpeg, voice_model)) = gate() else {
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir for e2e");
+    let src = dir.path().join("fable.txt");
+    write_txt_source(&src);
+
+    // Step 1: parse → default output beside the input (<stem>.taletrek).
+    run_desktop("parse", &["--input".into(), src.display().to_string()]);
+    let text_only = dir.path().join("fable.taletrek");
+    assert!(
+        text_only.is_file(),
+        "parse default output must exist at {}",
+        text_only.display()
+    );
+    let pre = taletrek_synth::read_book_bundle(&fs::read(&text_only).unwrap()).unwrap();
+    assert!(!pre.manifest.audio.present, "parse output is text-only");
+
+    // Step 2: synth the produced bundle → full audio bundle.
+    let full = dir.path().join("fable.synth.taletrek");
+    run_desktop(
+        "synth",
+        &common_args(&text_only, &full, &voice_model, &piper, &ffmpeg),
+    );
+    let bundle = taletrek_synth::read_book_bundle(&fs::read(&full).unwrap()).unwrap();
+    assert_full_opus_bundle(&bundle, 2);
+    assert_eq!(bundle.manifest.book.source_format, "txt");
+    assert_eq!(
+        bundle.manifest.book.chapter_count, 2,
+        "txt chapter split ran"
+    );
+}
+
+/// End-to-end (kernel-parse T11): the chained one-command path — `synth
+/// --input fable.txt` parses the source in memory and synthesizes it in one
+/// invocation. Proves the chain needs no intermediate bundle on disk and that
+/// the default output follows the unchanged naming rule (`<stem>.synth.taletrek`).
+#[test]
+#[ignore = "requires piper + ffmpeg on PATH and TALETREK_VOICE_PATH; see docs/specs/desktop-synth-app/runbook.md"]
+fn chained_synth_on_txt_source_produces_full_opus_bundle() {
+    let Some((piper, ffmpeg, voice_model)) = gate() else {
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir for e2e");
+    let src = dir.path().join("fable.txt");
+    write_txt_source(&src);
+
+    // One command, no --output: the default must land beside the source as
+    // <stem>.synth.taletrek.
+    run_desktop(
+        "synth",
+        &[
+            "--input".into(),
+            src.display().to_string(),
+            "--voice-path".into(),
+            voice_model.display().to_string(),
+            "--jobs".into(),
+            "1".into(),
+            "--piper".into(),
+            piper.clone(),
+            "--ffmpeg".into(),
+            ffmpeg.clone(),
+        ],
+    );
+    let output = dir.path().join("fable.synth.taletrek");
+    assert!(
+        output.is_file(),
+        "chained default output must exist at {}",
+        output.display()
+    );
+    assert!(
+        !dir.path().join("fable.taletrek").exists(),
+        "the chain is in memory — no intermediate text-only bundle on disk"
+    );
+
+    let bundle = taletrek_synth::read_book_bundle(&fs::read(&output).unwrap()).unwrap();
+    assert_full_opus_bundle(&bundle, 2);
+    assert_eq!(bundle.manifest.book.source_format, "txt");
+    assert_eq!(
+        bundle.manifest.book.chapter_count, 2,
+        "txt chapter split ran"
+    );
 }

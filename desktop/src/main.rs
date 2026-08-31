@@ -13,13 +13,15 @@ mod bundle_io;
 mod cli;
 
 use std::fs;
+use std::path::Path;
 use std::thread::available_parallelism;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 
 use taletrek_parse::SourceFormat;
-use taletrek_synth::{read_book_bundle, OpusEncoder, SubprocessPiperRunner};
+use taletrek_synth::synth::PiperRunner;
+use taletrek_synth::{read_book_bundle, BookBundle, Encoder, OpusEncoder, SubprocessPiperRunner};
 use taletrek_worker::{
     default_cache_dir, resolve_voice, Progress, ResolveOpts, UreqVoiceSource, DEFAULT_VOICE_ID,
 };
@@ -113,7 +115,8 @@ pub struct UnsupportedExtensionError {
 
 /// `synth` subcommand handler.
 ///
-/// Loads a text-only bundle, refuses an already-full input (pointing the user
+/// Loads a text-only bundle (or parses a source document in memory — the
+/// chained one-command path), refuses an already-full input (pointing the user
 /// at `resynth`), resolves the voice (curated download or `--voice-path`),
 /// synthesizes every paragraph in parallel, stamps the manifest, and writes the
 /// result beside the input (or to `--output`). Progress flows to stderr
@@ -121,11 +124,42 @@ pub struct UnsupportedExtensionError {
 /// summary.
 fn run_synth(common: CommonArgs) -> Result<()> {
     let progress = Progress::to_stderr();
+    let encoder = OpusEncoder::new().with_binary(common.ffmpeg.clone());
+    let piper_bin = common.piper.clone();
+    run_synth_with(
+        common,
+        Some(&progress),
+        move || SubprocessPiperRunner::new(&piper_bin),
+        &encoder,
+    )
+}
 
-    // Load + guard: synth only accepts text-only bundles.
-    let input_bytes = fs::read(&common.input)
-        .with_context(|| format!("reading input bundle {}", common.input.display()))?;
-    let mut bundle = read_book_bundle(&input_bytes)?;
+/// The injectable core of `run_synth`: everything after CLI parsing, with the
+/// synth engine (runner factory + encoder) and progress as seams so unit tests
+/// drive the full pipeline — input dispatch included — with in-process stubs.
+///
+/// The input dispatch ([`load_synth_input`]) runs first, before voice
+/// resolution, so a bad input path or unsupported source extension fails fast
+/// without touching the network or spawning anything.
+fn run_synth_with<R, E, F>(
+    common: CommonArgs,
+    progress: Option<&Progress>,
+    make_runner: F,
+    encoder: &E,
+) -> Result<()>
+where
+    R: PiperRunner + Send,
+    E: Encoder + Sync,
+    F: Fn() -> R + Sync,
+{
+    let voice_id = common
+        .voice
+        .clone()
+        .unwrap_or_else(|| DEFAULT_VOICE_ID.to_string());
+
+    // Load + guard: synth only accepts text-only bundles (a chained source
+    // is parsed into a fresh one, so the guard is trivially satisfied there).
+    let mut bundle = load_synth_input(&common.input, &voice_id)?;
     refuse_full_input(&bundle, &common.input)?;
 
     // Resolve the voice model: curated id (cache or download) or --voice-path.
@@ -134,42 +168,72 @@ fn run_synth(common: CommonArgs) -> Result<()> {
     )?;
     let opts = ResolveOpts::new(common.voice_path.clone(), cache_dir);
     let voice_model = resolve_voice(
-        common.voice.as_deref(),
+        Some(&voice_id),
         &opts,
         &UreqVoiceSource,
-        Some(&progress),
+        progress.map(|p| p as &dyn taletrek_worker::ProgressSink),
     )
     .context("resolving voice model")?;
-    let voice_id = common
-        .voice
-        .clone()
-        .unwrap_or_else(|| DEFAULT_VOICE_ID.to_string());
 
     // Parallel synth + manifest stamp. A fresh runner is constructed per
     // paragraph (each task owns its own `&mut R`); the encoder is shared by ref.
-    let encoder = OpusEncoder::new().with_binary(common.ffmpeg.clone());
-    let piper_bin = common.piper.clone();
     let jobs = common.jobs.unwrap_or_else(default_jobs);
     synth_and_stamp(
         &mut bundle,
         &voice_id,
         &voice_model,
-        move || SubprocessPiperRunner::new(&piper_bin),
-        &encoder,
+        make_runner,
+        encoder,
         jobs,
-        Some(&progress),
+        progress.map(|p| p as &dyn taletrek_worker::ProgressSink),
     )?;
 
     // Write the full bundle out: explicit --output, else <stem>.synth.taletrek
-    // beside the input.
+    // beside the input (a chained source keeps its own stem: fable.txt →
+    // fable.synth.taletrek — the unchanged naming rule).
     let output = common
         .output
         .clone()
         .unwrap_or_else(|| default_synth_output(&common.input));
     write_book_bundle_file(&bundle, &output)
         .with_context(|| format!("writing output bundle {}", output.display()))?;
-    progress.summary("synth", bundle.audio.len(), &voice_id, &output);
+    if let Some(p) = progress {
+        p.summary("synth", bundle.audio.len(), &voice_id, &output);
+    }
     Ok(())
+}
+
+/// `synth --input` dispatch: a `.taletrek` file is read as a bundle (the
+/// original two-step path); any other known source extension is parsed in
+/// memory into a fresh text-only bundle (the chained one-command path — no
+/// intermediate file). Anything else is the T5 typed error.
+///
+/// The chained bundle is stamped with `voice_id` — the voice `synth` will use —
+/// so the manifest and the content-addressed audio keys agree.
+fn load_synth_input(input: &Path, voice_id: &str) -> Result<BookBundle> {
+    let is_bundle = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("taletrek"));
+    if is_bundle {
+        let input_bytes =
+            fs::read(input).with_context(|| format!("reading input bundle {}", input.display()))?;
+        return Ok(read_book_bundle(&input_bytes)?);
+    }
+
+    let format = source_format_for_extension(input)?;
+    let input_bytes =
+        fs::read(input).with_context(|| format!("reading source document {}", input.display()))?;
+    let hint = input
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_owned);
+    let book = taletrek_parse::parse_source(&input_bytes, format, hint.as_deref())?;
+    Ok(taletrek_parse::to_text_only_bundle(
+        &book,
+        voice_id,
+        desktop_generator(),
+    ))
 }
 
 /// `resynth` subcommand handler.
@@ -374,5 +438,175 @@ mod tests {
                 "extension of {name}"
             );
         }
+    }
+
+    // ---- chained synth (T11) ----
+
+    use taletrek_synth::synth::{PiperRunner, SynthError};
+    use taletrek_synth::{AudioCodec, WavPassthrough};
+
+    /// Canonical mono 16-bit 16 kHz WAV wrapping `pcm` — the shape Piper
+    /// emits on stdout. Mirrors the stub in `bundle_io` tests so the chained
+    /// dispatch tests here stay self-contained.
+    fn canonical_wav(pcm: &[u8]) -> Vec<u8> {
+        let data_len = u32::try_from(pcm.len()).unwrap();
+        let mut out = Vec::with_capacity(44 + pcm.len());
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(36 + data_len).to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(b"fmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&16_000u32.to_le_bytes());
+        out.extend_from_slice(&32_000u32.to_le_bytes());
+        out.extend_from_slice(&2u16.to_le_bytes());
+        out.extend_from_slice(&16u16.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data_len.to_le_bytes());
+        out.extend_from_slice(pcm);
+        out
+    }
+
+    /// In-process runner: a fixed canonical WAV regardless of input.
+    struct StubRunner;
+
+    impl PiperRunner for StubRunner {
+        fn predict(
+            &mut self,
+            _voice_model: &std::path::Path,
+            _text: &str,
+        ) -> Result<Vec<u8>, SynthError> {
+            Ok(canonical_wav(&[0x01, 0x02, 0x03, 0x04]))
+        }
+    }
+
+    /// Write the dummy voice-model pair `resolve_voice`'s `--voice-path` path
+    /// pre-checks for (an `.onnx` + sibling `.json`; contents are never read
+    /// by the stub runner). Returns the `.onnx` path.
+    fn dummy_voice_model(dir: &std::path::Path) -> std::path::PathBuf {
+        let onnx = dir.join("stub.onnx");
+        fs::write(&onnx, b"dummy model").unwrap();
+        fs::write(dir.join("stub.json"), b"{}").unwrap();
+        onnx
+    }
+
+    /// `CommonArgs` pointing at `input` with the stub voice model, one job,
+    /// and placeholder binaries (never spawned — the runner/encoder seams are
+    /// injected by the caller of `run_synth_with`).
+    fn synth_args(input: &std::path::Path, voice_model: &std::path::Path) -> CommonArgs {
+        CommonArgs {
+            input: input.to_path_buf(),
+            voice: None,
+            voice_path: Some(voice_model.to_path_buf()),
+            output: None,
+            jobs: Some(1),
+            piper: "never-spawned".into(),
+            ffmpeg: "never-spawned".into(),
+        }
+    }
+
+    #[test]
+    fn run_synth_with_chained_txt_source_synthesizes_without_a_bundle_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = write_input(
+            dir.path(),
+            "fable.txt",
+            "Chapter One\n\nThe North Wind and the Sun were disputing.\n\nChapter Two\n\nThey parted as friends.",
+        );
+        let voice_model = dummy_voice_model(dir.path());
+
+        run_synth_with(
+            synth_args(&input, &voice_model),
+            None,
+            || StubRunner,
+            &WavPassthrough,
+        )
+        .expect("chained synth should succeed");
+
+        // Default output for a chained run: <stem>.synth.taletrek beside the
+        // source — the unchanged synth naming rule applied to the source path.
+        let output = dir.path().join("fable.synth.taletrek");
+        assert!(output.is_file(), "chained output at {}", output.display());
+        // The chain is in memory: no intermediate text-only bundle is written.
+        assert!(
+            !dir.path().join("fable.taletrek").exists(),
+            "no intermediate .taletrek may hit disk"
+        );
+
+        let bundle = read_book_bundle(&fs::read(&output).unwrap()).unwrap();
+        assert!(bundle.manifest.audio.present, "chained output is full");
+        assert_eq!(
+            bundle.manifest.audio.codec,
+            AudioCodec::Wav,
+            "stub encoder codec"
+        );
+        assert_eq!(
+            bundle.manifest.audio.segment_count, 2,
+            "2 distinct paragraphs"
+        );
+        assert_eq!(bundle.audio.len(), 2);
+        assert_eq!(bundle.manifest.book.voice_id, DEFAULT_VOICE_ID);
+        assert_eq!(bundle.manifest.book.source_format, "txt");
+        assert_eq!(bundle.manifest.book.chapter_count, 2);
+        assert_eq!(
+            bundle.manifest.generator.app,
+            crate::bundle_io::GENERATOR_APP
+        );
+        for seg in bundle.audio.values() {
+            assert!(seg.bytes.starts_with(b"RIFF"), "stub WAV passthrough");
+        }
+    }
+
+    #[test]
+    fn run_synth_with_taletrek_input_still_loads_the_bundle_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = write_input(
+            dir.path(),
+            "fable.txt",
+            "Chapter One\n\nThe North Wind and the Sun were disputing.\n\nChapter Two\n\nThey parted as friends.",
+        );
+        run_parse(ParseArgs {
+            input: source,
+            voice: DEFAULT_VOICE_ID.to_string(),
+            output: None,
+        })
+        .expect("parse should succeed");
+        let input = dir.path().join("fable.taletrek");
+        let voice_model = dummy_voice_model(dir.path());
+
+        run_synth_with(
+            synth_args(&input, &voice_model),
+            None,
+            || StubRunner,
+            &WavPassthrough,
+        )
+        .expect("bundle-input synth should succeed");
+
+        let output = dir.path().join("fable.synth.taletrek");
+        assert!(output.is_file(), "default synth output beside input");
+        let bundle = read_book_bundle(&fs::read(&output).unwrap()).unwrap();
+        assert!(bundle.manifest.audio.present);
+        assert_eq!(bundle.manifest.audio.segment_count, 2);
+    }
+
+    #[test]
+    fn run_synth_with_unknown_source_extension_is_the_t5_typed_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = write_input(dir.path(), "book.mobi", "bytes");
+        let voice_model = dummy_voice_model(dir.path());
+
+        let err = run_synth_with(
+            synth_args(&input, &voice_model),
+            None,
+            || StubRunner,
+            &WavPassthrough,
+        )
+        .expect_err("unknown extension must error before any synth");
+
+        let typed = err
+            .downcast::<UnsupportedExtensionError>()
+            .expect("error must be the typed UnsupportedExtensionError");
+        assert!(typed.to_string().contains("book.mobi"));
     }
 }
