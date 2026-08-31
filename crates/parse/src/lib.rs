@@ -23,6 +23,7 @@
 mod bundle;
 mod clean;
 mod detect;
+mod md;
 mod txt;
 
 pub use bundle::to_text_only_bundle;
@@ -82,6 +83,21 @@ pub enum ParseError {
     UnsupportedFormat(SourceFormat),
 }
 
+/// Fallback title (crate-shared) when neither the document nor the filename
+/// hint supplies one.
+pub(crate) const UNTITLED: &str = "Untitled";
+
+/// Derive a filename stem from a hint, path-free: the final path component
+/// without its extension. A leading-dot name (`.hidden`) keeps its dot.
+pub(crate) fn filename_stem(hint: &str) -> Option<String> {
+    let name = hint.rsplit(['/', '\\']).next()?;
+    let stem = match name.rfind('.') {
+        Some(at) if at > 0 => &name[..at],
+        _ => name,
+    };
+    (!stem.is_empty()).then(|| stem.to_owned())
+}
+
 /// Parse `bytes` as the given `format` into a [`ParsedBook`].
 ///
 /// `hint` is the source filename, when known; it supplies metadata fallbacks
@@ -98,6 +114,7 @@ pub fn parse_source(
 ) -> Result<ParsedBook, ParseError> {
     let parsed = match format {
         SourceFormat::Txt => txt::parse_txt(bytes, hint),
+        SourceFormat::Md => md::parse_md(bytes, hint),
         other => return Err(ParseError::UnsupportedFormat(other)),
     };
     Ok(clean_book(&parsed))
@@ -112,7 +129,6 @@ mod tests {
         for format in [
             SourceFormat::Epub,
             SourceFormat::Html,
-            SourceFormat::Md,
             SourceFormat::Docx,
             SourceFormat::Pdf,
         ] {

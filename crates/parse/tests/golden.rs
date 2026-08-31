@@ -43,10 +43,53 @@ fn txt_plain_parses_to_exact_book() {
 }
 
 #[test]
+fn md_parses_to_exact_book() {
+    let bytes = include_bytes!("../testdata/book.md");
+    let book = parse_source(bytes, SourceFormat::Md, Some("book.md")).expect("md parses");
+    assert_eq!(
+        book,
+        ParsedBook {
+            title: "The Old Sea".to_owned(),
+            author: None,
+            source_format: SourceFormat::Md,
+            chapters: vec![
+                ParsedChapter {
+                    title: "The Old Sea".to_owned(),
+                    paragraphs: vec![
+                        "The sea was calm — unnaturally calm — as if it “knew” what was coming."
+                            .to_owned(),
+                        "A Strange Morning".to_owned(),
+                        "The keeper saw a dark sail on the horizon, and noted the bearing in his log due west.".to_owned(),
+                        "He counted the gulls twice, then re-read entry.".to_owned(),
+                    ],
+                },
+                ParsedChapter {
+                    title: "The Storm".to_owned(),
+                    paragraphs: vec![
+                        "It broke at midnight — all wind and salt — and the keeper held the door shut until “the worst of it” had passed. The keeper’s lamp stayed lit.".to_owned(),
+                    ],
+                },
+            ],
+        }
+    );
+}
+
+#[test]
 fn parse_output_is_clean_idempotent() {
-    let fixtures: &[(&[u8], &str)] = &[(include_bytes!("../testdata/plain.txt"), "plain.txt")];
-    for &(bytes, hint) in fixtures {
-        let book = parse_source(bytes, SourceFormat::Txt, Some(hint)).expect("txt parses");
+    let fixtures: &[(&[u8], SourceFormat, &str)] = &[
+        (
+            include_bytes!("../testdata/plain.txt"),
+            SourceFormat::Txt,
+            "plain.txt",
+        ),
+        (
+            include_bytes!("../testdata/book.md"),
+            SourceFormat::Md,
+            "book.md",
+        ),
+    ];
+    for &(bytes, format, hint) in fixtures {
+        let book = parse_source(bytes, format, Some(hint)).expect("fixture parses");
         assert_eq!(
             clean_book(&book),
             book,
