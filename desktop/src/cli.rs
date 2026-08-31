@@ -1,22 +1,27 @@
 //! Command-line interface for `taletrek-desktop`.
 //!
-//! Two subcommands share a common flag set ([`CommonArgs`]):
+//! Three subcommands:
+//! - `parse` — parse a source document (`.epub`/`.txt`/`.html`/`.md`/
+//!   `.docx`/`.pdf`) into a text-only bundle. Owns its flag set
+//!   ([`ParseArgs`]): no voice model, no jobs — nothing to synthesize.
 //! - `synth` — synthesize a text-only bundle into a full audio bundle.
 //! - `resynth` — re-synthesize a bundle with a different voice.
 //!
-//! Phase 1 (T2.1) wires only parsing + dispatch stubs; the synth/resynth
-//! implementations land in later phases (T2.3–T2.5).
+//! (The latter two share [`CommonArgs`]; synth wiring landed in phases
+//! T2.3–T2.6 of the desktop effort, parse in kernel-parse T5.)
 
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
+
+use taletrek_worker::DEFAULT_VOICE_ID;
 
 /// Top-level CLI parsed from `std::env::args`.
 #[derive(Parser, Debug)]
 #[command(
     name = "taletrek-desktop",
     version,
-    about = "Off-device TaleTrek synth — text-only .taletrek bundle in, full bundle out"
+    about = "TaleTrek desktop kernel — parse source documents into .taletrek bundles, synth/resynth them to audio"
 )]
 pub struct Cli {
     /// The subcommand to run.
@@ -27,6 +32,12 @@ pub struct Cli {
 /// The available subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
+    /// Parse a source document into a text-only `.taletrek` bundle.
+    Parse {
+        /// Parse-specific flags.
+        #[command(flatten)]
+        args: ParseArgs,
+    },
     /// Synthesize a text-only bundle into a full audio bundle.
     Synth {
         /// Shared flags.
@@ -39,6 +50,24 @@ pub enum Cmd {
         #[command(flatten)]
         common: CommonArgs,
     },
+}
+
+/// Flags for `parse`.
+#[derive(Args, Debug)]
+pub struct ParseArgs {
+    /// Input source document (`.epub`, `.txt`, `.html`, `.htm`, `.md`,
+    /// `.markdown`, `.docx`, or `.pdf`).
+    #[arg(long)]
+    pub input: PathBuf,
+
+    /// Voice id stamped into the manifest — the voice a later `synth` will
+    /// use. Omit for the curated default (`en_US-hfc_female-medium`).
+    #[arg(long, default_value = DEFAULT_VOICE_ID)]
+    pub voice: String,
+
+    /// Output bundle path. Default: beside the input (`<stem>.taletrek`).
+    #[arg(long)]
+    pub output: Option<PathBuf>,
 }
 
 /// Flags shared by `synth` and `resynth`.
@@ -139,6 +168,48 @@ mod tests {
     #[test]
     fn missing_input_is_rejected() {
         let result = Cli::try_parse_from(["taletrek-desktop", "synth"]);
+        assert!(result.is_err(), "--input is required");
+    }
+
+    #[test]
+    fn parse_defaults_voice_to_curated_default() {
+        let cli = Cli::parse_from(["taletrek-desktop", "parse", "--input", "book.txt"]);
+        let Cmd::Parse { args } = cli.command else {
+            panic!("expected Parse, got {:?}", cli.command);
+        };
+        assert_eq!(args.input, PathBuf::from("book.txt"));
+        assert_eq!(
+            args.voice, "en_US-hfc_female-medium",
+            "voice omitted → curated default, resolved by clap"
+        );
+        assert!(
+            args.output.is_none(),
+            "output omitted → None (default applied by handler)"
+        );
+    }
+
+    #[test]
+    fn parse_accepts_explicit_voice_and_output() {
+        let cli = Cli::parse_from([
+            "taletrek-desktop",
+            "parse",
+            "--input",
+            "novel.epub",
+            "--voice",
+            "en_US-ryan-medium",
+            "--output",
+            "out/novel.taletrek",
+        ]);
+        let Cmd::Parse { args } = cli.command else {
+            panic!("expected Parse");
+        };
+        assert_eq!(args.voice, "en_US-ryan-medium");
+        assert_eq!(args.output, Some(PathBuf::from("out/novel.taletrek")));
+    }
+
+    #[test]
+    fn parse_missing_input_is_rejected() {
+        let result = Cli::try_parse_from(["taletrek-desktop", "parse"]);
         assert!(result.is_err(), "--input is required");
     }
 }

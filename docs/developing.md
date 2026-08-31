@@ -10,7 +10,7 @@
 | App            | Command                | URL                            | Needs                        |
 | -------------- | ---------------------- | ------------------------------ | ---------------------------- |
 | SPA / PWA      | `just dev-web`         | <http://localhost:8253>        | nothing                      |
-| Desktop (CLI)  | `just synth IN OUT`    | writes a `.taletrek` file      | `just setup`                 |
+| Desktop (CLI)  | `just parse IN OUT` / `just synth IN OUT` | writes a `.taletrek` file      | `just setup` (synth only)     |
 
 First time in the repo: `just setup` (pnpm install + native piper + seeded
 voice into `~/.cache/taletrek/` — no sudo, idempotent).
@@ -27,12 +27,18 @@ voice into `~/.cache/taletrek/` — no sudo, idempotent).
 - Fully self-contained: reader + playback of imported bundles; no native deps.
 - Prod build / preview: `pnpm build` then `pnpm preview`.
 
-## Desktop — `just synth` / `just resynth`
+## Desktop — `just parse` / `just synth` / `just resynth`
 
 The desktop app is a headless CLI (no long-running process), so "dev-desktop"
-is a one-shot synth:
+is a one-shot parse or synth:
 
 ```
+# source document → text-only bundle (txt/md/html/epub/docx/pdf)
+just parse crates/parse/testdata/plain.txt /tmp/plain.taletrek
+# or the shortcut:
+just parse-fixture
+
+# text-only bundle → full audio bundle
 just synth crates/synth/tests/fixtures/book-text-only.taletrek /tmp/book.synth.taletrek
 # or the shortcut:
 just synth-fixture
