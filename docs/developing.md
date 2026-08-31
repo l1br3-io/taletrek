@@ -42,10 +42,20 @@ just parse-fixture
 just synth crates/synth/tests/fixtures/book-text-only.taletrek /tmp/book.synth.taletrek
 # or the shortcut:
 just synth-fixture
+
+# chained one-command: source document → full audio bundle (parse + synth in memory)
+just synth crates/parse/testdata/plain.txt /tmp/plain.synth.taletrek
+# or the shortcut:
+just chain-fixture
 ```
 
 - `--piper` is pre-wired to the `just setup` cache; the voice auto-resolves
   from the seeded cache (no download on first run).
+- `synth --input` accepts a source document (`.txt`/`.md`/`.html`/`.epub`/
+  `.docx`/`.pdf`) as well as a `.taletrek` bundle — sources are parsed in
+  memory first, so nothing intermediate hits disk; the default output keeps
+  the synth naming rule (`<stem>.synth.taletrek`). `resynth` stays
+  bundle-only.
 - Re-voice an existing full bundle:
   `just resynth /tmp/book.synth.taletrek en_US-ryan-medium /tmp/book.ryan.taletrek`
 - Verify + listen:

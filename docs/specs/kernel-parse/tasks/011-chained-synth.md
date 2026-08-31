@@ -3,15 +3,15 @@
 **Description:** The one-command pipeline from the spec's locked CLI decision: when `synth --input` names a supported source file (not `.taletrek`), parse it in memory first, then run the existing synth path unchanged. Plus the `--ignored` real-engine test proving the whole chain.
 
 **Work:**
-- [ ] `desktop/src/main.rs` — in the synth handler: `.taletrek` input → existing path; known source extension → `parse_source` → `to_text_only_bundle` → existing synth path; default output for chained runs = `<stem>.synth.taletrek` (unchanged naming rule); unknown extension → the T5 error
-- [ ] `resynth` stays bundle-only (documented in its `--help`)
-- [ ] Unit test of the dispatch branch with a mock runner (TXT source in, synth path entered, bundle not required on disk)
-- [ ] `#[ignore]`d e2e test (real piper+ffmpeg, `TALETREK_PIPER_BIN`/`TALETREK_VOICE_PATH` per `docs/testing.md` + `just test-e2e`): `parse` TXT fixture → `synth` the produced bundle → full audio bundle asserts (audio present, segments > 0, opus codec); plus the chained one-shot variant
-- [ ] `justfile` — extend or add a `chain-fixture` recipe if it earns its line (optional)
+- [x] `desktop/src/main.rs` — in the synth handler: `.taletrek` input → existing path; known source extension → `parse_source` → `to_text_only_bundle` → existing synth path; default output for chained runs = `<stem>.synth.taletrek` (unchanged naming rule); unknown extension → the T5 error
+- [x] `resynth` stays bundle-only (documented in its `--help`)
+- [x] Unit test of the dispatch branch with a mock runner (TXT source in, synth path entered, bundle not required on disk)
+- [x] `#[ignore]`d e2e test (real piper+ffmpeg, `TALETREK_PIPER_BIN`/`TALETREK_VOICE_PATH` per `docs/testing.md` + `just test-e2e`): `parse` TXT fixture → `synth` the produced bundle → full audio bundle asserts (audio present, segments > 0, opus codec); plus the chained one-shot variant
+- [x] `justfile` — extend or add a `chain-fixture` recipe if it earns its line (optional)
 
 **Acceptance:**
-- [ ] Chained unit test green hermetically; `--ignored` e2e green with real engines
-- [ ] `just parse-fixture && just synth-fixture` still green (no regression to the two-step path)
+- [x] Chained unit test green hermetically; `--ignored` e2e green with real engines
+- [x] `just parse-fixture && just synth-fixture` still green (no regression to the two-step path)
 
 **Verify:** `cargo test --workspace --quiet` + `just test-e2e` (env-gated)
 

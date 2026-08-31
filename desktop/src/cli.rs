@@ -4,8 +4,10 @@
 //! - `parse` — parse a source document (`.epub`/`.txt`/`.html`/`.md`/
 //!   `.docx`/`.pdf`) into a text-only bundle. Owns its flag set
 //!   ([`ParseArgs`]): no voice model, no jobs — nothing to synthesize.
-//! - `synth` — synthesize a text-only bundle into a full audio bundle.
-//! - `resynth` — re-synthesize a bundle with a different voice.
+//! - `synth` — synthesize a text-only bundle into a full audio bundle; when
+//!   `--input` names a source document instead, parse it in memory first
+//!   (the chained one-command path, kernel-parse T11).
+//! - `resynth` — re-synthesize a bundle with a different voice (bundle-only).
 //!
 //! (The latter two share [`CommonArgs`]; synth wiring landed in phases
 //! T2.3–T2.6 of the desktop effort, parse in kernel-parse T5.)
@@ -38,13 +40,17 @@ pub enum Cmd {
         #[command(flatten)]
         args: ParseArgs,
     },
-    /// Synthesize a text-only bundle into a full audio bundle.
+    /// Synthesize a text-only bundle into a full audio bundle. `--input` may
+    /// also name a source document (`.epub`/`.txt`/`.html`/`.md`/`.docx`/
+    /// `.pdf`) — it is parsed in memory first (chained one-command path).
     Synth {
         /// Shared flags.
         #[command(flatten)]
         common: CommonArgs,
     },
     /// Re-synthesize a bundle with a different voice (whole-book voice swap).
+    /// Bundle-only: `--input` must be a `.taletrek` (full or text-only) —
+    /// source documents belong to `synth`.
     Resynth {
         /// Shared flags.
         #[command(flatten)]
@@ -73,7 +79,10 @@ pub struct ParseArgs {
 /// Flags shared by `synth` and `resynth`.
 #[derive(Args, Debug)]
 pub struct CommonArgs {
-    /// Input bundle path (`.taletrek`).
+    /// Input bundle path (`.taletrek`). `synth` also accepts a source
+    /// document (`.epub`, `.txt`, `.html`, `.htm`, `.md`, `.markdown`,
+    /// `.docx`, `.pdf`) — parsed in memory first, then synthesized
+    /// (chained one-command path). `resynth` is bundle-only.
     #[arg(long)]
     pub input: PathBuf,
 
@@ -211,5 +220,29 @@ mod tests {
     fn parse_missing_input_is_rejected() {
         let result = Cli::try_parse_from(["taletrek-desktop", "parse"]);
         assert!(result.is_err(), "--input is required");
+    }
+
+    #[test]
+    fn help_documents_the_chained_synth_and_bundle_only_resynth() {
+        use clap::CommandFactory as _;
+        let cmd = Cli::command();
+        let synth_about = cmd
+            .find_subcommand("synth")
+            .and_then(|c| c.get_about())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        assert!(
+            synth_about.to_lowercase().contains("source"),
+            "synth --help must mention source documents (chained path), got: {synth_about}"
+        );
+        let resynth_about = cmd
+            .find_subcommand("resynth")
+            .and_then(|c| c.get_about())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        assert!(
+            resynth_about.to_lowercase().contains("bundle"),
+            "resynth --help must document that it is bundle-only, got: {resynth_about}"
+        );
     }
 }

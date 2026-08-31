@@ -39,6 +39,10 @@ parse INPUT OUTPUT:
 parse-fixture:
     @just parse crates/parse/testdata/plain.txt /tmp/plain.taletrek
 
+# Convenience: chained one-shot — synth straight from the committed TXT source → /tmp/plain.synth.taletrek
+chain-fixture:
+    @just synth crates/parse/testdata/plain.txt /tmp/plain.synth.taletrek
+
 # SPA tests (vitest)
 test-web:
     pnpm test
