@@ -247,6 +247,8 @@ describe('importBookBundle — sourceFormat mapping', () => {
     ['mobi', 'mobi'],
     ['txt', 'txt'],
     ['md', 'md'],
+    ['html', 'html'],
+    ['docx', 'docx'],
   ] as const)('maps bundle sourceFormat "%s" to BookFormat "%s"', async (sf, expected) => {
     const bundle = fullBundle()
     bundle.manifest.book.sourceFormat = sf

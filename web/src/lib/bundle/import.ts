@@ -51,6 +51,8 @@ function sourceFormatToBookFormat(sf: BundleSourceFormat): BookFormat {
     case 'mobi':
     case 'txt':
     case 'md':
+    case 'html':
+    case 'docx':
       return sf
     case 'unknown':
       return 'txt'
@@ -82,6 +84,10 @@ function sourceFormatMime(sf: BundleSourceFormat): string {
       return 'text/plain'
     case 'md':
       return 'text/markdown'
+    case 'html':
+      return 'text/html'
+    case 'docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     case 'unknown':
       return 'application/octet-stream'
   }
