@@ -64,3 +64,18 @@ $ cargo run --bin dump                     # raw page-1 string, whitespace fidel
 $ cargo test --workspace --quiet           # in repo — spike left no crate code behind
   (green — see T2 commit CI/local run)
 ```
+
+### Addendum — T10 fixture amendment (2026-08-31)
+
+T10's acceptance requires the fixtures to include page-number lines (so
+the goldens exercise the clean seam's page-number drop). The generator
+was reconstructed byte-for-byte from the committed files (verified:
+`--t2` mode reproduced both original sha256s before amendment), then
+gained one page-number text line per page (bottom, y=18). Regeneration
+remains byte-stable (two runs, `cmp`-identical) and poppler-validated:
+
+- `with-outline.pdf`: 2,593 B — `sha256 baba83c3f7831763e6d7af97dff4f5dcfe33622fb31abfd2bed11cfba70fed63`
+- `no-outline.pdf`: 1,950 → 2,001 B — `sha256 38e4ddec541912495d2fa5218ef83509e2d423c3c995dc09e2322a6226523ebd`
+
+The hashes above supersede the originals recorded in the verdict body;
+structure (object graph, outline tree, Info dict) is unchanged.

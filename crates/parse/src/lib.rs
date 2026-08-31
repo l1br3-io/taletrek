@@ -27,6 +27,7 @@ mod docx;
 mod epub;
 mod html;
 mod md;
+mod pdf;
 mod txt;
 
 pub use bundle::to_text_only_bundle;
@@ -94,7 +95,9 @@ impl std::fmt::Display for SourceFormat {
 /// Failures that can occur while parsing a source document.
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
-    /// The format has no parser yet (parsers land one task at a time).
+    /// The format has no parser. No [`SourceFormat`] variant hits this
+    /// today (all six parse); the variant stays in the public API so a
+    /// future format can land without breaking it.
     #[error("no parser implemented for this source format yet")]
     UnsupportedFormat(SourceFormat),
     /// The container is structurally invalid — a corrupt zip, a missing
@@ -171,7 +174,7 @@ pub fn parse_source(
         SourceFormat::Html => html::parse_html(bytes, hint),
         SourceFormat::Epub => return epub::parse_epub(bytes, hint).map(|book| clean_book(&book)),
         SourceFormat::Docx => return docx::parse_docx(bytes, hint).map(|book| clean_book(&book)),
-        other => return Err(ParseError::UnsupportedFormat(other)),
+        SourceFormat::Pdf => return pdf::parse_pdf(bytes, hint).map(|book| clean_book(&book)),
     };
     Ok(clean_book(&parsed))
 }
@@ -179,12 +182,6 @@ pub fn parse_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn unsupported_formats_error_until_their_parser_lands() {
-        let err = parse_source(b"x", SourceFormat::Pdf, None).unwrap_err();
-        assert!(matches!(err, ParseError::UnsupportedFormat(got) if got == SourceFormat::Pdf));
-    }
 
     #[test]
     fn parse_source_strips_structural_noise() {
