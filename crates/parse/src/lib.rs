@@ -14,11 +14,18 @@
 //! Format detection ([`detect_format`]) is content-based where a magic
 //! signature exists (PDF, EPUB, DOCX). TXT, Markdown, and HTML carry no
 //! magic bytes and are extension-mapped by the caller instead.
+//!
+//! The interchange hop lives here too: [`to_text_only_bundle`] wraps a
+//! [`ParsedBook`] into a v1 text-only `.taletrek` bundle, stamping fresh
+//! ids and now-ms timestamps — the one place this crate touches
+//! randomness or the clock.
 
+mod bundle;
 mod clean;
 mod detect;
 mod txt;
 
+pub use bundle::to_text_only_bundle;
 pub use clean::clean_book;
 pub use detect::detect_format;
 
