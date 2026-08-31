@@ -1,9 +1,11 @@
 //! Golden-fixture tests: committed source files parsed to exact `ParsedBook`s.
 //!
 //! One committed fixture per format is the primary gate of this crate — no
-//! format ships without one. This is the TXT fixture (chapter lines plus
-//! URL/footnote/image/page-number noise, all consumed by the M4 clean seam);
-//! later tasks append their format's fixture test here.
+//! format ships without one. The TXT fixture carries chapter lines plus
+//! URL/footnote/image/page-number noise (all consumed by the M4 clean seam);
+//! the PDF fixtures come in two shapes — with and without an `/Outlines`
+//! tree — pinning ADR-0008's tier-1 outline rule; every other format pins
+//! its own structural split.
 //!
 //! The clean-idempotence contract — parse output must survive [`clean_book`]
 //! unchanged, mirroring the reader's `cleanChapters` — is pinned for every
@@ -177,6 +179,84 @@ fn docx_parses_to_exact_book() {
     );
 }
 
+/// ADR-0008 tier-1 (kernel edition): an embedded `/Outlines` tree with
+/// ≥ 2 resolvable top-level entries is the sole deterministic chapter
+/// source. This fixture has three (plus a nested level-2 child that v1
+/// flattens away — no page it can own), so the golden expects
+/// outline-titled chapters and nothing invented: no font signals, no
+/// keyword heuristics. Headings the layout prints on the page itself
+/// merge into the chapter's first paragraph — honest PDF-text behavior.
+#[test]
+fn with_outline_pdf_parses_to_exact_book() {
+    let bytes = include_bytes!("../testdata/with-outline.pdf");
+    let book =
+        parse_source(bytes, SourceFormat::Pdf, Some("with-outline.pdf")).expect("pdf parses");
+    assert_eq!(
+        book,
+        ParsedBook {
+            title: "The North Wind and the Sun".to_owned(),
+            author: Some("Aesop".to_owned()),
+            source_format: SourceFormat::Pdf,
+            chapters: vec![
+                ParsedChapter {
+                    title: "Chapter One".to_owned(),
+                    paragraphs: vec![
+                        "Chapter One The North Wind and the Sun were disputing which was the stronger, when a traveler came along wrapped in a warm cloak."
+                            .to_owned(),
+                        "They agreed that the one who first made the traveler take off his cloak should be considered stronger than the other."
+                            .to_owned(),
+                    ],
+                },
+                ParsedChapter {
+                    title: "Chapter Two".to_owned(),
+                    paragraphs: vec![
+                        "Chapter Two Then the North Wind blew as hard as he could; but the more he blew the more closely did the traveler fold his cloak around him; and at last the North Wind gave up the attempt."
+                            .to_owned(),
+                    ],
+                },
+                ParsedChapter {
+                    title: "Chapter Three".to_owned(),
+                    paragraphs: vec![
+                        "Chapter Three Then the Sun shone out warmly, and immediately the traveler took off his cloak. And so the North Wind was obliged to confess that the Sun was stronger of the two."
+                            .to_owned(),
+                    ],
+                },
+            ],
+        }
+    );
+}
+
+/// ADR-0008 tier-1 miss: fewer than 2 resolvable outline entries (< 2 —
+/// here zero, no `/Outlines` at all) means a single-chapter book, titled
+/// by the filename-stem fallback. No heuristic path exists to test — the
+/// assertion is that nothing splits.
+#[test]
+fn no_outline_pdf_is_exactly_one_chapter() {
+    let bytes = include_bytes!("../testdata/no-outline.pdf");
+    let book = parse_source(bytes, SourceFormat::Pdf, Some("no-outline.pdf")).expect("pdf parses");
+    assert_eq!(
+        book,
+        ParsedBook {
+            title: "The North Wind and the Sun".to_owned(),
+            author: Some("Aesop".to_owned()),
+            source_format: SourceFormat::Pdf,
+            chapters: vec![ParsedChapter {
+                title: "no-outline".to_owned(),
+                paragraphs: vec![
+                    "Chapter One The North Wind and the Sun were disputing which was the stronger, when a traveler came along wrapped in a warm cloak."
+                        .to_owned(),
+                    "They agreed that the one who first made the traveler take off his cloak should be considered stronger than the other."
+                        .to_owned(),
+                    "Chapter Two Then the North Wind blew as hard as he could; but the more he blew the more closely did the traveler fold his cloak around him; and at last the North Wind gave up the attempt."
+                        .to_owned(),
+                    "Chapter Three Then the Sun shone out warmly, and immediately the traveler took off his cloak. And so the North Wind was obliged to confess that the Sun was stronger of the two."
+                        .to_owned(),
+                ],
+            }],
+        }
+    );
+}
+
 #[test]
 fn parse_output_is_clean_idempotent() {
     let fixtures: &[(&[u8], SourceFormat, &str)] = &[
@@ -204,6 +284,16 @@ fn parse_output_is_clean_idempotent() {
             include_bytes!("../testdata/doc.docx"),
             SourceFormat::Docx,
             "doc.docx",
+        ),
+        (
+            include_bytes!("../testdata/with-outline.pdf"),
+            SourceFormat::Pdf,
+            "with-outline.pdf",
+        ),
+        (
+            include_bytes!("../testdata/no-outline.pdf"),
+            SourceFormat::Pdf,
+            "no-outline.pdf",
         ),
     ];
     for &(bytes, format, hint) in fixtures {
