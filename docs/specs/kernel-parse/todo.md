@@ -8,7 +8,7 @@
 - [x] T6 — MD parser (`pulldown-cmark`) → [`tasks/006-md-parser.md`](./tasks/006-md-parser.md)
 - [x] T7 — HTML parser (`scraper`) → [`tasks/007-html-parser.md`](./tasks/007-html-parser.md)
 - [x] T8 — EPUB parser (zip + quick-xml + html core) → [`tasks/008-epub-parser.md`](./tasks/008-epub-parser.md)
-- [ ] T9 — DOCX parser (zip + quick-xml) → [`tasks/009-docx-parser.md`](./tasks/009-docx-parser.md)
+- [x] T9 — DOCX parser (zip + quick-xml) → [`tasks/009-docx-parser.md`](./tasks/009-docx-parser.md)
 - [ ] T10 — PDF parser (per T2 verdict) → [`tasks/010-pdf-parser.md`](./tasks/010-pdf-parser.md)
 - [ ] T11 — Chained `synth --input <source>` + real-engine e2e (`--ignored`) → [`tasks/011-chained-synth.md`](./tasks/011-chained-synth.md)
 - [ ] T12 — Web: `BundleSourceFormat` + import mapping for `html`/`docx` + TS-side idempotence test → [`tasks/012-web-source-formats.md`](./tasks/012-web-source-formats.md)

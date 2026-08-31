@@ -3,13 +3,13 @@
 **Description:** Word documents → chapters via paragraph styles. DOCX = zip with `word/document.xml` (namespaced `w:` XML) + `docProps/core.xml` metadata. No new deps (zip + quick-xml from T8).
 
 **Work:**
-- [ ] `src/docx.rs` — read `word/document.xml`; stream `w:p` paragraphs (concat `w:t` runs; `w:br`/tabs → space); paragraphs styled `Heading1`/`Title` start chapters and title them (Heading2+ stay in-chapter text — mirrors MD's level rule); empty paragraphs dropped; metadata from `docProps/core.xml` (`dc:title`, `dc:creator`) → fallback `hint` stem
-- [ ] Fixture `testdata/doc.docx`: hand-built minimal zip (`[Content_Types].xml`, `_rels/.rels`, `word/document.xml`, `docProps/core.xml`) with two Heading1 sections + noise
-- [ ] Golden + idempotence tests; non-docx zip / missing document.xml → typed `Malformed { Docx }`
+- [x] `src/docx.rs` — read `word/document.xml`; stream `w:p` paragraphs (concat `w:t` runs; `w:br`/tabs → space); paragraphs styled `Heading1`/`Title` start chapters and title them (Heading2+ stay in-chapter text — mirrors MD's level rule); empty paragraphs dropped; metadata from `docProps/core.xml` (`dc:title`, `dc:creator`) → fallback `hint` stem
+- [x] Fixture `testdata/doc.docx`: hand-built minimal zip (`[Content_Types].xml`, `_rels/.rels`, `word/document.xml`, `docProps/core.xml`) with two Heading1 sections + noise
+- [x] Golden + idempotence tests; non-docx zip / missing document.xml → typed `Malformed { Docx }`
 
 **Acceptance:**
-- [ ] Golden green: Heading1 boundaries + titles, core.xml metadata, runs concatenated correctly
-- [ ] Malformed input typed-errors cleanly
+- [x] Golden green: Heading1 boundaries + titles, core.xml metadata, runs concatenated correctly
+- [x] Malformed input typed-errors cleanly
 
 **Verify:** `cargo test -p taletrek-parse --quiet`
 
