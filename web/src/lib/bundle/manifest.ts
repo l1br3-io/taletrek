@@ -42,11 +42,21 @@ export type GeneratorApp = 'taletrek-spa' | 'taletrek-desktop' | 'taletrek-serve
 export const SPA_GENERATOR_APP: GeneratorApp = 'taletrek-spa'
 
 /**
- * `manifest.book.sourceFormat`. Note the SPA's own `BookFormat` has no
- * `"unknown"`; import maps `unknown → "txt"` (least-lossy default). See
- * `import.ts` + `docs/gotchas.md` (G28).
+ * `manifest.book.sourceFormat`. `html`/`docx` are producer-known values (the
+ * parse kernel emits them); `unknown` survives only on pre-pivot bundles.
+ * Note the SPA's own `BookFormat` has no `"unknown"`; import maps
+ * `unknown → "txt"` (least-lossy default). See `import.ts` +
+ * `docs/gotchas.md` (G28).
  */
-export type BundleSourceFormat = 'pdf' | 'epub' | 'mobi' | 'txt' | 'md' | 'unknown'
+export type BundleSourceFormat =
+  | 'pdf'
+  | 'epub'
+  | 'mobi'
+  | 'txt'
+  | 'md'
+  | 'html'
+  | 'docx'
+  | 'unknown'
 
 /** `manifest.book` — the book-level descriptor. */
 export interface BookMeta {
