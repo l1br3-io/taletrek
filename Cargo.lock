@@ -744,6 +744,7 @@ dependencies = [
 name = "taletrek-parse"
 version = "0.1.0"
 dependencies = [
+ "regex",
  "serde",
  "thiserror",
 ]
