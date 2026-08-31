@@ -9,10 +9,8 @@
 //! keyword regex did (ADR-0008's false positives). Zero headings anywhere →
 //! a single chapter titled from the filename hint's stem.
 
-use crate::{ParsedBook, ParsedChapter, SourceFormat};
-
-/// Fallback title when no filename hint (or an empty stem) is available.
-const UNTITLED: &str = "Untitled";
+use crate::filename_stem;
+use crate::{ParsedBook, ParsedChapter, SourceFormat, UNTITLED};
 
 /// Chapter keywords accepted by the conservative split.
 const CHAPTER_KEYWORDS: [&str; 3] = ["chapter", "part", "section"];
@@ -232,17 +230,6 @@ fn render_roman(mut value: u32) -> String {
         }
     }
     out
-}
-
-/// Derive a filename stem from a hint, path-free: the final path component
-/// without its extension. A leading-dot name (`.hidden`) keeps its dot.
-fn filename_stem(hint: &str) -> Option<String> {
-    let name = hint.rsplit(['/', '\\']).next()?;
-    let stem = match name.rfind('.') {
-        Some(at) if at > 0 => &name[..at],
-        _ => name,
-    };
-    (!stem.is_empty()).then(|| stem.to_owned())
 }
 
 #[cfg(test)]
