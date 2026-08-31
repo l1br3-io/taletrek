@@ -1,7 +1,7 @@
 # TODO — kernel-parse
 
 - [x] T1 — Crate skeleton: `crates/parse` + `ParsedBook` + format detect + TXT (plain) → [`tasks/001-crate-skeleton-txt.md`](./tasks/001-crate-skeleton-txt.md)
-- [ ] T2 — PDF spike: fixture provenance + `pdf-extract`/`lopdf` verdict → [`tasks/002-pdf-spike.md`](./tasks/002-pdf-spike.md)
+- [x] T2 — PDF spike: fixture provenance + `pdf-extract`/`lopdf` verdict → [`tasks/002-pdf-spike.md`](./tasks/002-pdf-spike.md)
 - [ ] T3 — `clean.rs` (M4 structural filters) + TXT chapter line-split → [`tasks/003-clean-txt-chapters.md`](./tasks/003-clean-txt-chapters.md)
 - [ ] T4 — `bundle.rs`: ParsedBook → text-only BookBundle → [`tasks/004-text-only-bundle.md`](./tasks/004-text-only-bundle.md)
 - [ ] T5 — CLI `parse` subcommand + `just parse-fixture` → [`tasks/005-cli-parse.md`](./tasks/005-cli-parse.md)
