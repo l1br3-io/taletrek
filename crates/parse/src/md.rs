@@ -13,7 +13,7 @@
 //! em-dashes and curly quotes in the source survive exactly as written, and
 //! undefined `[n]` markers stay literal for the clean seam to strip.
 
-use crate::filename_stem;
+use crate::{filename_stem, normalize, push_paragraph};
 use crate::{ParsedBook, ParsedChapter, SourceFormat, UNTITLED};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -96,28 +96,6 @@ pub fn parse_md(bytes: &[u8], hint: Option<&str>) -> ParsedBook {
         source_format: SourceFormat::Md,
         chapters,
     }
-}
-
-/// Append `text` to the running chapter, opening a fallback-titled chapter
-/// for content that precedes the first level-1 heading.
-fn push_paragraph(chapters: &mut Vec<ParsedChapter>, fallback_title: &str, text: String) {
-    if chapters.is_empty() {
-        chapters.push(ParsedChapter {
-            title: fallback_title.to_owned(),
-            paragraphs: Vec::new(),
-        });
-    }
-    chapters
-        .last_mut()
-        .expect("just ensured non-empty")
-        .paragraphs
-        .push(text);
-}
-
-/// Collapse whitespace runs to single spaces and trim — the shape every
-/// paragraph and heading text takes.
-fn normalize(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

@@ -23,6 +23,7 @@
 mod bundle;
 mod clean;
 mod detect;
+mod html;
 mod md;
 mod txt;
 
@@ -98,6 +99,33 @@ pub(crate) fn filename_stem(hint: &str) -> Option<String> {
     (!stem.is_empty()).then(|| stem.to_owned())
 }
 
+/// Collapse whitespace runs to single spaces and trim — the shape every
+/// paragraph and heading text takes.
+pub(crate) fn normalize(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Append `text` to the running chapter, opening a fallback-titled chapter
+/// for content that precedes the first split heading — the TXT/MD/HTML
+/// parsers' shared leading-content pattern.
+pub(crate) fn push_paragraph(
+    chapters: &mut Vec<ParsedChapter>,
+    fallback_title: &str,
+    text: String,
+) {
+    if chapters.is_empty() {
+        chapters.push(ParsedChapter {
+            title: fallback_title.to_owned(),
+            paragraphs: Vec::new(),
+        });
+    }
+    chapters
+        .last_mut()
+        .expect("just ensured non-empty")
+        .paragraphs
+        .push(text);
+}
+
 /// Parse `bytes` as the given `format` into a [`ParsedBook`].
 ///
 /// `hint` is the source filename, when known; it supplies metadata fallbacks
@@ -115,6 +143,7 @@ pub fn parse_source(
     let parsed = match format {
         SourceFormat::Txt => txt::parse_txt(bytes, hint),
         SourceFormat::Md => md::parse_md(bytes, hint),
+        SourceFormat::Html => html::parse_html(bytes, hint),
         other => return Err(ParseError::UnsupportedFormat(other)),
     };
     Ok(clean_book(&parsed))
@@ -126,12 +155,7 @@ mod tests {
 
     #[test]
     fn unsupported_formats_error_until_their_parser_lands() {
-        for format in [
-            SourceFormat::Epub,
-            SourceFormat::Html,
-            SourceFormat::Docx,
-            SourceFormat::Pdf,
-        ] {
+        for format in [SourceFormat::Epub, SourceFormat::Docx, SourceFormat::Pdf] {
             let err = parse_source(b"x", format, None).unwrap_err();
             assert!(matches!(err, ParseError::UnsupportedFormat(got) if got == format));
         }
