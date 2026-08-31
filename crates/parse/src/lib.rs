@@ -15,9 +15,11 @@
 //! signature exists (PDF, EPUB, DOCX). TXT, Markdown, and HTML carry no
 //! magic bytes and are extension-mapped by the caller instead.
 
+mod clean;
 mod detect;
 mod txt;
 
+pub use clean::clean_book;
 pub use detect::detect_format;
 
 use serde::{Deserialize, Serialize};
@@ -78,15 +80,20 @@ pub enum ParseError {
 /// `hint` is the source filename, when known; it supplies metadata fallbacks
 /// (title from the filename stem). Parsing never fails on encoding — text is
 /// decoded lossily — but can fail on structurally invalid containers.
+///
+/// Paragraphs come out as canonical clean text: the M4 structural filters
+/// ([`clean_book`]) run here, in `parse_source` itself, so every format gets
+/// identical cleaning through a single seam.
 pub fn parse_source(
     bytes: &[u8],
     format: SourceFormat,
     hint: Option<&str>,
 ) -> Result<ParsedBook, ParseError> {
-    match format {
-        SourceFormat::Txt => Ok(txt::parse_txt(bytes, hint)),
-        other => Err(ParseError::UnsupportedFormat(other)),
-    }
+    let parsed = match format {
+        SourceFormat::Txt => txt::parse_txt(bytes, hint),
+        other => return Err(ParseError::UnsupportedFormat(other)),
+    };
+    Ok(clean_book(&parsed))
 }
 
 #[cfg(test)]
@@ -105,5 +112,40 @@ mod tests {
             let err = parse_source(b"x", format, None).unwrap_err();
             assert!(matches!(err, ParseError::UnsupportedFormat(got) if got == format));
         }
+    }
+
+    #[test]
+    fn parse_source_strips_structural_noise() {
+        let book = parse_source(
+            b"see https://x.io and [1] plus ![img](http://y.io/z.png) end",
+            SourceFormat::Txt,
+            None,
+        )
+        .expect("txt parses");
+        assert_eq!(book.chapters[0].paragraphs, ["see and plus end"]);
+    }
+
+    #[test]
+    fn parse_source_drops_page_number_paragraphs() {
+        let book =
+            parse_source(b"7\n\nkept\n\npage 12", SourceFormat::Txt, None).expect("txt parses");
+        assert_eq!(book.chapters[0].paragraphs, ["kept"]);
+    }
+
+    #[test]
+    fn parse_source_drops_paragraphs_emptied_by_cleaning() {
+        let book = parse_source(
+            b"![cover](http://y.io/c.png)\n\nkept",
+            SourceFormat::Txt,
+            None,
+        )
+        .expect("txt parses");
+        assert_eq!(book.chapters[0].paragraphs, ["kept"]);
+    }
+
+    #[test]
+    fn parse_source_drops_paragraphs_cleaned_to_bare_page_numbers() {
+        let book = parse_source(b"42 https://x.io", SourceFormat::Txt, None).expect("txt parses");
+        assert!(book.chapters[0].paragraphs.is_empty());
     }
 }
