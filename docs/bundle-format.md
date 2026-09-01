@@ -1,6 +1,6 @@
 # TaleTrek Bundle Format (`*.taletrek`)
 
-> **Status:** Canonical spec · v1 (`schemaVersion: 1`) · *2026-08-07: "byte-compatible archives" wording → "mutual round-trip conformance" (clarification only; format unchanged — see Design invariant 2 + §Conformance rules).* *2026-08-30: server references reworded host-neutral after the native pivot (ADR-0015).*
+> **Status:** Canonical spec · v1 (`schemaVersion: 1`) · *2026-08-07: "byte-compatible archives" wording → "mutual round-trip conformance" (clarification only; format unchanged — see Design invariant 2 + §Conformance rules).* *2026-08-30: server references reworded host-neutral after the native pivot (ADR-0015).* *2026-08-31: `sourceFormat` vocabulary grows `html`/`docx` — additive, `schemaVersion` stays 1 (kernel-parse).*
 > **Owners:** every app that reads or writes bundles (SPA / TS, desktop / Rust, and any future native app built on the Rust kernel) MUST conform. Historical `taletrek-server` bundles remain valid v1 archives.
 > Origin ADR: [`adrs/0013-off-device-synth-and-portable-bundles.md`](./adrs/0013-off-device-synth-and-portable-bundles.md).
 
@@ -11,7 +11,7 @@ A **bundle** is the portable interchange unit for one book (or a whole library) 
 1. **Content-addressed audio.** Every audio segment is named by its TaleTrek cache key: `${voiceId}:${NORM_VERSION}:${sha256(normalizedText)}`. Re-importing the same paragraph never double-stores. This is the same key the SPA's `audioCache` IDB store already uses.
 2. **One format, two implementations.** Rust (`crates/synth`) and TypeScript (SPA) must produce mutually-conformant archives: each side must read what the other wrote. A shared fixtures set (under `crates/synth/tests/fixtures/`) is the conformance gate — both sides must round-trip every fixture. The conformance rule is mutual round-trip, **not** byte-identity: ZIP implementations legitimately differ in entry order, compression level, and header timestamps, and pinning those would hurt both sides for no real gain.
 3. **Forward-compatible.** The manifest carries a `schemaVersion`. Unknown fields are ignored on read; a major bump is a breaking change that readers must refuse with a clear error.
-4. **State-independent.** A bundle may be text-only (no `audio/` entries) or full. Import handles both; "additional synth" imports a text-only (or partial) bundle, synth fills the gaps, re-export is full.
+4. **State-independent.** A bundle may be text-only (no `audio/` entries) or full. Import handles both; "additional synth" imports a text-only (or partial) bundle, synth fills the gaps, re-export is full. The **text-only producer** is the desktop CLI's `parse` subcommand (backed by `crates/parse`): EPUB/TXT/HTML/MD/DOCX/PDF in, pre-synth bundle out; `synth --input <source>` is the chained one-command form.
 
 ## Book bundle — `*.taletrek`
 
@@ -40,7 +40,7 @@ book.taletrek  (ZIP)
     "id": "bk_01HZX...",         // TaleTrek BookId (branded string). New on import if absent.
     "title": "...",
     "author": "...",             // optional
-    "sourceFormat": "epub",      // pdf | epub | mobi | txt | md | unknown
+    "sourceFormat": "epub",      // pdf | epub | mobi | txt | md | html | docx | unknown
     "chapterCount": 42,
     "voiceId": "en_US-lessac-medium",
     "createdAt": 1780000000000,  // ms since epoch
@@ -59,6 +59,8 @@ book.taletrek  (ZIP)
   }
 }
 ```
+
+Vocabulary provenance: `epub`/`txt`/`md`/`html`/`docx`/`pdf` are producer-known — everything `crates/parse` emits (since kernel-parse). `mobi` survives only on pre-pivot bundles (kernel MOBI support is [deferred](./specs/kernel-parse/spec.md)); `unknown` only on old desktop-synth bundles (readers collapse it per [G28](./gotchas.md#g28)).
 
 ### `text.json`
 
