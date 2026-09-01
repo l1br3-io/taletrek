@@ -1,0 +1,13 @@
+# Throwaway spike — NOT part of the workspace build (desktop-synth-gui T1).
+# Standalone project: own [workspace] marker so the root workspace ignores it.
+[workspace]
+
+[package]
+name = "sherpa-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sherpa-onnx = "1.13.7"
+serde_json = "1"
