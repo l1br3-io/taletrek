@@ -17,6 +17,7 @@ anyhow = "1"
 thiserror = "2"
 taletrek-synth = { path = "../crates/synth" }
 taletrek-worker = { path = "../crates/worker" }
+taletrek-parse = { path = "../crates/parse" }
 
 [dev-dependencies]
 tempfile = "3"

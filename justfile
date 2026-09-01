@@ -31,6 +31,18 @@ resynth INPUT VOICE OUTPUT:
 synth-fixture:
     @just synth crates/synth/tests/fixtures/book-text-only.taletrek /tmp/book.synth.taletrek
 
+# Desktop: parse a source document (txt/md/html/epub/docx/pdf) → text-only .taletrek bundle
+parse INPUT OUTPUT:
+    cargo run -p taletrek-desktop -- parse --input {{INPUT}} --output {{OUTPUT}}
+
+# Convenience: parse the committed TXT fixture → /tmp/plain.taletrek
+parse-fixture:
+    @just parse crates/parse/testdata/plain.txt /tmp/plain.taletrek
+
+# Convenience: chained one-shot — synth straight from the committed TXT source → /tmp/plain.synth.taletrek
+chain-fixture:
+    @just synth crates/parse/testdata/plain.txt /tmp/plain.synth.taletrek
+
 # SPA tests (vitest)
 test-web:
     pnpm test

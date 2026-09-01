@@ -45,3 +45,4 @@ data/
 !crates/synth/tests/fixtures/
 !crates/synth/tests/fixtures/*.taletrek
 !crates/synth/tests/fixtures/*.taletrek-lib
+!crates/parse/testdata/plain.taletrek

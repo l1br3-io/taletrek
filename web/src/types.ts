@@ -25,7 +25,7 @@ export interface AppliedProcessing {
   ops: TransformOp[]
 }
 
-export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'txt' | 'md'
+export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'txt' | 'md' | 'html' | 'docx'
 
 export interface BookPosition {
   chapterIndex: number

@@ -1,0 +1,15 @@
+# TODO — kernel-parse
+
+- [x] T1 — Crate skeleton: `crates/parse` + `ParsedBook` + format detect + TXT (plain) → [`tasks/001-crate-skeleton-txt.md`](./tasks/001-crate-skeleton-txt.md)
+- [x] T2 — PDF spike: fixture provenance + `pdf-extract`/`lopdf` verdict → [`tasks/002-pdf-spike.md`](./tasks/002-pdf-spike.md)
+- [x] T3 — `clean.rs` (M4 structural filters) + TXT chapter line-split → [`tasks/003-clean-txt-chapters.md`](./tasks/003-clean-txt-chapters.md)
+- [x] T4 — `bundle.rs`: ParsedBook → text-only BookBundle → [`tasks/004-text-only-bundle.md`](./tasks/004-text-only-bundle.md)
+- [x] T5 — CLI `parse` subcommand + `just parse-fixture` → [`tasks/005-cli-parse.md`](./tasks/005-cli-parse.md)
+- [x] T6 — MD parser (`pulldown-cmark`) → [`tasks/006-md-parser.md`](./tasks/006-md-parser.md)
+- [x] T7 — HTML parser (`scraper`) → [`tasks/007-html-parser.md`](./tasks/007-html-parser.md)
+- [x] T8 — EPUB parser (zip + quick-xml + html core) → [`tasks/008-epub-parser.md`](./tasks/008-epub-parser.md)
+- [x] T9 — DOCX parser (zip + quick-xml) → [`tasks/009-docx-parser.md`](./tasks/009-docx-parser.md)
+- [x] T10 — PDF parser (per T2 verdict) → [`tasks/010-pdf-parser.md`](./tasks/010-pdf-parser.md)
+- [x] T11 — Chained `synth --input <source>` + real-engine e2e (`--ignored`) → [`tasks/011-chained-synth.md`](./tasks/011-chained-synth.md)
+- [x] T12 — Web: `BundleSourceFormat` + import mapping for `html`/`docx` + TS-side idempotence test → [`tasks/012-web-source-formats.md`](./tasks/012-web-source-formats.md)
+- [x] T13 — Docs (bundle-format, ROADMAP, AGENTS, gotcha G30 — numbered past retired G29) + final verify → [`tasks/013-docs-final-verify.md`](./tasks/013-docs-final-verify.md)

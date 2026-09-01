@@ -4,7 +4,7 @@
 
 ## Current effort
 
-**Active — `native-pivot`** (effort 1 of the native track, started 2026-08-30): the purge + re-foundation — the personal server is deleted entirely, the SPA is scoped down to a reader + landing page, and the docs re-tell the native story. Decision: [ADR-0015](docs/adrs/0015-native-pivot-rust-kernel-and-native-apps.md) (deletes ADR-0014, narrows ADR-0013 to bundle format + desktop synth) · the why + locked stack: [`docs/ideas/native-pivot.md`](docs/ideas/native-pivot.md) · spec: [`docs/specs/native-pivot/spec.md`](docs/specs/native-pivot/spec.md) (runbook + todo live there). Next efforts: `kernel-parse` → `desktop-synth-gui` → `android-app` → `ios-app` — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**Efforts 1–2 complete (pending merge) — `native-pivot`, then `kernel-parse`:** the pivot re-founded the repo on the Rust-kernel direction — personal server deleted, SPA scoped to reader + landing, docs re-telling the native story (decision: [ADR-0015](docs/adrs/0015-native-pivot-rust-kernel-and-native-apps.md); the why + locked stack: [`docs/ideas/native-pivot.md`](docs/ideas/native-pivot.md)). `kernel-parse` built the ingest front door: `crates/parse` + `taletrek-desktop parse --input <doc>` → text-only `.taletrek`, and the chained `synth --input <doc>` → full audio bundle. Specs: [`native-pivot`](docs/specs/native-pivot/spec.md) · [`kernel-parse`](docs/specs/kernel-parse/spec.md). Next efforts: `desktop-synth-gui` → `android-app` → `ios-app` — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Live status always lives in the current effort's `spec.md` frontmatter (`status:`) + `todo.md` — **not here**.
 
@@ -36,7 +36,7 @@ cargo test --workspace
 cargo test --workspace -- --ignored    # real piper+ffmpeg; needs TALETREK_VOICE_PATH — see docs/testing.md
 ```
 
-Workspace: pnpm + cargo. `web/` (landing + reader) + `spike/{piper,web-audio}/` (throwaway de-risking apps) on Node 24 / pnpm 10.31.0; `desktop/` + `crates/{synth,worker}/` on Rust 1.97.0 (see [`docs/testing.md`](docs/testing.md) for the full test matrix).
+Workspace: pnpm + cargo. `web/` (landing + reader) + `spike/{piper,web-audio}/` (throwaway de-risking apps) on Node 24 / pnpm 10.31.0; `desktop/` + `crates/{parse,synth,worker}/` on Rust 1.97.0 (see [`docs/testing.md`](docs/testing.md) for the full test matrix).
 
 ## Layout
 
@@ -62,8 +62,10 @@ web/              the web app — landing page + `.taletrek` reader (Vite 8 + Re
                     datasource/ (local), backup.ts
 spike/piper/       throwaway Piper TTS validation app
 spike/web-audio/   throwaway Web Audio mobile-engine spike
-desktop/           the headless synth CLI — Rust + clap (binary taletrek-desktop; synth + resynth;
-                   gains file→bundle at kernel-parse)
+desktop/           the headless kernel CLI — Rust + clap (binary taletrek-desktop;
+                    parse + synth + resynth — source → bundle → audio)
+crates/parse/      the ingest core: format detect + per-format parsers + M4 clean
+                    (bytes in → ParsedBook out → text-only bundle; UniFFI-ready pure data)
 crates/synth/      shared pure core: bundle I/O, synth, encode, cache_key (the interchange format)
 crates/worker/     shared host-level: voice acquire + rayon pool + manifest stamping
 ```
@@ -94,6 +96,7 @@ Full detail lives in [`docs/gotchas.md`](docs/gotchas.md) — **read the relevan
 23. **Web Audio scheduler: setInterval not rAF; re-anchor on seek** — [`G23`](docs/gotchas.md#g23)
 27. **Bundle import loads whole archive into memory (jszip)** — [`G27`](docs/gotchas.md#g27)
 28. **`sourceFormat: "unknown"` maps to `'txt'` on import** — [`G28`](docs/gotchas.md#g28)
+30. **Clean-idempotence is a cross-app invariant — parse output must survive the reader's `cleanChapters` unchanged** — [`G30`](docs/gotchas.md#g30)
 
 ## How to resume (in a new session)
 

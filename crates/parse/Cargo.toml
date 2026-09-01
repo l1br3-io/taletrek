@@ -1,0 +1,27 @@
+[package]
+name = "taletrek-parse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "TaleTrek document/ebook parsing core — bytes in, ParsedBook out. By l1br3."
+
+[lib]
+name = "taletrek_parse"
+path = "src/lib.rs"
+
+[dependencies]
+pdf-extract = "0.12"
+pulldown-cmark = { version = "0.13", default-features = false }
+quick-xml = "0.42"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+taletrek-synth = { path = "../synth" }
+uuid = { version = "1", features = ["v4"] }
+scraper = "0.27.0"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

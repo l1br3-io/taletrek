@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use taletrek_synth::synth::PiperRunner;
-use taletrek_synth::{write_book_bundle, BookBundle, BundleError, Encoder};
+use taletrek_synth::{write_book_bundle, BookBundle, BundleError, Encoder, Generator};
 
 use taletrek_worker::stamp;
 use taletrek_worker::ProgressSink;
@@ -91,6 +91,32 @@ pub fn default_resynth_output(input: &Path, voice_id: &str) -> PathBuf {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("book");
     let parent = input.parent().unwrap_or_else(|| Path::new(""));
     parent.join(format!("{stem}.{voice_id}.taletrek"))
+}
+
+/// Default output path for `parse`: `<input-stem>.taletrek` beside the input.
+/// The source extension is swapped for `.taletrek` — `dir/book.epub` →
+/// `dir/book.taletrek`. A bare `book.txt` stays in the current directory; a
+/// path with no extension keeps its whole name as the stem
+/// (`book` → `book.taletrek`).
+#[must_use]
+pub fn default_parse_output(input: &Path) -> PathBuf {
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("book");
+    let parent = input.parent().unwrap_or_else(|| Path::new(""));
+    parent.join(format!("{stem}.taletrek"))
+}
+
+/// The `generator` identity every desktop-produced bundle is born with.
+/// `parse` stamps it at bundle-build time ([`to_text_only_bundle`]);
+/// `synth`/`resynth` re-stamp the same identity through the worker's
+/// parameterized seam when they fill the audio.
+///
+/// [`to_text_only_bundle`]: taletrek_parse::to_text_only_bundle
+#[must_use]
+pub fn desktop_generator() -> Generator {
+    Generator {
+        app: GENERATOR_APP.into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+    }
 }
 
 /// Refuse an already-full bundle for `synth`. Thin desktop wrapper around
@@ -297,6 +323,35 @@ mod tests {
     fn default_resynth_output_no_extension_uses_whole_name_as_stem() {
         let out = default_resynth_output(Path::new("book"), "en_US-lessac-medium");
         assert_eq!(out, PathBuf::from("book.en_US-lessac-medium.taletrek"));
+    }
+
+    // ---- default_parse_output ----
+
+    #[test]
+    fn default_parse_output_swaps_extension_to_taletrek_beside_input() {
+        let out = default_parse_output(Path::new("dir/book.epub"));
+        assert_eq!(out, PathBuf::from("dir/book.taletrek"));
+    }
+
+    #[test]
+    fn default_parse_output_bare_filename_no_parent() {
+        let out = default_parse_output(Path::new("plain.txt"));
+        assert_eq!(out, PathBuf::from("plain.taletrek"));
+    }
+
+    #[test]
+    fn default_parse_output_no_extension_uses_whole_name_as_stem() {
+        let out = default_parse_output(Path::new("book"));
+        assert_eq!(out, PathBuf::from("book.taletrek"));
+    }
+
+    // ---- desktop_generator ----
+
+    #[test]
+    fn desktop_generator_carries_app_and_version() {
+        let generator = desktop_generator();
+        assert_eq!(generator.app, GENERATOR_APP);
+        assert_eq!(generator.version, env!("CARGO_PKG_VERSION"));
     }
 
     // ---- write_book_bundle_file ----
