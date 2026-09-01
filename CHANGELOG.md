@@ -2,6 +2,12 @@
 
 Reverse-chronological history of what shipped. The current effort's spec lives at `docs/specs/<slug>/spec.md`; shipped efforts stay in place under `docs/specs/<slug>/` (the spec.md frontmatter flips to `status: shipped`).
 
+## Native track · Effort 2 (`kernel-parse`) · 2026-08-31
+
+The kernel learns to ingest. New `crates/parse` (`taletrek-parse`) turns a source document — EPUB, TXT, HTML, Markdown, DOCX, PDF — into cleaned, chaptered plain data (bytes in, `ParsedBook` out, UniFFI-ready), and the desktop CLI grows `parse` (source → text-only `.taletrek`) plus the chained one-command `synth --input book.epub` (source → full audio bundle). This closes the pivot's accepted interim gap: until now, nothing converted ebooks into bundles. ([`docs/specs/kernel-parse/`](docs/specs/kernel-parse/spec.md))
+
+Cleaning is the M4 structural filters (URLs, images, footnotes, page numbers) applied **at parse time** — bundle paragraphs are canonical clean text, with the cross-app idempotence invariant pinned from both Rust and TS ([G30](docs/gotchas.md#g30)): whatever the reader re-derives must not change a parsed paragraph, or its audio cache key breaks. PDF chapters are ADR-0008 tier-1 only (embedded outlines, no heuristics); TXT chapters split on standalone `CHAPTER 7`-style lines only — both ADR-0008's prose false-positives stay in-body. The bundle `sourceFormat` vocabulary grows `html`/`docx` (additive, v1 unchanged); MOBI stays deferred (typed error, pinned by test).
+
 ## Off-device synth track · Tier 3 completion (`server-hosted-spa`) · 2026-08-29
 
 Effort 5 makes the SPA a **live client of the personal server** — one codebase, two deployment shapes (ADR-0014): the unchanged offline-first PWA, and the same SPA **hosted by the server** with server-side persistence and native processing. Deploy the Docker image (it now builds the whole stack — server binary + SPA — in one `docker build`), open the origin, sign in with the token, and get the full TaleTrek UX: upload an EPUB, close the tab (synth keeps running on the server), reopen, press play. The server-rendered operator panel is gone — the hosted SPA is the UI. ([`docs/specs/server-hosted-spa/`](docs/specs/server-hosted-spa/spec.md); ADR-0014)

@@ -12,4 +12,4 @@
 - [x] T10 — PDF parser (per T2 verdict) → [`tasks/010-pdf-parser.md`](./tasks/010-pdf-parser.md)
 - [x] T11 — Chained `synth --input <source>` + real-engine e2e (`--ignored`) → [`tasks/011-chained-synth.md`](./tasks/011-chained-synth.md)
 - [x] T12 — Web: `BundleSourceFormat` + import mapping for `html`/`docx` + TS-side idempotence test → [`tasks/012-web-source-formats.md`](./tasks/012-web-source-formats.md)
-- [ ] T13 — Docs (bundle-format, ROADMAP, AGENTS, gotcha G29 if earned) + final verify → [`tasks/013-docs-final-verify.md`](./tasks/013-docs-final-verify.md)
+- [x] T13 — Docs (bundle-format, ROADMAP, AGENTS, gotcha G30 — numbered past retired G29) + final verify → [`tasks/013-docs-final-verify.md`](./tasks/013-docs-final-verify.md)

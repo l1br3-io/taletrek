@@ -61,12 +61,12 @@ Five efforts, dependency-aware:
 | # | Effort | State |
 | --- | --- | --- |
 | 1 | `native-pivot` — purge + re-foundation: ADR-0015, server deletion, SPA scoped down to reader + landing, docs rewrite, landing v1 | 🚧 active ([spec](./specs/native-pivot/spec.md)) |
-| 2 | `kernel-parse` — `crates/parse` (EPUB/TXT/HTML/MD/DOCX/PDF; MOBI open) + CLI file→bundle — closes the interim no-producer gap | planned |
+| 2 | `kernel-parse` — `crates/parse` (EPUB/TXT/HTML/MD/DOCX/PDF; MOBI open) + CLI file→bundle — closes the interim no-producer gap | ✅ shipped ([spec](./specs/kernel-parse/spec.md)) |
 | 3 | `desktop-synth-gui` — the processor app (GUI + CLI); egui vs Tauri decided in its spec | planned |
 | 4 | `android-app` — Jetpack Compose + Media3 player; kernel via UniFFI; free Play Store download | planned |
 | 5 | `ios-app` — SwiftUI + AVFoundation player; kernel via UniFFI; free App Store download ($99/yr accepted) | planned |
 
-**Interim gap (accepted, pre-release):** until effort 2, nothing converts ebooks into bundles — the desktop CLI is bundle→bundle and the web reader only opens existing `.taletrek` files.
+**Interim gap — closed by `kernel-parse`:** before effort 2, nothing converted ebooks into bundles (the desktop CLI was bundle→bundle and the web reader only opened existing `.taletrek` files). Since effort 2, `taletrek-desktop parse --input <doc>` (or the chained `synth --input <doc>`) turns EPUB/TXT/HTML/MD/DOCX/PDF sources into bundles.
 
 ---
 
