@@ -19,6 +19,8 @@ pub mod cache_key;
 pub mod encode;
 pub mod normalize;
 pub mod pcm;
+#[cfg(feature = "sherpa")]
+pub mod sherpa_runner;
 pub mod synth;
 
 // Submodule re-exports for advanced/qualified-path access.
@@ -44,3 +46,6 @@ pub use normalize::{normalize_for_speech, split_for_speech, MAX_SYNTH_CHARS};
 pub use synth::{
     synthesize_paragraph, PiperRunner, SubprocessPiperRunner, SynthError, SynthOptions, SynthOutput,
 };
+
+#[cfg(feature = "sherpa")]
+pub use sherpa_runner::{default_espeak_data_dir, SherpaRunner};

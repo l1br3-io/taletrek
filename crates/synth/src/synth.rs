@@ -67,6 +67,19 @@ pub enum SynthError {
         chunk: String,
     },
 
+    /// A voice model could not be loaded for in-process synthesis: missing
+    /// model or sibling config, unreadable/invalid config, or the ONNX runtime
+    /// rejected the model. Construction-time only (runners load their model
+    /// once at construction); the path + reason carry enough context to branch
+    /// on (re-download the voice vs. point elsewhere).
+    #[error("voice model `{}` failed to load: {reason}", .path.display())]
+    VoiceLoad {
+        /// The `.onnx` path that was attempted.
+        path: PathBuf,
+        /// What went wrong (missing sibling config, rejected by the runtime…).
+        reason: String,
+    },
+
     /// The `ffmpeg` encoder binary could not be spawned.
     #[error("encoder binary `{bin}` failed to start: {source}")]
     EncoderMissing {

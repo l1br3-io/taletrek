@@ -51,9 +51,9 @@ test-web:
 test-rust:
     cargo test --workspace
 
-# Real-piper/ffmpeg e2e (the #[ignore]d tests) — gate env pre-wired to the setup cache
+# Real-piper/ffmpeg/sherpa e2e (the #[ignore]d tests) — gate env pre-wired to the setup cache
 test-e2e:
-    TALETREK_PIPER_BIN={{piper_bin}} TALETREK_VOICE_PATH={{voice_onnx}} cargo test --workspace -- --ignored --nocapture
+    TALETREK_PIPER_BIN={{piper_bin}} TALETREK_VOICE_PATH={{voice_onnx}} TALETREK_ESPEAK_DATA={{cache_dir}}/espeak-ng-data cargo test --workspace --features taletrek-synth/sherpa -- --ignored --nocapture
 
 # SPA gates: lint + typecheck + test + build
 verify:

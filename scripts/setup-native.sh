@@ -47,6 +47,19 @@ else
   echo "voice:  installed → $VOICES_DIR/$VOICE.onnx"
 fi
 
+# espeak-ng-data for the in-process sherpa engine (feature `sherpa`): the
+# piper tarball ships it next to the binary — copy it out once so
+# SherpaRunner's default cache location is seeded. Never MOVE it: the piper
+# binary needs it as a sibling at runtime.
+if [ -d "$CACHE/espeak-ng-data" ]; then
+  echo "espeak-ng-data: already present at $CACHE/espeak-ng-data"
+elif [ -d "$PIPER_DIR/espeak-ng-data" ]; then
+  cp -r "$PIPER_DIR/espeak-ng-data" "$CACHE/espeak-ng-data"
+  echo "espeak-ng-data: copied from piper install → $CACHE/espeak-ng-data"
+else
+  echo "espeak-ng-data: MISSING (expected inside the piper install)"
+fi
+
 if command -v ffmpeg >/dev/null 2>&1 && ffmpeg -version 2>/dev/null | grep -qi libopus; then
   echo "ffmpeg: OK ($(ffmpeg -version | head -1 | cut -d' ' -f3), libopus enabled)"
 else
@@ -61,5 +74,6 @@ Done. To use the local piper + pre-seeded voice, export:
   export TALETREK_VOICE_PATH="$VOICES_DIR/$VOICE.onnx"   # only needed for the #[ignore]d e2e tests
 
 The desktop and server find piper on PATH by default; first synth now hits the
-pre-seeded voice cache (no download).
+pre-seeded voice cache (no download). The #[ignore]d sherpa test finds
+espeak-ng-data at $CACHE/espeak-ng-data (set TALETREK_ESPEAK_DATA to override).
 EOF
