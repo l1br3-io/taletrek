@@ -11,6 +11,12 @@ description = "TaleTrek reusable synth pipeline + portable bundle I/O. By l1br3.
 name = "taletrek_synth"
 path = "src/lib.rs"
 
+[features]
+# In-process TTS via the official `sherpa-onnx` crate (k2-fsa). Off by default
+# so the workspace build stays lean; the desktop binary turns it on. See
+# `src/sherpa_runner.rs`'s module doc for the linking requirements.
+sherpa = ["dep:sherpa-onnx", "dep:dirs", "dep:tempfile"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -19,6 +25,9 @@ hex = "0.4"
 regex = "1"
 thiserror = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+sherpa-onnx = { version = "1.13.7", optional = true }
+dirs = { version = "6", optional = true }
+tempfile = { version = "3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

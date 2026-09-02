@@ -2,7 +2,7 @@
 
 - [x] T1 — sherpa-onnx spike: crate verdict (link, load, synth, memory) → [`tasks/001-sherpa-spike.md`](./tasks/001-sherpa-spike.md)
 - [x] T2 — native Opus spike: crate verdict (static link, WAV→Opus/OGG round-trip) → [`tasks/002-opus-spike.md`](./tasks/002-opus-spike.md)
-- [ ] T3 — `SherpaRunner` behind feature `sherpa` → [`tasks/003-sherpa-runner.md`](./tasks/003-sherpa-runner.md)
+- [x] T3 — `SherpaRunner` behind feature `sherpa` → [`tasks/003-sherpa-runner.md`](./tasks/003-sherpa-runner.md)
 - [ ] T4 — `NativeOpusEncoder` behind feature `native-encode` → [`tasks/004-native-opus-encoder.md`](./tasks/004-native-opus-encoder.md)
 - [ ] T5 — CLI default flips native; `--piper`/`--ffmpeg` become overrides; engine-parity test → [`tasks/005-cli-native-default.md`](./tasks/005-cli-native-default.md)
 - [ ] T6 — pure queue state machine (`gui/queue.rs`) → [`tasks/006-queue-state-machine.md`](./tasks/006-queue-state-machine.md)

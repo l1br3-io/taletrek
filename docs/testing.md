@@ -23,7 +23,10 @@ them is behind a `#[ignore]`d Rust integration test, gated on
 `TALETREK_VOICE_PATH` (+ optional `TALETREK_PIPER_BIN` / `TALETREK_FFMPEG_BIN`),
 and run either by hand or via a non-blocking `workflow_dispatch` job. The SPA
 has no equivalent gate — its vitest suite is fully hermetic (jsdom +
-`fake-indexeddb`).
+`fake-indexeddb`). The in-process sherpa test (`taletrek-synth`, feature
+`sherpa`) additionally resolves espeak-ng-data via `TALETREK_ESPEAK_DATA`
+(default `~/.cache/taletrek/espeak-ng-data`, seeded by the setup script);
+`just test-e2e` wires all of it, including `--features taletrek-synth/sherpa`.
 
 ## Local setup for real-synth work
 
