@@ -1,0 +1,14 @@
+# Throwaway spike — NOT part of the workspace build (desktop-synth-gui T2).
+# Standalone project: own [workspace] marker so the root workspace ignores it.
+[workspace]
+
+[package]
+name = "opus-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# opusic-sys defaults to `bundled` — vendored libopus built via cmake, no system headers.
+opus = "0.4"
+ogg = "0.9"
