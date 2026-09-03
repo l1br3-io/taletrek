@@ -1,6 +1,8 @@
 # TaleTrek dev tasks — `just` with no args lists everything.
-# Native deps (piper + seeded voice) come from `just setup`; everything that
-# needs them resolves the same ~/.cache/taletrek layout, env-overridable.
+# The default synth engine is in-process (sherpa-onnx + vendored libopus — no
+# external binaries); it needs the seeded voice + espeak-ng-data from
+# `just setup`. piper/ffmpeg binaries are only needed for the `--piper`/
+# `--ffmpeg` subprocess overrides and the #[ignore]d e2e tests.
 
 cache_dir   := env_var_or_default('XDG_CACHE_HOME', home_directory() / '.cache') / 'taletrek'
 piper_bin   := env_var_or_default('PIPER_BIN', cache_dir / 'piper' / 'piper')
@@ -9,7 +11,7 @@ voice_onnx  := env_var_or_default('VOICE_PATH', cache_dir / 'voices' / 'en_US-hf
 default:
     @just --list
 
-# One-time setup: workspace deps + native piper/voice into ~/.cache/taletrek
+# One-time setup: workspace deps + seeded voice/espeak-ng-data (native engine) + piper (overrides/e2e) into ~/.cache/taletrek
 setup:
     pnpm install
     pnpm setup:native
@@ -19,13 +21,13 @@ dev-web:
     @echo "→ TaleTrek SPA: http://localhost:8253"
     pnpm dev
 
-# Desktop: synth a text-only bundle → full Opus bundle (voice auto-resolves from the seeded cache)
+# Desktop: synth a text-only bundle → full Opus bundle (in-process engines; voice auto-resolves from the seeded cache)
 synth INPUT OUTPUT:
-    cargo run -p taletrek-desktop -- synth --piper {{piper_bin}} --input {{INPUT}} --output {{OUTPUT}}
+    cargo run -p taletrek-desktop -- synth --input {{INPUT}} --output {{OUTPUT}}
 
-# Desktop: re-voice an existing full bundle
+# Desktop: re-voice an existing full bundle (in-process engines by default)
 resynth INPUT VOICE OUTPUT:
-    cargo run -p taletrek-desktop -- resynth --piper {{piper_bin}} --input {{INPUT}} --voice {{VOICE}} --output {{OUTPUT}}
+    cargo run -p taletrek-desktop -- resynth --input {{INPUT}} --voice {{VOICE}} --output {{OUTPUT}}
 
 # Convenience: synth the committed fixture → /tmp/book.synth.taletrek
 synth-fixture:

@@ -10,10 +10,11 @@
 | App            | Command                | URL                            | Needs                        |
 | -------------- | ---------------------- | ------------------------------ | ---------------------------- |
 | SPA / PWA      | `just dev-web`         | <http://localhost:8253>        | nothing                      |
-| Desktop (CLI)  | `just parse IN OUT` / `just synth IN OUT` | writes a `.taletrek` file      | `just setup` (synth only)     |
+| Desktop (CLI)  | `just parse IN OUT` / `just synth IN OUT` | writes a `.taletrek` file      | `just setup` (voice + espeak-ng-data; no external binaries)     |
 
-First time in the repo: `just setup` (pnpm install + native piper + seeded
-voice into `~/.cache/taletrek/` — no sudo, idempotent).
+First time in the repo: `just setup` (pnpm install + the seeded voice +
+espeak-ng-data the in-process engine needs, plus piper/ffmpeg for the
+subprocess overrides and e2e tests — no sudo, idempotent).
 
 > **Post-pivot shape (ADR-0015):** the SPA no longer synthesizes — it imports
 > pre-synthesized `.taletrek` bundles and plays them. To get audio into the SPA
@@ -49,8 +50,13 @@ just synth crates/parse/testdata/plain.txt /tmp/plain.synth.taletrek
 just chain-fixture
 ```
 
-- `--piper` is pre-wired to the `just setup` cache; the voice auto-resolves
-  from the seeded cache (no download on first run).
+- Synthesis runs **in-process by default** — the sherpa-onnx TTS engine + the
+  vendored libopus encoder, no piper/ffmpeg on `PATH`. The voice auto-resolves
+  from the seeded cache (no download on first run). `--piper <bin>` /
+  `--ffmpeg <bin>` independently demote either side back to the subprocess
+  engines (e.g. `just synth` + A/B-ing encoders). Default `--jobs`: 2 for the
+  native engine (each job holds a ~212 MB model), CPU count for `--piper`;
+  explicit `--jobs` always wins.
 - `synth --input` accepts a source document (`.txt`/`.md`/`.html`/`.epub`/
   `.docx`/`.pdf`) as well as a `.taletrek` bundle — sources are parsed in
   memory first, so nothing intermediate hits disk; the default output keeps

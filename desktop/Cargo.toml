@@ -5,11 +5,20 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "TaleTrek desktop synth CLI — off-device Piper synthesis for .taletrek bundles."
+description = "TaleTrek desktop kernel CLI — parse documents and synth .taletrek bundles with in-process TTS + Opus."
 
 [[bin]]
 name = "taletrek-desktop"
 path = "src/main.rs"
+
+[features]
+# In-process TTS + Opus encode are the DEFAULT engines (T5): no external
+# binaries, no PATH dependence. Build with --no-default-features to drop them
+# (then --piper/--ffmpeg become mandatory — the CLI errors clearly without
+# them). Forward to taletrek-synth's features of the same name.
+default = ["sherpa", "native-encode"]
+sherpa = ["taletrek-synth/sherpa"]
+native-encode = ["taletrek-synth/native-encode"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

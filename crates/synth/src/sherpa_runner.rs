@@ -19,10 +19,9 @@
 //! Each runner loads its own ONNX model at construction (~1 s, ~212 MB
 //! steady-state RSS per additional model; the first model costs ~237 MB incl.
 //! one-time onnxruntime arena init). Two runners ≈ 470 MB, four ≈ 870 MB.
-//! **Wiring warning for hosts:** `synth_all_paragraphs` currently calls
-//! `make_runner` once **per paragraph** (fine for the stateless subprocess
-//! runner, catastrophic here — a model reload per paragraph). Native-engine
-//! hosts must construct runners per thread/run, not per paragraph.
+//! Hosts wire one runner **per pool chunk**: `synth_all_paragraphs` calls
+//! `make_runner` once per chunk (at most `--jobs` times per run), never per
+//! paragraph.
 //!
 //! # Bridging cached Piper voices (the T1 gotchas)
 //!
