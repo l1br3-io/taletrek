@@ -17,6 +17,7 @@
 mod bundle_io;
 mod cli;
 mod engine;
+mod gui;
 
 use std::fs;
 use std::path::Path;
