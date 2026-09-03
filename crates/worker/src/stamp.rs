@@ -125,9 +125,9 @@ fn stamp_full_manifest(bundle: &mut BookBundle, codec: AudioCodec, generator_app
 /// only needs to validate the new voice; this function performs the rewrite
 /// for both entry points.
 ///
-/// `make_runner` is called once per paragraph to produce a fresh, task-owned
-/// runner (see [`synth_all_paragraphs`]). The encoder is shared by `&E`
-/// across all tasks.
+/// `make_runner` is called once per work chunk (at most `jobs` times per run)
+/// to produce a chunk-owned runner (see [`synth_all_paragraphs`]). The encoder
+/// is shared by `&E` across all tasks.
 ///
 /// `generator_app` is stamped into the manifest's `generator.app`; it is a
 /// parameter (not a constant here) so every host routes its distinct producer

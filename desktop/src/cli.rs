@@ -101,17 +101,23 @@ pub struct CommonArgs {
     #[arg(long)]
     pub output: Option<PathBuf>,
 
-    /// Parallel synth jobs. Default: number of CPUs.
+    /// Parallel synth jobs. Default: 2 for the in-process engine (each job
+    /// holds a ~212 MB model; T3's memory note), the CPU count for the
+    /// `--piper` subprocess engine.
     #[arg(long)]
     pub jobs: Option<usize>,
 
-    /// Piper binary path (default: `piper`, resolved from `PATH`).
-    #[arg(long, default_value = "piper")]
-    pub piper: String,
+    /// Override: use a Piper subprocess binary for synthesis instead of the
+    /// default in-process engine (sherpa-onnx). The binary is resolved from
+    /// `PATH` when given as a bare name.
+    #[arg(long)]
+    pub piper: Option<String>,
 
-    /// `ffmpeg` binary path (default: `ffmpeg`, resolved from `PATH`).
-    #[arg(long, default_value = "ffmpeg")]
-    pub ffmpeg: String,
+    /// Override: encode via an `ffmpeg` subprocess binary (libopus) instead
+    /// of the default in-process Opus encoder. Resolved from `PATH` when
+    /// given as a bare name.
+    #[arg(long)]
+    pub ffmpeg: Option<String>,
 }
 
 #[cfg(test)]
@@ -132,8 +138,66 @@ mod tests {
         assert!(common.voice_path.is_none());
         assert!(common.output.is_none());
         assert!(common.jobs.is_none());
-        assert_eq!(common.piper, "piper");
-        assert_eq!(common.ffmpeg, "ffmpeg");
+        assert!(
+            common.piper.is_none(),
+            "piper omitted → None (in-process engine is the default)"
+        );
+        assert!(
+            common.ffmpeg.is_none(),
+            "ffmpeg omitted → None (in-process encoder is the default)"
+        );
+    }
+
+    #[test]
+    fn synth_parses_explicit_subprocess_overrides() {
+        let cli = Cli::parse_from([
+            "taletrek-desktop",
+            "synth",
+            "--input",
+            "book.taletrek",
+            "--piper",
+            "/opt/piper/piper",
+            "--ffmpeg",
+            "/opt/ffmpeg/bin/ffmpeg",
+        ]);
+        let Cmd::Synth { common } = cli.command else {
+            panic!("expected Synth, got {:?}", cli.command);
+        };
+        assert_eq!(common.piper.as_deref(), Some("/opt/piper/piper"));
+        assert_eq!(common.ffmpeg.as_deref(), Some("/opt/ffmpeg/bin/ffmpeg"));
+    }
+
+    #[test]
+    fn overrides_are_independent() {
+        // Either override alone parses: native runner + ffmpeg encode, or
+        // piper runner + native encode.
+        let cli = Cli::parse_from([
+            "taletrek-desktop",
+            "synth",
+            "--input",
+            "b.taletrek",
+            "--piper",
+            "piper",
+        ]);
+        let Cmd::Synth { common } = cli.command else {
+            panic!("expected Synth");
+        };
+        assert_eq!(common.piper.as_deref(), Some("piper"));
+        assert!(common.ffmpeg.is_none());
+
+        let cli = Cli::parse_from([
+            "taletrek-desktop",
+            "resynth",
+            "--input",
+            "b.taletrek",
+            "--ffmpeg",
+            "ffmpeg",
+        ]);
+        let Cmd::Resynth { common } = cli.command else {
+            panic!("expected Resynth");
+        };
+        assert!(common.piper.is_none());
+        assert_eq!(common.ffmpeg.as_deref(), Some("ffmpeg"));
     }
 
     #[test]

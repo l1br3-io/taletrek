@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Sets up the native deps for local development of desktop/ + server/:
-#   piper (rhasspy TTS)  → ~/.cache/taletrek/piper/
-#   default voice model  → ~/.cache/taletrek/voices/   (same dir the apps' curated auto-download uses)
-#   ffmpeg               → checked only (install via your package manager if missing)
+# Sets up the native deps for local development of desktop/:
+#   default voice model  → ~/.cache/taletrek/voices/   (the in-process engine's curated cache)
+#   espeak-ng-data       → ~/.cache/taletrek/          (the in-process sherpa engine needs it at runtime)
+#   piper (rhasspy TTS)  → ~/.cache/taletrek/piper/    (only for --piper overrides + e2e tests; espeak-ng-data is copied out of its tarball)
+#   ffmpeg               → checked only (only for --ffmpeg overrides + e2e tests; install via your package manager if missing)
 #
 # Idempotent — safe to re-run; skips anything already present.
 # Usage: bash scripts/setup-native.sh
@@ -68,12 +69,15 @@ fi
 
 cat <<EOF
 
-Done. To use the local piper + pre-seeded voice, export:
+Done. The desktop synth/resynth default to the in-process engines (no external
+binaries): they need the seeded voice + espeak-ng-data above, nothing else.
+
+piper + ffmpeg are now OPTIONAL — only for the subprocess overrides and the
+#[ignore]d e2e tests. To use them, export:
 
   export PATH="$PIPER_DIR:\$PATH"
   export TALETREK_VOICE_PATH="$VOICES_DIR/$VOICE.onnx"   # only needed for the #[ignore]d e2e tests
 
-The desktop and server find piper on PATH by default; first synth now hits the
-pre-seeded voice cache (no download). The #[ignore]d sherpa test finds
-espeak-ng-data at $CACHE/espeak-ng-data (set TALETREK_ESPEAK_DATA to override).
+The #[ignore]d sherpa test finds espeak-ng-data at $CACHE/espeak-ng-data
+(set TALETREK_ESPEAK_DATA to override; the CLI honors it too).
 EOF
