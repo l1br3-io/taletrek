@@ -27,6 +27,9 @@ thiserror = "2"
 taletrek-synth = { path = "../crates/synth" }
 taletrek-worker = { path = "../crates/worker" }
 taletrek-parse = { path = "../crates/parse" }
+eframe = { version = "0.35", features = ["glow"] }
+rfd = "0.17"
+crossbeam-channel = "0.5"
 
 [dev-dependencies]
 tempfile = "3"

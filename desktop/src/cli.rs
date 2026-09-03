@@ -1,6 +1,8 @@
 //! Command-line interface for `taletrek-desktop`.
 //!
-//! Three subcommands:
+//! Subcommands (effort `desktop-synth-gui` T7):
+//! - *(none)* — bare invocation opens the GUI (same as `gui`).
+//! - `gui` — open the eframe window (queue → convert → `.taletrek`).
 //! - `parse` — parse a source document (`.epub`/`.txt`/`.html`/`.md`/
 //!   `.docx`/`.pdf`) into a text-only bundle. Owns its flag set
 //!   ([`ParseArgs`]): no voice model, no jobs — nothing to synthesize.
@@ -9,7 +11,7 @@
 //!   (the chained one-command path, kernel-parse T11).
 //! - `resynth` — re-synthesize a bundle with a different voice (bundle-only).
 //!
-//! (The latter two share [`CommonArgs`]; synth wiring landed in phases
+//! (The latter three share [`CommonArgs`]; synth wiring landed in phases
 //! T2.3–T2.6 of the desktop effort, parse in kernel-parse T5.)
 
 use std::path::PathBuf;
@@ -23,17 +25,19 @@ use taletrek_worker::DEFAULT_VOICE_ID;
 #[command(
     name = "taletrek-desktop",
     version,
-    about = "TaleTrek desktop kernel — parse source documents into .taletrek bundles, synth/resynth them to audio"
+    about = "TaleTrek desktop kernel — turn documents into .taletrek audiobooks (GUI by default, or parse/synth/resynth subcommands)"
 )]
 pub struct Cli {
-    /// The subcommand to run.
+    /// The subcommand to run. Omitted (bare `taletrek-desktop`) → the GUI.
     #[command(subcommand)]
-    pub command: Cmd,
+    pub command: Option<Cmd>,
 }
 
 /// The available subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
+    /// Open the TaleTrek window (the default when no subcommand is given).
+    Gui,
     /// Parse a source document into a text-only `.taletrek` bundle.
     Parse {
         /// Parse-specific flags.
@@ -125,9 +129,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bare_invocation_parses_with_no_subcommand_the_gui_default() {
+        let cli = Cli::parse_from(["taletrek-desktop"]);
+        assert!(
+            cli.command.is_none(),
+            "bare run → None (main dispatches to the GUI)"
+        );
+    }
+
+    #[test]
+    fn gui_subcommand_parses() {
+        let cli = Cli::parse_from(["taletrek-desktop", "gui"]);
+        assert!(matches!(cli.command, Some(Cmd::Gui)));
+    }
+
+    #[test]
     fn synth_parses_minimal_with_defaults() {
         let cli = Cli::parse_from(["taletrek-desktop", "synth", "--input", "book.taletrek"]);
-        let Cmd::Synth { common } = cli.command else {
+        let Some(Cmd::Synth { common }) = cli.command else {
             panic!("expected Synth, got {:?}", cli.command);
         };
         assert_eq!(common.input, PathBuf::from("book.taletrek"));
@@ -160,7 +179,7 @@ mod tests {
             "--ffmpeg",
             "/opt/ffmpeg/bin/ffmpeg",
         ]);
-        let Cmd::Synth { common } = cli.command else {
+        let Some(Cmd::Synth { common }) = cli.command else {
             panic!("expected Synth, got {:?}", cli.command);
         };
         assert_eq!(common.piper.as_deref(), Some("/opt/piper/piper"));
@@ -179,7 +198,7 @@ mod tests {
             "--piper",
             "piper",
         ]);
-        let Cmd::Synth { common } = cli.command else {
+        let Some(Cmd::Synth { common }) = cli.command else {
             panic!("expected Synth");
         };
         assert_eq!(common.piper.as_deref(), Some("piper"));
@@ -193,7 +212,7 @@ mod tests {
             "--ffmpeg",
             "ffmpeg",
         ]);
-        let Cmd::Resynth { common } = cli.command else {
+        let Some(Cmd::Resynth { common }) = cli.command else {
             panic!("expected Resynth");
         };
         assert!(common.piper.is_none());
@@ -212,7 +231,7 @@ mod tests {
             "--jobs",
             "4",
         ]);
-        let Cmd::Resynth { common } = cli.command else {
+        let Some(Cmd::Resynth { common }) = cli.command else {
             panic!("expected Resynth, got {:?}", cli.command);
         };
         assert_eq!(common.voice.as_deref(), Some("en_US-ryan-medium"));
@@ -229,7 +248,7 @@ mod tests {
             "--voice-path",
             "/voices/ryan.onnx",
         ]);
-        let Cmd::Synth { common } = cli.command else {
+        let Some(Cmd::Synth { common }) = cli.command else {
             panic!("expected Synth");
         };
         assert_eq!(
@@ -247,7 +266,7 @@ mod tests {
     #[test]
     fn parse_defaults_voice_to_curated_default() {
         let cli = Cli::parse_from(["taletrek-desktop", "parse", "--input", "book.txt"]);
-        let Cmd::Parse { args } = cli.command else {
+        let Some(Cmd::Parse { args }) = cli.command else {
             panic!("expected Parse, got {:?}", cli.command);
         };
         assert_eq!(args.input, PathBuf::from("book.txt"));
@@ -273,7 +292,7 @@ mod tests {
             "--output",
             "out/novel.taletrek",
         ]);
-        let Cmd::Parse { args } = cli.command else {
+        let Some(Cmd::Parse { args }) = cli.command else {
             panic!("expected Parse");
         };
         assert_eq!(args.voice, "en_US-ryan-medium");

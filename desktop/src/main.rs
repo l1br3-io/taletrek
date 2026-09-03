@@ -1,5 +1,10 @@
 //! Entry point for `taletrek-desktop`.
 //!
+//! Bare invocation (or `gui`) opens the eframe window (desktop-synth-gui
+//! T7): pick files → queue → convert (parse → in-process synth → bundle
+//! write) with live progress. The `parse`/`synth`/`resynth` subcommands are
+//! the headless CLI, unchanged.
+//!
 //! Phase 6 (T2.6) wires a `Progress` sink (stderr behind a `Write` seam)
 //! through both subcommands: download progress during voice resolution,
 //! `synth [n/total] pct%` per paragraph, and a final `kind: N segments, voice
@@ -42,9 +47,10 @@ use crate::engine::{effective_jobs, DesktopEncoder, DesktopRunner, RunnerSpec};
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Cmd::Parse { args } => run_parse(args),
-        Cmd::Synth { common } => run_synth(common),
-        Cmd::Resynth { common } => run_resynth(common),
+        None | Some(Cmd::Gui) => gui::run(),
+        Some(Cmd::Parse { args }) => run_parse(args),
+        Some(Cmd::Synth { common }) => run_synth(common),
+        Some(Cmd::Resynth { common }) => run_resynth(common),
     }
 }
 

@@ -10,6 +10,7 @@
 | App            | Command                | URL                            | Needs                        |
 | -------------- | ---------------------- | ------------------------------ | ---------------------------- |
 | SPA / PWA      | `just dev-web`         | <http://localhost:8253>        | nothing                      |
+| Desktop (GUI)  | `just gui`             | native window (egui)           | `just setup` (voice + espeak-ng-data; no external binaries) |
 | Desktop (CLI)  | `just parse IN OUT` / `just synth IN OUT` | writes a `.taletrek` file      | `just setup` (voice + espeak-ng-data; no external binaries)     |
 
 First time in the repo: `just setup` (pnpm install + the seeded voice +
@@ -68,6 +69,19 @@ just chain-fixture
   `unzip -p /tmp/book.synth.taletrek manifest.json | python3 -m json.tool`
   then extract an `audio/*.opus` entry and play it (`ffplay`/`mpv`).
 - Full guide: the [desktop-synth-app runbook](specs/desktop-synth-app/runbook.md).
+
+## Desktop GUI — `just gui`
+
+The windowed app (egui): **Add files…** → pick documents (`.epub`/`.txt`/
+`.md`/`.html`/`.docx`/`.pdf`, or a text-only `.taletrek`) → each converts to
+a full bundle written beside its source (`<stem>.synth.taletrek`, the CLI
+naming rule). The voice auto-resolves like the CLI — seeded cache first,
+blocking download on first use (progress shown on the job row). Jobs run
+one at a time (FIFO); closing the window mid-job waits for that job to
+finish so the bundle is never half-written. Bare `taletrek-desktop` (no
+subcommand) opens the same window. The renderer is wgpu (Vulkan/GL) by
+default; `TALETREK_RENDERER=glow` selects the GLX fallback for
+Vulkan-less environments (Xvfb, some VMs/remote sessions).
 
 ## Ports at a glance
 

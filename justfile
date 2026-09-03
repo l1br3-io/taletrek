@@ -45,6 +45,11 @@ parse-fixture:
 chain-fixture:
     @just synth crates/parse/testdata/plain.txt /tmp/plain.synth.taletrek
 
+# Desktop GUI (egui): pick documents → queue → convert → .taletrek beside each
+# source (voice auto-resolves from the seeded cache or downloads on first use)
+gui:
+    cargo run -p taletrek-desktop -- gui
+
 # SPA tests (vitest)
 test-web:
     pnpm test
