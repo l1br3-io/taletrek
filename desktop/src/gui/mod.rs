@@ -1,20 +1,23 @@
 //! The GUI half of `taletrek-desktop` (effort `desktop-synth-gui`).
 //!
-//! T6's [`queue`] is the UI-free state machine; T7's shell (this module)
+//! T6's [`queue`] is the UI-free state machine; the shell (this module)
 //! renders it and forwards user actions as events. [`executor`] owns the
 //! queue and runs jobs on background threads; [`sink`] forwards worker
 //! progress over a channel. egui types never appear outside this module —
 //! `queue.rs`/`executor.rs`/`sink.rs` stay importable with zero UI
 //! dependencies, so their logic is unit-testable headlessly.
 //!
-//! The shell is deliberately bare (T7 is the path, not the polish): a file
-//! picker, the queue list with per-job progress, and the output path on
-//! success. Voice choice, settings, and cancel UX arrive in T8/T9.
+//! T8 adds voice as a first-class concern: the [`views::voice`] picker
+//! (curated catalog, cached flags) backed by a persisted default voice, and
+//! the second queue action — re-voice an existing `.taletrek` via
+//! [`Executor::add_bundles`]. Settings and failure/cancel UX arrive in T9.
 
 pub mod executor;
 pub mod queue;
 pub mod sink;
+pub mod views;
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -23,6 +26,11 @@ use eframe::egui;
 
 use executor::Executor;
 use queue::{Job, JobKind, JobState};
+use taletrek_worker::{default_cache_dir, DEFAULT_VOICE_ID};
+
+/// egui-storage key for the persisted default voice id. Absent (first run)
+/// → [`DEFAULT_VOICE_ID`]; written whenever the picker selection changes.
+const VOICE_STORAGE_KEY: &str = "taletrek.default-voice";
 
 /// MiB constant for download-progress rendering.
 const MIB: f64 = 1024.0 * 1024.0;
@@ -47,35 +55,57 @@ pub fn run() -> Result<()> {
         renderer,
         viewport: egui::ViewportBuilder::default()
             .with_title("TaleTrek")
-            .with_inner_size([560.0, 500.0]),
+            .with_inner_size([600.0, 680.0]),
         ..Default::default()
     };
     eframe::run_native(
         "taletrek-desktop",
         options,
-        Box::new(|_cc| Ok(Box::new(TaleTrekApp::new()))),
+        Box::new(|cc| Ok(Box::new(TaleTrekApp::new(cc)))),
     )
     .map_err(|err| anyhow::anyhow!("opening window: {err}"))
 }
 
 /// The eframe app: an [`Executor`] plus its render surface. All state
 /// changes flow through the executor (queue events); this type only renders
-/// and forwards user actions.
+/// and forwards user actions — plus the persisted default-voice selection
+/// the picker writes and enqueueing reads.
 struct TaleTrekApp {
     /// The queue owner + job thread manager.
     executor: Executor,
+    /// The default voice new jobs are stamped with (the picker's current
+    /// selection; each job snapshots it at enqueue time as its per-job
+    /// override). Persisted via egui storage ([`VOICE_STORAGE_KEY`]).
+    default_voice: String,
+    /// The platform voice cache dir (for the picker's "downloaded" flags);
+    /// `None` when no cache home is discoverable.
+    cache_dir: Option<PathBuf>,
 }
 
 impl TaleTrekApp {
-    /// A fresh app with an empty queue.
-    fn new() -> Self {
+    /// A fresh app: the persisted default voice (first run →
+    /// [`DEFAULT_VOICE_ID`]) and an empty queue.
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let default_voice = cc
+            .egui_ctx
+            .data_mut(|data| data.get_persisted(egui::Id::new(VOICE_STORAGE_KEY)))
+            .unwrap_or_else(|| DEFAULT_VOICE_ID.to_string());
         Self {
             executor: Executor::new(),
+            default_voice,
+            cache_dir: default_cache_dir(),
         }
     }
 
+    /// Set the default voice and persist it for the next run.
+    fn set_default_voice(&mut self, ctx: &egui::Context, id: String) {
+        ctx.data_mut(|data| data.insert_persisted(egui::Id::new(VOICE_STORAGE_KEY), id.clone()));
+        self.default_voice = id;
+    }
+
     /// Open the file dialog (multi-select over every format Convert
-    /// accepts) and queue whatever comes back.
+    /// accepts) and queue whatever comes back as Convert jobs under the
+    /// current default voice.
     fn pick_files(&mut self) {
         let picked = rfd::FileDialog::new()
             .add_filter(
@@ -86,7 +116,20 @@ impl TaleTrekApp {
             )
             .pick_files();
         if let Some(paths) = picked {
-            let _ = self.executor.add_files(&paths);
+            let _ = self.executor.add_files(&paths, &self.default_voice);
+        }
+    }
+
+    /// Open the `.taletrek` picker ("Add existing bundle…") and queue
+    /// whatever comes back as ReVoice jobs under the current default voice
+    /// — a full-bundle voice swap, output written beside the input as
+    /// `<stem>.<voice>.taletrek`.
+    fn pick_bundle(&mut self) {
+        let picked = rfd::FileDialog::new()
+            .add_filter("TaleTrek bundles", &["taletrek"])
+            .pick_files();
+        if let Some(paths) = picked {
+            let _ = self.executor.add_bundles(&paths, &self.default_voice);
         }
     }
 
@@ -95,14 +138,26 @@ impl TaleTrekApp {
     fn render_job(&self, ui: &mut egui::Ui, job: &Job) {
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                let input = match &job.kind {
-                    JobKind::Convert { input, .. } | JobKind::ReVoice { input, .. } => input,
+                let (input, voice) = match &job.kind {
+                    JobKind::Convert { input, voice } | JobKind::ReVoice { input, voice } => {
+                        (input, voice)
+                    }
                 };
                 let name = input
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| input.display().to_string());
                 ui.strong(name);
+                // The job's voice snapshot (its per-job override) + kind.
+                let kind = match &job.kind {
+                    JobKind::Convert { .. } => "convert",
+                    JobKind::ReVoice { .. } => "re-voice",
+                };
+                ui.label(
+                    egui::RichText::new(format!("{kind} · {voice}"))
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
             });
             match &job.state {
                 JobState::Queued => {
@@ -165,11 +220,30 @@ impl eframe::App for TaleTrekApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("TaleTrek");
-            if ui.button("Add files…").clicked() {
-                self.pick_files();
+            ui.horizontal(|ui| {
+                if ui.button("Add files…").clicked() {
+                    self.pick_files();
+                }
+                if ui.button("Add existing bundle…").clicked() {
+                    self.pick_bundle();
+                }
+            });
+            ui.add_space(8.0);
+
+            ui.heading("Voice");
+            ui.label(
+                egui::RichText::new("New jobs use this voice; models download on first use.")
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+            );
+            if let Some(id) =
+                views::voice::render(ui, &self.default_voice, self.cache_dir.as_deref())
+            {
+                self.set_default_voice(ui.ctx(), id);
             }
             ui.add_space(8.0);
 
+            ui.heading("Queue");
             let mut job_count = 0;
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for job in self.executor.queue().jobs() {
@@ -178,7 +252,10 @@ impl eframe::App for TaleTrekApp {
                 }
             });
             if job_count == 0 {
-                ui.label("No files yet — add a document to turn it into an audiobook.");
+                ui.label(
+                    "No files yet — add a document to turn it into an audiobook, \
+                     or add an existing bundle to re-voice it.",
+                );
             }
         });
     }
