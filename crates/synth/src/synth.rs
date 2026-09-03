@@ -105,6 +105,15 @@ pub enum SynthError {
         stderr: String,
     },
 
+    /// The in-process (native) Opus encoder failed: rejected input WAV
+    /// (non-16-bit, odd payload, unsupported channel count) or a
+    /// libopus/OGG-level encode error.
+    #[error("native opus encode failed: {reason}")]
+    NativeEncode {
+        /// What went wrong (WAV parse rejection or encoder error).
+        reason: String,
+    },
+
     /// The input text normalized to empty (whitespace-only). Nothing to synth.
     #[error("synthesize_paragraph received text that normalized to empty")]
     EmptyText,

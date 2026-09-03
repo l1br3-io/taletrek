@@ -115,6 +115,51 @@ pub fn wav_duration(data: &[u8]) -> f64 {
     0.0
 }
 
+/// Borrowed PCM view of a canonical WAV: `(channels, sample_rate,
+/// bits_per_sample, data slice)`.
+///
+/// Scans the same chunk table as [`wav_duration`]; returns `None` for inputs
+/// shorter than the RIFF header, with a missing/unparsed `fmt ` or `data`
+/// chunk, or with zero `fmt` fields. The data slice is clamped to the bytes
+/// actually present. Crate-internal consumer: the native Opus encoder.
+#[cfg(feature = "native-encode")]
+pub(crate) fn pcm_view(data: &[u8]) -> Option<(u16, u32, u16, &[u8])> {
+    if data.len() < 12 {
+        return None;
+    }
+    let mut channels = 0u16;
+    let mut sample_rate = 0u32;
+    let mut bits_per_sample = 0u16;
+
+    let mut offset = 12usize;
+    while offset + 8 <= data.len() {
+        let id = &data[offset..offset + 4];
+        let size = u32::from_le_bytes(data[offset + 4..offset + 8].try_into().ok()?);
+        if id == b"fmt " {
+            if offset + 10 + 2 <= data.len() {
+                channels = u16::from_le_bytes(data[offset + 10..offset + 12].try_into().ok()?);
+            }
+            if offset + 12 + 4 <= data.len() {
+                sample_rate = u32::from_le_bytes(data[offset + 12..offset + 16].try_into().ok()?);
+            }
+            if offset + 22 + 2 <= data.len() {
+                bits_per_sample =
+                    u16::from_le_bytes(data[offset + 22..offset + 24].try_into().ok()?);
+            }
+        } else if id == b"data" {
+            if channels == 0 || sample_rate == 0 || bits_per_sample == 0 {
+                return None;
+            }
+            let start = offset + 8;
+            let end = start.checked_add(size as usize)?.min(data.len());
+            return Some((channels, sample_rate, bits_per_sample, &data[start..end]));
+        }
+        let pad = (size % 2) as usize;
+        offset += 8 + size as usize + pad;
+    }
+    None
+}
+
 /// Locate the start of the PCM data payload (byte offset of the first sample,
 /// i.e. 8 bytes past the `data` FourCC). Scans the chunk table from offset 12;
 /// falls back to `min(len, 44)` if the structure is unexpected — same fallback
@@ -201,5 +246,23 @@ mod tests {
     #[test]
     fn duration_of_truncated_input_is_zero() {
         assert_eq!(wav_duration(&[0u8; 10]), 0.0);
+    }
+
+    #[test]
+    #[cfg(feature = "native-encode")]
+    fn pcm_view_of_known_wav_returns_fields_and_payload() {
+        let w = wav(&[0x10, 0x20, 0x30, 0x40]);
+        let (channels, rate, bits, data) = pcm_view(&w).unwrap();
+        assert_eq!((channels, rate, bits), (1, 16_000, 16));
+        assert_eq!(data, &[0x10, 0x20, 0x30, 0x40]);
+    }
+
+    #[test]
+    #[cfg(feature = "native-encode")]
+    fn pcm_view_of_garbage_is_none() {
+        assert!(pcm_view(&[]).is_none());
+        assert!(pcm_view(&[0u8; 10]).is_none());
+        // RIFF/WAVE magic but no chunks.
+        assert!(pcm_view(b"RIFF\x00\x00\x00\x00WAVE").is_none());
     }
 }
