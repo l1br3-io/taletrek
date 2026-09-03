@@ -25,22 +25,22 @@
 //! is deliberately out of scope).
 
 use std::any::Any;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender};
 
 use taletrek_synth::synth::PiperRunner;
-use taletrek_synth::{BookBundle, Encoder};
-use taletrek_worker::{
-    default_cache_dir, resolve_voice, ResolveOpts, UreqVoiceSource, DEFAULT_VOICE_ID,
-};
+use taletrek_synth::{read_book_bundle, BookBundle, Encoder};
+use taletrek_worker::{default_cache_dir, resolve_voice, ResolveOpts, UreqVoiceSource};
 
 use super::queue::{Job, JobId, JobKind, Queue, QueueEvent};
 use super::sink::{ChannelSink, WorkerMsg};
 use crate::bundle_io::{
-    default_synth_output, refuse_full_input, synth_and_stamp, write_book_bundle_file,
+    default_resynth_output, default_synth_output, refuse_full_input, resynth_and_stamp,
+    synth_and_stamp, write_book_bundle_file,
 };
 use crate::engine::{effective_jobs, DesktopEncoder, DesktopRunner, RunnerSpec};
 
@@ -120,17 +120,35 @@ impl Executor {
         self.current_job.is_some()
     }
 
-    /// Queue files as Convert jobs (default voice), in the order given.
-    /// Returns the issued [`JobId`]s. Invalid inputs are **not** filtered
-    /// here — they fail in the job thread with the kernel's typed errors
-    /// (e.g. the unsupported-extension list), surfacing as `Failed` rows.
-    pub fn add_files(&mut self, paths: &[PathBuf]) -> Vec<JobId> {
+    /// Queue files as Convert jobs, in the order given — each stamped with
+    /// `voice` (the picker's current default at enqueue time; the job's
+    /// per-job override snapshot). Returns the issued [`JobId`]s. Invalid
+    /// inputs are **not** filtered here — they fail in the job thread with
+    /// the kernel's typed errors (e.g. the unsupported-extension list),
+    /// surfacing as `Failed` rows.
+    pub fn add_files(&mut self, paths: &[PathBuf], voice: &str) -> Vec<JobId> {
         paths
             .iter()
             .map(|input| {
                 self.queue.push(JobKind::Convert {
                     input: input.clone(),
-                    voice: DEFAULT_VOICE_ID.to_string(),
+                    voice: voice.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    /// Queue `.taletrek` bundles as ReVoice jobs ("Add existing bundle…"):
+    /// a full-bundle voice swap through the resynth path, written to
+    /// `<stem>.<voice>.taletrek` so the input is never clobbered. Text-only
+    /// bundles are accepted too (re-voice doubles as their synth path).
+    pub fn add_bundles(&mut self, paths: &[PathBuf], voice: &str) -> Vec<JobId> {
+        paths
+            .iter()
+            .map(|input| {
+                self.queue.push(JobKind::ReVoice {
+                    input: input.clone(),
+                    voice: voice.to_string(),
                 })
             })
             .collect()
@@ -231,14 +249,38 @@ fn panic_message(payload: Box<dyn Any + Send>) -> String {
     }
 }
 
-/// Dispatch a job by kind to its pipeline. The GUI only queues Convert jobs
-/// in T7; ReVoice arrives with the voice picker (T8) — until then it fails
-/// cleanly instead of panicking.
+/// Dispatch a job by kind to its pipeline: Convert (source document or
+/// text-only bundle → full bundle) or ReVoice (any bundle → re-voiced
+/// bundle, the voice picker's "Add existing bundle…" action).
 fn run_job_by_kind(id: JobId, kind: &JobKind, tx: &Sender<WorkerMsg>) -> Result<PathBuf> {
     match kind {
         JobKind::Convert { input, voice } => run_convert_job(id, input, voice, tx),
-        JobKind::ReVoice { .. } => bail!("re-voice jobs arrive in T8 (voice picker)"),
+        JobKind::ReVoice { input, voice } => run_revoice_job(id, input, voice, tx),
     }
+}
+
+/// The production voice-model resolver shared by both job kinds: curated id
+/// → cache or blocking download (progress forwarded through the sink as
+/// [`WorkerMsg::Download`]s). Boxed so Convert and ReVoice can share one
+/// closure over the per-job sink.
+fn resolve_curated<'a>(
+    id: JobId,
+    voice: &'a str,
+    tx: &Sender<WorkerMsg>,
+) -> Box<dyn Fn() -> Result<PathBuf> + 'a> {
+    let sink = ChannelSink::new(tx.clone(), id);
+    Box::new(move || {
+        let cache_dir =
+            default_cache_dir().context("no platform cache directory discovered (set $HOME)")?;
+        let opts = ResolveOpts::new(None, cache_dir);
+        resolve_voice(
+            Some(voice),
+            &opts,
+            &UreqVoiceSource,
+            Some(&sink as &dyn taletrek_worker::ProgressSink),
+        )
+        .context("resolving voice model")
+    })
 }
 
 /// The Convert pipeline with the production seams: native engines (T5
@@ -251,25 +293,12 @@ fn run_convert_job(
     voice: &str,
     tx: &Sender<WorkerMsg>,
 ) -> Result<PathBuf> {
-    let sink = ChannelSink::new(tx.clone(), id);
-    let resolve = move || {
-        let cache_dir =
-            default_cache_dir().context("no platform cache directory discovered (set $HOME)")?;
-        let opts = ResolveOpts::new(None, cache_dir);
-        resolve_voice(
-            Some(voice),
-            &opts,
-            &UreqVoiceSource,
-            Some(&sink as &dyn taletrek_worker::ProgressSink),
-        )
-        .context("resolving voice model")
-    };
     run_convert_job_with(
         id,
         input,
         voice,
         tx,
-        &resolve,
+        &resolve_curated(id, voice, tx),
         move |voice_model| DesktopRunner::new(spec_for_gui(), voice_model),
         &encoder_for_gui()?,
         native_jobs(),
@@ -355,6 +384,84 @@ fn paragraph_count(bundle: &BookBundle) -> usize {
     bundle.chapters.iter().map(|ch| ch.paragraphs.len()).sum()
 }
 
+/// The ReVoice pipeline with the production seams — the GUI counterpart of
+/// the CLI's `run_resynth`: resolve the new voice, re-synth every paragraph
+/// under it (stale audio replaced, not merged), and write the re-voiced
+/// bundle beside the input as `<stem>.<voice>.taletrek`.
+fn run_revoice_job(
+    id: JobId,
+    input: &Path,
+    voice: &str,
+    tx: &Sender<WorkerMsg>,
+) -> Result<PathBuf> {
+    run_revoice_job_with(
+        id,
+        input,
+        voice,
+        tx,
+        &resolve_curated(id, voice, tx),
+        move |voice_model| DesktopRunner::new(spec_for_gui(), voice_model),
+        &encoder_for_gui()?,
+        native_jobs(),
+    )
+}
+
+/// The ReVoice job core with every engine seam injectable — the injectable
+/// counterpart of the CLI's `run_resynth`. Steps:
+///
+/// 1. read the input as a bundle (unlike Convert, a full bundle is the
+///    *primary* input; a text-only one works too),
+/// 2. report `Started` with the total paragraph count,
+/// 3. resolve the new voice model (production: curated id → cache or
+///    download, progress → [`WorkerMsg::Download`]),
+/// 4. re-voice via `resynth_and_stamp` — the manifest's `voiceId` is
+///    rewritten and every paragraph re-synthesized under the new voice
+///    (progress → [`QueueEvent::Progress`]),
+/// 5. write the bundle beside the input as `<stem>.<voice>.taletrek`
+///    ([`default_resynth_output`]) — never clobbering the input.
+#[allow(clippy::too_many_arguments)] // mirrors `run_convert_job_with`'s seam set (identity + channel + three injectables)
+fn run_revoice_job_with<R, E, F>(
+    id: JobId,
+    input: &Path,
+    voice: &str,
+    tx: &Sender<WorkerMsg>,
+    resolve_voice_model: &dyn Fn() -> Result<PathBuf>,
+    make_runner_of: F,
+    encoder: &E,
+    jobs: usize,
+) -> Result<PathBuf>
+where
+    R: PiperRunner + Send,
+    E: Encoder + Sync,
+    F: Fn(&Path) -> R + Sync,
+{
+    let input_bytes =
+        fs::read(input).with_context(|| format!("reading input bundle {}", input.display()))?;
+    let mut bundle = read_book_bundle(&input_bytes)?;
+
+    let total = paragraph_count(&bundle);
+    let _ = tx.send(WorkerMsg::Event(QueueEvent::Started { id, total }));
+
+    let sink = ChannelSink::new(tx.clone(), id);
+    let voice_model = resolve_voice_model()?;
+
+    let factory_model = voice_model.clone();
+    resynth_and_stamp(
+        &mut bundle,
+        voice,
+        &voice_model,
+        move || make_runner_of(&factory_model),
+        encoder,
+        jobs,
+        Some(&sink),
+    )?;
+
+    let output = default_resynth_output(input, voice);
+    write_book_bundle_file(&bundle, &output)
+        .with_context(|| format!("writing output bundle {}", output.display()))?;
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,6 +474,8 @@ mod tests {
 
     use taletrek_synth::synth::SynthError;
     use taletrek_synth::{read_book_bundle, AudioCodec, WavPassthrough};
+
+    use taletrek_worker::DEFAULT_VOICE_ID;
 
     use crate::cli::ParseArgs;
     use crate::gui::queue::JobState;
@@ -426,12 +535,15 @@ mod tests {
         }
     }
 
-    // ---- Executor: add_files / pump / drain ----
+    // ---- Executor: add_files / add_bundles / pump / drain ----
 
     #[test]
-    fn add_files_queues_convert_jobs_in_order_with_the_default_voice() {
+    fn add_files_queues_convert_jobs_in_order_with_the_given_voice() {
         let mut ex = Executor::with_spawner(Box::new(|_job, _tx| thread::spawn(|| {})));
-        let ids = ex.add_files(&[PathBuf::from("a.txt"), PathBuf::from("b.epub")]);
+        let ids = ex.add_files(
+            &[PathBuf::from("a.txt"), PathBuf::from("b.epub")],
+            DEFAULT_VOICE_ID,
+        );
 
         let jobs: Vec<_> = ex.queue().jobs().collect();
         assert_eq!(jobs.len(), 2);
@@ -449,6 +561,49 @@ mod tests {
     }
 
     #[test]
+    fn add_files_honors_a_non_default_voice_per_job() {
+        // The voice picker's selection flows into every queued job — the
+        // per-job override snapshot taken at enqueue time.
+        let mut ex = Executor::with_spawner(Box::new(|_job, _tx| thread::spawn(|| {})));
+        ex.add_files(&[PathBuf::from("a.txt")], "en_GB-alan-medium");
+
+        let job = ex.queue().jobs().next().unwrap();
+        assert_eq!(
+            job.kind,
+            JobKind::Convert {
+                input: PathBuf::from("a.txt"),
+                voice: "en_GB-alan-medium".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn add_bundles_queues_revoice_jobs_with_the_given_voice() {
+        let mut ex = Executor::with_spawner(Box::new(|_job, _tx| thread::spawn(|| {})));
+        let ids = ex.add_bundles(
+            &[
+                PathBuf::from("a.synth.taletrek"),
+                PathBuf::from("b.taletrek"),
+            ],
+            "en_GB-cori-medium",
+        );
+
+        let jobs: Vec<_> = ex.queue().jobs().collect();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs.iter().map(|j| j.id).collect::<Vec<_>>(), ids);
+        for (job, input) in jobs.iter().zip(["a.synth.taletrek", "b.taletrek"]) {
+            assert_eq!(
+                job.kind,
+                JobKind::ReVoice {
+                    input: PathBuf::from(input),
+                    voice: "en_GB-cori-medium".to_string()
+                }
+            );
+            assert_eq!(job.state, JobState::Queued);
+        }
+    }
+
+    #[test]
     fn pump_spawns_exactly_one_thread_per_job_before_started_drains() {
         // A spawner whose threads never report Exited: the executor must
         // still refuse to double-spawn across frames (the pre-Started gap).
@@ -458,7 +613,7 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
             thread::spawn(|| {})
         }));
-        ex.add_files(&[PathBuf::from("a.txt")]);
+        ex.add_files(&[PathBuf::from("a.txt")], DEFAULT_VOICE_ID);
 
         ex.pump();
         ex.pump();
@@ -484,7 +639,10 @@ mod tests {
                 let _ = tx.send(WorkerMsg::Exited(id));
             })
         }));
-        let ids = ex.add_files(&[PathBuf::from("a.txt"), PathBuf::from("b.txt")]);
+        let ids = ex.add_files(
+            &[PathBuf::from("a.txt"), PathBuf::from("b.txt")],
+            DEFAULT_VOICE_ID,
+        );
 
         ex.pump();
         // a finishes; b must still be Queued until then.
@@ -513,7 +671,7 @@ mod tests {
             *slot.lock().unwrap() = Some(tx.clone());
             thread::spawn(|| {})
         }));
-        let ids = ex.add_files(&[PathBuf::from("a.txt")]);
+        let ids = ex.add_files(&[PathBuf::from("a.txt")], DEFAULT_VOICE_ID);
         ex.pump();
         let tx = captured.lock().unwrap().clone().unwrap();
 
@@ -553,7 +711,7 @@ mod tests {
 
         // The failed job is skipped; a ghost Exited (unknown job) must not
         // clear the next real current job.
-        let ids2 = ex.add_files(&[PathBuf::from("b.txt")]);
+        let ids2 = ex.add_files(&[PathBuf::from("b.txt")], DEFAULT_VOICE_ID);
         ex.pump();
         tx.send(WorkerMsg::Exited(JobId::for_test(999))).unwrap();
         ex.drain();
@@ -755,5 +913,160 @@ mod tests {
                 && err.to_string().contains("resynth"),
             "guard message points at resynth: {err}"
         );
+    }
+
+    // ---- run_revoice_job_with (T8) ----
+
+    #[test]
+    fn revoice_job_core_revoices_a_full_bundle_and_leaves_the_input_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = write_input(
+            dir.path(),
+            "fable.txt",
+            "Chapter One\n\nThe North Wind and the Sun were disputing.\n\nChapter Two\n\nThey parted as friends.",
+        );
+        let (tx, _rx) = unbounded();
+        let full = run_convert_job_with(
+            JobId::for_test(1),
+            &input,
+            DEFAULT_VOICE_ID,
+            &tx,
+            &|| Ok(PathBuf::from("/dev/null")),
+            |_| StubRunner,
+            &WavPassthrough,
+            1,
+        )
+        .expect("convert first");
+        let before = std::fs::read(&full).unwrap();
+
+        let (tx, rx) = unbounded();
+        let new_voice = "en_GB-alan-medium";
+        let out = run_revoice_job_with(
+            JobId::for_test(2),
+            &full,
+            new_voice,
+            &tx,
+            &|| Ok(PathBuf::from("/dev/null")),
+            |_| StubRunner,
+            &WavPassthrough,
+            1,
+        )
+        .expect("re-voice should succeed");
+
+        // Output beside the input as <stem>.<voice>.taletrek — the input
+        // file itself is never clobbered.
+        assert_eq!(
+            out,
+            dir.path().join(format!("fable.synth.{new_voice}.taletrek"))
+        );
+        assert_eq!(std::fs::read(&full).unwrap(), before, "input untouched");
+
+        let bundle = read_book_bundle(&std::fs::read(&out).unwrap()).unwrap();
+        assert!(bundle.manifest.audio.present, "re-voiced output is full");
+        assert_eq!(bundle.manifest.book.voice_id, new_voice);
+        assert_eq!(bundle.manifest.audio.segment_count, 2);
+        assert_eq!(
+            bundle.manifest.generator.app,
+            crate::bundle_io::GENERATOR_APP
+        );
+
+        // Event stream mirrors Convert: Started{total} first, then progress.
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            WorkerMsg::Event(QueueEvent::Started {
+                id: JobId::for_test(2),
+                total: 2
+            })
+        );
+        while let Ok(msg) = rx.try_recv() {
+            assert!(
+                matches!(msg, WorkerMsg::Event(QueueEvent::Progress { .. })),
+                "only progress follows Started, got {msg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn revoice_job_core_accepts_a_text_only_bundle() {
+        // Re-voice is also the synth path for a text-only bundle (the CLI's
+        // resynth accepts both — the GUI action must too).
+        let dir = tempfile::tempdir().unwrap();
+        let source = write_input(dir.path(), "one.txt", "Just one paragraph.");
+        crate::run_parse(ParseArgs {
+            input: source,
+            voice: DEFAULT_VOICE_ID.to_string(),
+            output: None,
+        })
+        .unwrap();
+        let text_only = dir.path().join("one.taletrek");
+        let (tx, _rx) = unbounded();
+
+        let out = run_revoice_job_with(
+            JobId::for_test(1),
+            &text_only,
+            "en_US-ryan-medium",
+            &tx,
+            &|| Ok(PathBuf::from("/dev/null")),
+            |_| StubRunner,
+            &WavPassthrough,
+            1,
+        )
+        .expect("text-only re-voice should succeed");
+
+        assert_eq!(out, dir.path().join("one.en_US-ryan-medium.taletrek"));
+        let bundle = read_book_bundle(&std::fs::read(&out).unwrap()).unwrap();
+        assert!(bundle.manifest.audio.present);
+        assert_eq!(bundle.manifest.book.voice_id, "en_US-ryan-medium");
+    }
+
+    #[test]
+    fn revoice_job_core_fails_before_started_on_a_non_bundle_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = write_input(dir.path(), "broken.taletrek", "not a zip");
+        let (tx, rx) = unbounded();
+
+        let err = run_revoice_job_with(
+            JobId::for_test(1),
+            &input,
+            "en_US-ryan-medium",
+            &tx,
+            &|| Ok(PathBuf::from("/dev/null")),
+            |_| StubRunner,
+            &WavPassthrough,
+            1,
+        )
+        .expect_err("a non-bundle input must fail the job");
+
+        assert!(
+            err.to_string().to_lowercase().contains("bundle"),
+            "actionable message: {err}"
+        );
+        // Failed during load — before Started, so no events were sent.
+        assert!(rx.try_recv().is_err(), "no Started for a dead input");
+    }
+
+    #[test]
+    fn run_job_by_kind_dispatches_revoice_jobs() {
+        // Dispatch through the production seam with a garbage input: the
+        // load fails fast — no voice download, no engine spawned.
+        let dir = tempfile::tempdir().unwrap();
+        let input = write_input(dir.path(), "broken.taletrek", "not a zip");
+        let (tx, rx) = unbounded();
+
+        let err = run_job_by_kind(
+            JobId::for_test(1),
+            &JobKind::ReVoice {
+                input,
+                voice: "en_US-ryan-medium".to_string(),
+            },
+            &tx,
+        )
+        .expect_err("garbage input must fail before any download");
+
+        assert!(
+            err.to_string().to_lowercase().contains("bundle"),
+            "actionable message: {err}"
+        );
+        assert!(rx.try_recv().is_err());
     }
 }

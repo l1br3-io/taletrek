@@ -59,9 +59,8 @@ pub enum JobKind {
     },
     /// Any bundle → re-voiced `.taletrek` (CLI `resynth`).
     ///
-    /// Constructed by the voice picker's re-voice action (T8) — matched
-    /// already by the executor + render code.
-    #[allow(dead_code)] // T8 (voice picker) queues it; the executor dispatches it today
+    /// Queued by the GUI's "Add existing bundle…" action (the voice
+    /// picker's re-voice path, T8) and dispatched by the executor.
     ReVoice {
         /// Input path: a `.taletrek` bundle (text-only or full).
         input: PathBuf,
@@ -307,6 +306,33 @@ mod tests {
         });
         assert_eq!(q.get(id).unwrap().state, JobState::Done(out));
         assert!(q.next_job().is_none(), "nothing left to run");
+    }
+
+    #[test]
+    fn revoice_happy_path_transitions_like_convert_and_keeps_its_kind() {
+        // T8: the re-voice action queues JobKind::ReVoice — the lifecycle
+        // transitions are kind-agnostic, but the kind (and its voice
+        // override) must survive to the terminal state for rendering.
+        let mut q = Queue::new();
+        let id = q.push(revoice("fable.synth.taletrek"));
+
+        q.tick(QueueEvent::Started { id, total: 4 });
+        q.tick(QueueEvent::Progress { id, done: 3 });
+        let out = PathBuf::from("fable.synth.en_GB-alan-medium.taletrek");
+        q.tick(QueueEvent::Finished {
+            id,
+            out: out.clone(),
+        });
+
+        let job = q.get(id).unwrap();
+        assert_eq!(job.state, JobState::Done(out));
+        assert_eq!(
+            job.kind,
+            JobKind::ReVoice {
+                input: PathBuf::from("fable.synth.taletrek"),
+                voice: "en_GB-northern_english_male-medium".to_string()
+            }
+        );
     }
 
     #[test]
