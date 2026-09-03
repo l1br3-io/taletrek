@@ -153,6 +153,9 @@ impl Encoder for DesktopEncoder {
 /// [`SynthError::VoiceLoad`]).
 pub struct DesktopRunner {
     spec: RunnerSpec,
+    /// Read only when lazily constructing the sherpa engine (feature
+    /// `sherpa`); the subprocess engine takes the path per predict call.
+    #[cfg_attr(not(feature = "sherpa"), allow(dead_code))]
     voice_model: PathBuf,
     inner: Option<Inner>,
 }

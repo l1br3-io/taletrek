@@ -27,6 +27,15 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobId(u64);
 
+impl JobId {
+    /// Test-only constructor for sibling modules' tests (`sink`, `executor`).
+    /// The field stays private — production ids are issued by [`Queue::push`].
+    #[cfg(test)]
+    pub(crate) fn for_test(n: u64) -> Self {
+        Self(n)
+    }
+}
+
 /// What a job does when the executor runs it.
 ///
 /// Both kinds carry the input path and the voice id (e.g.
@@ -49,6 +58,10 @@ pub enum JobKind {
         voice: String,
     },
     /// Any bundle → re-voiced `.taletrek` (CLI `resynth`).
+    ///
+    /// Constructed by the voice picker's re-voice action (T8) — matched
+    /// already by the executor + render code.
+    #[allow(dead_code)] // T8 (voice picker) queues it; the executor dispatches it today
     ReVoice {
         /// Input path: a `.taletrek` bundle (text-only or full).
         input: PathBuf,
@@ -118,7 +131,9 @@ pub enum QueueEvent {
         /// Path of the written `.taletrek` bundle.
         out: PathBuf,
     },
-    /// The job failed. No-op unless the job is `Running`.
+    /// The job failed. No-op unless the job is `Queued` or `Running` — a
+    /// job can fail *before* it starts (unreadable input, no cache dir),
+    /// when the executor hasn't reported [`QueueEvent::Started`] yet.
     Failed {
         /// The job that failed.
         id: JobId,
@@ -128,6 +143,7 @@ pub enum QueueEvent {
     /// The user cancelled the job — no-op from terminal states. Sent by
     /// [`Queue::cancel`]; a still-executing thread's subsequent events for
     /// this job simply no-op.
+    #[allow(dead_code)] // constructed by the cancel UX (T9); matched already
     Cancelled {
         /// The job to cancel.
         id: JobId,
@@ -203,7 +219,7 @@ impl Queue {
                 }
             }
             QueueEvent::Failed { message, .. } => {
-                if matches!(job.state, JobState::Running { .. }) {
+                if matches!(job.state, JobState::Queued | JobState::Running { .. }) {
                     job.state = JobState::Failed(message);
                 }
             }
@@ -228,6 +244,7 @@ impl Queue {
     /// User cancel: `Queued`/`Running` → `Cancelled`; terminal states
     /// (notably `Done`) are no-ops. Sugar for
     /// `tick(QueueEvent::Cancelled { id })`.
+    #[allow(dead_code)] // the cancel button arrives in T9 (failure/cancel UX)
     pub fn cancel(&mut self, id: JobId) {
         self.tick(QueueEvent::Cancelled { id });
     }
@@ -238,6 +255,7 @@ impl Queue {
     }
 
     /// Look up one job by id — detail views.
+    #[allow(dead_code)] // detail views (T9); executor tests use it today
     pub fn get(&self, id: JobId) -> Option<&Job> {
         self.jobs.iter().find(|j| j.id == id)
     }
@@ -317,6 +335,24 @@ mod tests {
             q.get(id).unwrap().state,
             JobState::Failed("voice download failed".to_string())
         );
+    }
+
+    #[test]
+    fn failure_before_start_marks_a_queued_job_failed() {
+        // The executor reports Started only after the input loads (it needs
+        // the paragraph count) — a load failure must therefore land on a
+        // Queued job, or the job would be retried forever.
+        let mut q = Queue::new();
+        let id = q.push(convert("broken.txt"));
+        q.tick(QueueEvent::Failed {
+            id,
+            message: "reading source document broken.txt".to_string(),
+        });
+        assert_eq!(
+            q.get(id).unwrap().state,
+            JobState::Failed("reading source document broken.txt".to_string())
+        );
+        assert!(q.next_job().is_none(), "a pre-start failure never runs");
     }
 
     #[test]
