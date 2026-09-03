@@ -18,6 +18,8 @@ pub mod bundle;
 pub mod cache_key;
 pub mod encode;
 pub mod normalize;
+#[cfg(feature = "native-encode")]
+pub mod opus_native;
 pub mod pcm;
 #[cfg(feature = "sherpa")]
 pub mod sherpa_runner;
@@ -47,5 +49,7 @@ pub use synth::{
     synthesize_paragraph, PiperRunner, SubprocessPiperRunner, SynthError, SynthOptions, SynthOutput,
 };
 
+#[cfg(feature = "native-encode")]
+pub use opus_native::NativeOpusEncoder;
 #[cfg(feature = "sherpa")]
 pub use sherpa_runner::{default_espeak_data_dir, SherpaRunner};
