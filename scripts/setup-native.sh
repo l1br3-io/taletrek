@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Sets up the native deps for local development of desktop/ + server/:
-#   piper (rhasspy TTS)  → ~/.cache/taletrek/piper/
-#   default voice model  → ~/.cache/taletrek/voices/   (same dir the apps' curated auto-download uses)
-#   ffmpeg               → checked only (install via your package manager if missing)
+# Sets up the native deps for local development of desktop/:
+#   default voice model  → ~/.cache/taletrek/voices/   (the in-process engine's curated cache)
+#   espeak-ng-data       → ~/.cache/taletrek/          (the in-process sherpa engine needs it at runtime)
+#   piper (rhasspy TTS)  → ~/.cache/taletrek/piper/    (only for --piper overrides + e2e tests; espeak-ng-data is copied out of its tarball)
+#   ffmpeg               → checked only (only for --ffmpeg overrides + e2e tests; install via your package manager if missing)
 #
 # Idempotent — safe to re-run; skips anything already present.
 # Usage: bash scripts/setup-native.sh
@@ -47,6 +48,19 @@ else
   echo "voice:  installed → $VOICES_DIR/$VOICE.onnx"
 fi
 
+# espeak-ng-data for the in-process sherpa engine (feature `sherpa`): the
+# piper tarball ships it next to the binary — copy it out once so
+# SherpaRunner's default cache location is seeded. Never MOVE it: the piper
+# binary needs it as a sibling at runtime.
+if [ -d "$CACHE/espeak-ng-data" ]; then
+  echo "espeak-ng-data: already present at $CACHE/espeak-ng-data"
+elif [ -d "$PIPER_DIR/espeak-ng-data" ]; then
+  cp -r "$PIPER_DIR/espeak-ng-data" "$CACHE/espeak-ng-data"
+  echo "espeak-ng-data: copied from piper install → $CACHE/espeak-ng-data"
+else
+  echo "espeak-ng-data: MISSING (expected inside the piper install)"
+fi
+
 if command -v ffmpeg >/dev/null 2>&1 && ffmpeg -version 2>/dev/null | grep -qi libopus; then
   echo "ffmpeg: OK ($(ffmpeg -version | head -1 | cut -d' ' -f3), libopus enabled)"
 else
@@ -55,11 +69,15 @@ fi
 
 cat <<EOF
 
-Done. To use the local piper + pre-seeded voice, export:
+Done. The desktop synth/resynth default to the in-process engines (no external
+binaries): they need the seeded voice + espeak-ng-data above, nothing else.
+
+piper + ffmpeg are now OPTIONAL — only for the subprocess overrides and the
+#[ignore]d e2e tests. To use them, export:
 
   export PATH="$PIPER_DIR:\$PATH"
   export TALETREK_VOICE_PATH="$VOICES_DIR/$VOICE.onnx"   # only needed for the #[ignore]d e2e tests
 
-The desktop and server find piper on PATH by default; first synth now hits the
-pre-seeded voice cache (no download).
+The #[ignore]d sherpa test finds espeak-ng-data at $CACHE/espeak-ng-data
+(set TALETREK_ESPEAK_DATA to override; the CLI honors it too).
 EOF

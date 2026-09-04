@@ -5,9 +5,12 @@
 //! Piper → concat → encode) lives in [`taletrek_synth::synthesize_paragraph`].
 //! The engine here:
 //! - flattens every chapter's paragraphs into one work list,
-//! - runs them through a `rayon` thread pool sized by `--jobs`,
-//! - constructs a **fresh** [`taletrek_synth::PiperRunner`] per task (each task
-//!   owns its own `&mut R`; the runner can't be shared across threads), and
+//! - splits it into at most `jobs` contiguous chunks and runs them through a
+//!   `rayon` thread pool sized by `--jobs`,
+//! - constructs **one** [`taletrek_synth::PiperRunner`] per chunk via
+//!   `make_runner` (the per-thread cost model: a runner that owns a loaded
+//!   model — sherpa — loads it once per chunk, never per paragraph; the
+//!   stateless subprocess runner is unaffected), and
 //! - shares a single `&E` [`taletrek_synth::Encoder`] by reference
 //!   (`encode(&self)` is stateless).
 //!
@@ -16,8 +19,8 @@
 //! follow-up; v1 aborts.
 //!
 //! Re-exported at the crate root ([`synth_all_paragraphs`], [`SynthJobError`]);
-//! both hosts (desktop CLI, server) reach this through their own stamping glue
-//! (`bundle_io::synth_and_stamp` on the desktop).
+//! hosts reach this through their stamping glue (`bundle_io::synth_and_stamp`
+//! on the desktop).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -69,9 +72,13 @@ fn collect_paragraphs(bundle: &BookBundle) -> Vec<&str> {
 ///
 /// - `voice_id` is the cache-key namespace (and ends up in the manifest's
 ///   `book.voiceId`); `voice_model` is the resolved `.onnx` path on disk.
-/// - `make_runner` is called once **per paragraph** to produce a fresh runner
-///   owned by that task. Production passes a closure capturing the piper binary
-///   path; tests pass a closure returning a stub runner.
+/// - `make_runner` is called once **per chunk** to produce a runner owned by
+///   that chunk for its whole lifetime. The work list is split into at most
+///   `jobs` contiguous chunks (ceil(total/jobs) paragraphs each), so at most
+///   `jobs` runner constructions happen per run — the per-thread cost model
+///   model-loaded runners (sherpa) need. Production passes a closure
+///   constructing from the piper binary path or the voice model; tests pass a
+///   closure returning a stub runner.
 /// - `encoder` is shared by `&E` across all tasks (`encode(&self)` is
 ///   stateless), matching the spec's "one shared `OpusEncoder`" decision.
 /// - `jobs` bounds the pool (clamped to `>= 1`). The default `num_cpus` is
@@ -116,38 +123,46 @@ where
     let total = paragraphs.len();
     let done = AtomicUsize::new(0);
 
-    // Run the parallel map inside our bounded pool. Each task constructs a
-    // fresh runner (owned locally — `&mut R` can't cross threads) and borrows
-    // the shared `&E` encoder by ref. `collect::<Result<Vec<_>, _>>` makes
-    // rayon short-circuit on the first error → v1 "abort on first error".
-    // `.inspect` reports synth progress after each successful paragraph.
-    let segments: Result<Vec<(String, AudioSegment)>, SynthError> = pool.install(|| {
+    // Split into at most `jobs` chunks: ceil(total/jobs) paragraphs each, so
+    // `make_runner` fires at most `jobs` times per run (one construction per
+    // chunk — the per-thread cost model). Chunk size floors at 1 (fewer
+    // paragraphs than jobs → one chunk per paragraph, never per job slot);
+    // `par_chunks(0)` would panic.
+    let chunk_size = total.div_ceil(jobs).max(1);
+
+    // Run the chunked map inside our bounded pool. Each chunk constructs one
+    // runner (owned for the chunk's lifetime — `&mut R` can't cross threads)
+    // and processes its paragraphs sequentially, borrowing the shared `&E`
+    // encoder by ref. `collect::<Result<Vec<_>, _>>` makes rayon short-circuit
+    // on the first chunk error → v1 "abort on first error"; a successful
+    // paragraph reports synth progress before the next.
+    let segments: Result<Vec<Vec<(String, AudioSegment)>>, SynthError> = pool.install(|| {
         paragraphs
-            .par_iter()
-            .map(|text| {
+            .par_chunks(chunk_size)
+            .map(|chunk| {
                 let mut runner = make_runner();
-                let mut opts = SynthOptions::new(voice_model, &mut runner, encoder);
-                let out = synthesize_paragraph(voice_id, text, &mut opts)?;
-                let key = out.cache_key.clone();
-                let seg = AudioSegment {
-                    key: out.cache_key,
-                    codec: out.codec,
-                    bytes: out.audio,
-                };
-                Ok((key, seg))
-            })
-            .inspect(|res| {
-                if let Some(p) = progress {
-                    if res.is_ok() {
+                let mut out = Vec::with_capacity(chunk.len());
+                for text in chunk {
+                    let mut opts = SynthOptions::new(voice_model, &mut runner, encoder);
+                    let synthesized = synthesize_paragraph(voice_id, text, &mut opts)?;
+                    if let Some(p) = progress {
                         let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                         p.synth_step(n, total);
                     }
+                    let key = synthesized.cache_key.clone();
+                    let seg = AudioSegment {
+                        key: synthesized.cache_key,
+                        codec: synthesized.codec,
+                        bytes: synthesized.audio,
+                    };
+                    out.push((key, seg));
                 }
+                Ok(out)
             })
             .collect()
     });
 
-    Ok(segments?.into_iter().collect())
+    Ok(segments?.into_iter().flatten().collect())
 }
 
 #[cfg(test)]
@@ -301,6 +316,88 @@ mod tests {
         let expected_key = cache_key(voice, "Repeat me.");
         assert_eq!(segments.len(), 1, "duplicate paragraphs must dedup");
         assert!(segments.contains_key(&expected_key));
+    }
+
+    #[test]
+    fn make_runner_fires_once_per_chunk_not_per_paragraph() {
+        // The per-thread cost model (sherpa: one model load per runner): 8
+        // paragraphs at jobs=2 → chunk size 4 → exactly 2 runner
+        // constructions, deterministic regardless of scheduling. A
+        // per-paragraph factory would fire 8 times (a model reload per
+        // paragraph — the T3 wiring hazard).
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec![
+                "One.".into(),
+                "Two.".into(),
+                "Three.".into(),
+                "Four.".into(),
+                "Five.".into(),
+                "Six.".into(),
+                "Seven.".into(),
+                "Eight.".into(),
+            ],
+        )]);
+
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let segments = synth_all_paragraphs(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            move || {
+                seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                StubRunner
+            },
+            &WavPassthrough,
+            2,
+            None,
+        )
+        .expect("stub runner succeeds");
+
+        assert_eq!(segments.len(), 8, "every paragraph still yields a segment");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "one runner construction per chunk (jobs=2 → 2 chunks of 4)"
+        );
+    }
+
+    #[test]
+    fn make_runner_never_exceeds_paragraph_count_when_jobs_high() {
+        // jobs > paragraphs → chunk size floors at 1 → one construction per
+        // paragraph (2), never per job slot (8).
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec!["One.".into(), "Two.".into()],
+        )]);
+
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let segments = synth_all_paragraphs(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            move || {
+                seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                StubRunner
+            },
+            &WavPassthrough,
+            8,
+            None,
+        )
+        .expect("stub runner succeeds");
+
+        assert_eq!(segments.len(), 2);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "one construction per chunk (2 chunks of 1), not per job slot"
+        );
     }
 
     #[test]

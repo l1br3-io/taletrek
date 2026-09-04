@@ -11,7 +11,7 @@
 | Component         | Location    | Stack                              | Default test command                | In CI?            |
 | ---------------- | ----------- | ---------------------------------- | ----------------------------------- | ----------------- |
 | SPA / PWA         | `web/`      | Vite 8 + React 19 + TS             | `pnpm test` (vitest)                | yes (`web`)       |
-| Desktop CLI       | `desktop/`  | Rust + clap (headless)             | `cargo test -p taletrek-desktop`    | yes (`rust`)      |
+| Desktop app (GUI + CLI) | `desktop/` | Rust + clap + egui            | `cargo test -p taletrek-desktop`    | yes (`rust`)      |
 | shared `synth`    | `crates/synth`  | Rust (pure core + bundle I/O)  | `cargo test -p taletrek-synth`      | yes (`rust`)      |
 | shared `worker`   | `crates/worker` | Rust (voice/synth pool)        | `cargo test -p taletrek-worker`     | yes (`rust`)      |
 | real-piper e2e (desktop) | `#[ignore]`d | cargo `--ignored` | manual or `integration` job | optional (`integration`, non-blocking) |
@@ -23,7 +23,10 @@ them is behind a `#[ignore]`d Rust integration test, gated on
 `TALETREK_VOICE_PATH` (+ optional `TALETREK_PIPER_BIN` / `TALETREK_FFMPEG_BIN`),
 and run either by hand or via a non-blocking `workflow_dispatch` job. The SPA
 has no equivalent gate — its vitest suite is fully hermetic (jsdom +
-`fake-indexeddb`).
+`fake-indexeddb`). The in-process sherpa test (`taletrek-synth`, feature
+`sherpa`) additionally resolves espeak-ng-data via `TALETREK_ESPEAK_DATA`
+(default `~/.cache/taletrek/espeak-ng-data`, seeded by the setup script);
+`just test-e2e` wires all of it, including `--features taletrek-synth/sherpa`.
 
 ## Local setup for real-synth work
 
@@ -83,8 +86,8 @@ Full gotcha detail (incl. dormant/retired browser-facts): [`docs/gotchas.md`](go
 
 ## 2. Desktop — `desktop/`
 
-Binary `taletrek-desktop`. Headless `clap` CLI with `synth` and `resynth`
-subcommands. No HTTP.
+Binary `taletrek-desktop`. `clap` CLI (`parse`, `synth`, `resynth`, `gui`;
+bare invocation opens the GUI). No HTTP.
 
 ### Run
 
@@ -98,6 +101,7 @@ cargo test -p taletrek-desktop --test synth_e2e -- --ignored --nocapture  # real
 | Layer               | Where                         | What it covers                                                |
 | ------------------ | ----------------------------- | ------------------------------------------------------------- |
 | Unit (inline)       | `src/bundle_io.rs`, `src/cli.rs` | argument parsing, bundle read/write, error paths              |
+| GUI unit (inline)   | `src/gui/**` (`queue.rs`, `executor.rs`, `settings.rs`, `views/`) | the pure job-queue state machine + executor cores (voice snapshot, cancel, retry, re-voice, humanized errors, settings persistence snapshots) — no egui types in the tested seams; the GUI is state-machine-tested only, manual smoke is the release gate |
 | Integration (gated) | `tests/synth_e2e.rs`            | spawns itself via `env!("CARGO_BIN_EXE_taletrek-desktop")`, full synth + resynth round-trip (`#[ignore]`d) |
 
 Same `TALETREK_VOICE_PATH` gate as the crates; same `include_bytes!` of the

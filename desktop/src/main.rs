@@ -1,5 +1,10 @@
 //! Entry point for `taletrek-desktop`.
 //!
+//! Bare invocation (or `gui`) opens the eframe window (desktop-synth-gui
+//! T7): pick files → queue → convert (parse → in-process synth → bundle
+//! write) with live progress. The `parse`/`synth`/`resynth` subcommands are
+//! the headless CLI, unchanged.
+//!
 //! Phase 6 (T2.6) wires a `Progress` sink (stderr behind a `Write` seam)
 //! through both subcommands: download progress during voice resolution,
 //! `synth [n/total] pct%` per paragraph, and a final `kind: N segments, voice
@@ -8,20 +13,26 @@
 //!
 //! Effort 4 / T1: voice acquisition + progress reporting moved into the shared
 //! `taletrek-worker` crate; this binary imports them. Behavior is identical.
+//!
+//! desktop-synth-gui / T5: engine selection lives in [`engine`] — the default
+//! is in-process (sherpa-onnx runner + vendored libopus encoder, no external
+//! binaries); `--piper`/`--ffmpeg` demote either side back to the subprocess
+//! engines independently.
 
 mod bundle_io;
 mod cli;
+mod engine;
+mod gui;
 
 use std::fs;
 use std::path::Path;
-use std::thread::available_parallelism;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 
 use taletrek_parse::SourceFormat;
 use taletrek_synth::synth::PiperRunner;
-use taletrek_synth::{read_book_bundle, BookBundle, Encoder, OpusEncoder, SubprocessPiperRunner};
+use taletrek_synth::{read_book_bundle, BookBundle};
 use taletrek_worker::{
     default_cache_dir, resolve_voice, Progress, ResolveOpts, UreqVoiceSource, DEFAULT_VOICE_ID,
 };
@@ -31,13 +42,15 @@ use crate::bundle_io::{
     refuse_full_input, resynth_and_stamp, synth_and_stamp, write_book_bundle_file,
 };
 use crate::cli::{Cli, Cmd, CommonArgs, ParseArgs};
+use crate::engine::{effective_jobs, DesktopEncoder, DesktopRunner, RunnerSpec};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Cmd::Parse { args } => run_parse(args),
-        Cmd::Synth { common } => run_synth(common),
-        Cmd::Resynth { common } => run_resynth(common),
+        None | Some(Cmd::Gui) => gui::run(),
+        Some(Cmd::Parse { args }) => run_parse(args),
+        Some(Cmd::Synth { common }) => run_synth(common),
+        Some(Cmd::Resynth { common }) => run_resynth(common),
     }
 }
 
@@ -122,21 +135,30 @@ pub struct UnsupportedExtensionError {
 /// result beside the input (or to `--output`). Progress flows to stderr
 /// throughout: voice-download bytes, per-paragraph synth count, and a final
 /// summary.
+///
+/// Engines (T5): the in-process sherpa runner + native Opus encoder by
+/// default; `--piper`/`--ffmpeg` demote either side to the subprocess engines
+/// independently. The native default runs 2 jobs (per-model memory); the
+/// subprocess default uses the CPU count. Explicit `--jobs` always wins.
 fn run_synth(common: CommonArgs) -> Result<()> {
     let progress = Progress::to_stderr();
-    let encoder = OpusEncoder::new().with_binary(common.ffmpeg.clone());
-    let piper_bin = common.piper.clone();
+    let runner_spec = RunnerSpec::select(common.piper.as_deref())?;
+    let encoder = DesktopEncoder::select(common.ffmpeg.as_deref())?;
+    let jobs = effective_jobs(common.jobs, &runner_spec);
     run_synth_with(
         common,
         Some(&progress),
-        move || SubprocessPiperRunner::new(&piper_bin),
+        move |voice_model| DesktopRunner::new(runner_spec.clone(), voice_model),
         &encoder,
+        jobs,
     )
 }
 
-/// The injectable core of `run_synth`: everything after CLI parsing, with the
-/// synth engine (runner factory + encoder) and progress as seams so unit tests
-/// drive the full pipeline — input dispatch included — with in-process stubs.
+/// The injectable core of `run_synth`: everything after CLI parsing + engine
+/// selection, with the synth runner factory + encoder and progress as seams so
+/// unit tests drive the full pipeline — input dispatch included — with
+/// in-process stubs. The factory receives the resolved voice-model path (the
+/// native engine constructs from it; the subprocess engine ignores it).
 ///
 /// The input dispatch ([`load_synth_input`]) runs first, before voice
 /// resolution, so a bad input path or unsupported source extension fails fast
@@ -144,13 +166,14 @@ fn run_synth(common: CommonArgs) -> Result<()> {
 fn run_synth_with<R, E, F>(
     common: CommonArgs,
     progress: Option<&Progress>,
-    make_runner: F,
+    make_runner_of: F,
     encoder: &E,
+    jobs: usize,
 ) -> Result<()>
 where
     R: PiperRunner + Send,
-    E: Encoder + Sync,
-    F: Fn() -> R + Sync,
+    E: taletrek_synth::Encoder + Sync,
+    F: Fn(&Path) -> R + Sync,
 {
     let voice_id = common
         .voice
@@ -175,14 +198,15 @@ where
     )
     .context("resolving voice model")?;
 
-    // Parallel synth + manifest stamp. A fresh runner is constructed per
-    // paragraph (each task owns its own `&mut R`); the encoder is shared by ref.
-    let jobs = common.jobs.unwrap_or_else(default_jobs);
+    // Parallel synth + manifest stamp. A fresh runner is constructed per work
+    // chunk via the factory (the native engine loads its model once per
+    // chunk); the encoder is shared by ref.
+    let factory_voice_model = voice_model.clone();
     synth_and_stamp(
         &mut bundle,
         &voice_id,
         &voice_model,
-        make_runner,
+        move || make_runner_of(&factory_voice_model),
         encoder,
         jobs,
         progress.map(|p| p as &dyn taletrek_worker::ProgressSink),
@@ -242,6 +266,10 @@ fn load_synth_input(input: &Path, voice_id: &str) -> Result<BookBundle> {
 /// already-full input is accepted — that's the primary use case. The manifest's
 /// `book.voiceId` is rewritten to the new voice before synth so the stamped
 /// manifest and content-addressed cache keys agree. Progress mirrors `synth`.
+///
+/// Engines mirror `synth` (T5): in-process defaults, `--piper`/`--ffmpeg`
+/// independent overrides, native default 2 jobs / subprocess CPU count,
+/// explicit `--jobs` always wins.
 fn run_resynth(common: CommonArgs) -> Result<()> {
     let progress = Progress::to_stderr();
 
@@ -269,15 +297,17 @@ fn run_resynth(common: CommonArgs) -> Result<()> {
 
     // Re-voice: rewrite manifest.voiceId, then parallel synth under the new
     // voice (replacing the audio map — stale segments under the old voice are
-    // discarded, not merged).
-    let encoder = OpusEncoder::new().with_binary(common.ffmpeg.clone());
-    let piper_bin = common.piper.clone();
-    let jobs = common.jobs.unwrap_or_else(default_jobs);
+    // discarded, not merged). Engine selection mirrors synth: native defaults,
+    // independent --piper/--ffmpeg overrides.
+    let runner_spec = RunnerSpec::select(common.piper.as_deref())?;
+    let encoder = DesktopEncoder::select(common.ffmpeg.as_deref())?;
+    let jobs = effective_jobs(common.jobs, &runner_spec);
+    let factory_voice_model = voice_model.clone();
     resynth_and_stamp(
         &mut bundle,
         &voice_id,
         &voice_model,
-        move || SubprocessPiperRunner::new(&piper_bin),
+        move || DesktopRunner::new(runner_spec.clone(), &factory_voice_model),
         &encoder,
         jobs,
         Some(&progress),
@@ -293,13 +323,6 @@ fn run_resynth(common: CommonArgs) -> Result<()> {
         .with_context(|| format!("writing output bundle {}", output.display()))?;
     progress.summary("resynth", bundle.audio.len(), &voice_id, &output);
     Ok(())
-}
-
-/// Resolve the default job count: the number of available parallel workers
-/// (`std::thread::available_parallelism`), falling back to 1 when the platform
-/// can't report it. Equivalent to the `num_cpus` crate without the dep.
-fn default_jobs() -> usize {
-    available_parallelism().map(|n| n.get()).unwrap_or(1)
 }
 
 #[cfg(test)]
@@ -492,8 +515,8 @@ mod tests {
     }
 
     /// `CommonArgs` pointing at `input` with the stub voice model, one job,
-    /// and placeholder binaries (never spawned — the runner/encoder seams are
-    /// injected by the caller of `run_synth_with`).
+    /// and no engine overrides (the runner/encoder seams are injected by the
+    /// caller of `run_synth_with` — nothing is ever spawned).
     fn synth_args(input: &std::path::Path, voice_model: &std::path::Path) -> CommonArgs {
         CommonArgs {
             input: input.to_path_buf(),
@@ -501,8 +524,8 @@ mod tests {
             voice_path: Some(voice_model.to_path_buf()),
             output: None,
             jobs: Some(1),
-            piper: "never-spawned".into(),
-            ffmpeg: "never-spawned".into(),
+            piper: None,
+            ffmpeg: None,
         }
     }
 
@@ -519,8 +542,9 @@ mod tests {
         run_synth_with(
             synth_args(&input, &voice_model),
             None,
-            || StubRunner,
+            |_| StubRunner,
             &WavPassthrough,
+            1,
         )
         .expect("chained synth should succeed");
 
@@ -578,8 +602,9 @@ mod tests {
         run_synth_with(
             synth_args(&input, &voice_model),
             None,
-            || StubRunner,
+            |_| StubRunner,
             &WavPassthrough,
+            1,
         )
         .expect("bundle-input synth should succeed");
 
@@ -599,8 +624,9 @@ mod tests {
         let err = run_synth_with(
             synth_args(&input, &voice_model),
             None,
-            || StubRunner,
+            |_| StubRunner,
             &WavPassthrough,
+            1,
         )
         .expect_err("unknown extension must error before any synth");
 

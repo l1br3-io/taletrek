@@ -67,6 +67,19 @@ pub enum SynthError {
         chunk: String,
     },
 
+    /// A voice model could not be loaded for in-process synthesis: missing
+    /// model or sibling config, unreadable/invalid config, or the ONNX runtime
+    /// rejected the model. Construction-time only (runners load their model
+    /// once at construction); the path + reason carry enough context to branch
+    /// on (re-download the voice vs. point elsewhere).
+    #[error("voice model `{}` failed to load: {reason}", .path.display())]
+    VoiceLoad {
+        /// The `.onnx` path that was attempted.
+        path: PathBuf,
+        /// What went wrong (missing sibling config, rejected by the runtime…).
+        reason: String,
+    },
+
     /// The `ffmpeg` encoder binary could not be spawned.
     #[error("encoder binary `{bin}` failed to start: {source}")]
     EncoderMissing {
@@ -92,9 +105,26 @@ pub enum SynthError {
         stderr: String,
     },
 
+    /// The in-process (native) Opus encoder failed: rejected input WAV
+    /// (non-16-bit, odd payload, unsupported channel count) or a
+    /// libopus/OGG-level encode error.
+    #[error("native opus encode failed: {reason}")]
+    NativeEncode {
+        /// What went wrong (WAV parse rejection or encoder error).
+        reason: String,
+    },
+
     /// The input text normalized to empty (whitespace-only). Nothing to synth.
     #[error("synthesize_paragraph received text that normalized to empty")]
     EmptyText,
+
+    /// The host cancelled the run between paragraphs. Not a pipeline
+    /// failure: the host's runner wrapper ([`PiperRunner`] decorator) checks
+    /// a cooperative cancel flag before each predict and raises this so
+    /// rayon's abort-on-first-error short-circuit unwinds the pool
+    /// promptly. Hosts surface it as "Cancelled", not "Failed".
+    #[error("cancelled")]
+    Cancelled,
 }
 
 /// Synthesize one chunk of normalized text to raw PCM WAV bytes via Piper.
@@ -328,6 +358,14 @@ mod tests {
         let mut opts = SynthOptions::new(Path::new("/dev/null"), &mut runner, &encoder);
         let err = synthesize_paragraph("v", "   \n  ", &mut opts).unwrap_err();
         assert!(matches!(err, SynthError::EmptyText));
+    }
+
+    #[test]
+    fn cancelled_renders_as_a_single_word() {
+        // Hosts branch on this variant to show "Cancelled", never "Failed";
+        // the display stays a plain marker so it never masquerades as a
+        // pipeline failure in logs.
+        assert_eq!(SynthError::Cancelled.to_string(), "cancelled");
     }
 
     #[test]

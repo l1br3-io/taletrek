@@ -11,6 +11,17 @@ description = "TaleTrek reusable synth pipeline + portable bundle I/O. By l1br3.
 name = "taletrek_synth"
 path = "src/lib.rs"
 
+[features]
+# In-process TTS via the official `sherpa-onnx` crate (k2-fsa). Off by default
+# so the workspace build stays lean; the desktop binary turns it on. See
+# `src/sherpa_runner.rs`'s module doc for the linking requirements.
+sherpa = ["dep:sherpa-onnx", "dep:dirs", "dep:tempfile"]
+# In-process Opus encode via the `opus` crate (opusic-sys's default `bundled`
+# feature vendors libopus — static, cmake-built) + the pure-Rust `ogg` mux.
+# Off by default so the workspace build stays lean; see `src/opus_native.rs`'s
+# module doc for the linking requirements.
+native-encode = ["dep:opus", "dep:ogg"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -19,6 +30,11 @@ hex = "0.4"
 regex = "1"
 thiserror = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+sherpa-onnx = { version = "1.13.7", optional = true }
+dirs = { version = "6", optional = true }
+tempfile = { version = "3", optional = true }
+ogg = { version = "0.9", optional = true }
+opus = { version = "0.4", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
