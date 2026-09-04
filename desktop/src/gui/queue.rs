@@ -142,9 +142,15 @@ pub enum QueueEvent {
     /// The user cancelled the job — no-op from terminal states. Sent by
     /// [`Queue::cancel`]; a still-executing thread's subsequent events for
     /// this job simply no-op.
-    #[allow(dead_code)] // constructed by the cancel UX (T9); matched already
     Cancelled {
         /// The job to cancel.
+        id: JobId,
+    },
+    /// The user re-queued a `Failed` or `Cancelled` job — no-op from any
+    /// other state. Sent by [`Queue::retry`]; the executor spawns the job
+    /// again when its FIFO turn comes (a fresh thread, fresh cancel flag).
+    Retried {
+        /// The job to re-queue.
         id: JobId,
     },
 }
@@ -191,7 +197,8 @@ impl Queue {
             | QueueEvent::Progress { id, .. }
             | QueueEvent::Finished { id, .. }
             | QueueEvent::Failed { id, .. }
-            | QueueEvent::Cancelled { id } => *id,
+            | QueueEvent::Cancelled { id }
+            | QueueEvent::Retried { id } => *id,
         };
         // One job Running at a time — decided before the mutable borrow.
         let another_running = self
@@ -227,6 +234,11 @@ impl Queue {
                     job.state = JobState::Cancelled;
                 }
             }
+            QueueEvent::Retried { .. } => {
+                if matches!(job.state, JobState::Failed(_) | JobState::Cancelled) {
+                    job.state = JobState::Queued;
+                }
+            }
         }
     }
 
@@ -243,9 +255,15 @@ impl Queue {
     /// User cancel: `Queued`/`Running` → `Cancelled`; terminal states
     /// (notably `Done`) are no-ops. Sugar for
     /// `tick(QueueEvent::Cancelled { id })`.
-    #[allow(dead_code)] // the cancel button arrives in T9 (failure/cancel UX)
     pub fn cancel(&mut self, id: JobId) {
         self.tick(QueueEvent::Cancelled { id });
+    }
+
+    /// User retry: `Failed`/`Cancelled` → `Queued` (the job keeps its
+    /// arrival slot and its original voice snapshot); every other state is
+    /// a no-op. Sugar for `tick(QueueEvent::Retried { id })`.
+    pub fn retry(&mut self, id: JobId) {
+        self.tick(QueueEvent::Retried { id });
     }
 
     /// All jobs in arrival order (front = oldest) — the render list.
@@ -497,6 +515,85 @@ mod tests {
         q.cancel(id);
         assert_eq!(q.get(id).unwrap().state, JobState::Cancelled);
         assert!(q.next_job().is_none(), "cancelled job never runs");
+    }
+
+    #[test]
+    fn retry_returns_a_failed_job_to_queued_and_it_runs_again() {
+        let mut q = Queue::new();
+        let id = q.push(convert("broke.epub"));
+        q.tick(QueueEvent::Started { id, total: 2 });
+        q.tick(QueueEvent::Failed {
+            id,
+            message: "malformed epub".to_string(),
+        });
+        assert!(q.next_job().is_none(), "failed job is not runnable");
+
+        q.retry(id);
+        assert_eq!(q.get(id).unwrap().state, JobState::Queued);
+        assert_eq!(q.next_job().unwrap().id, id, "retried job is next");
+
+        // The full lifecycle replays from Queued.
+        q.tick(QueueEvent::Started { id, total: 2 });
+        q.tick(QueueEvent::Finished {
+            id,
+            out: PathBuf::from("broke.synth.taletrek"),
+        });
+        assert!(matches!(q.get(id).unwrap().state, JobState::Done(_)));
+    }
+
+    #[test]
+    fn retry_returns_a_cancelled_job_to_queued() {
+        let mut q = Queue::new();
+        let id = q.push(convert("stopped.txt"));
+        q.cancel(id);
+        q.retry(id);
+        assert_eq!(q.get(id).unwrap().state, JobState::Queued);
+        assert_eq!(q.next_job().unwrap().id, id);
+    }
+
+    #[test]
+    fn retry_of_done_queued_or_running_is_a_no_op() {
+        let mut q = Queue::new();
+        let done = q.push(convert("done.txt"));
+        q.tick(QueueEvent::Started { id: done, total: 1 });
+        q.tick(QueueEvent::Finished {
+            id: done,
+            out: PathBuf::from("done.synth.taletrek"),
+        });
+        q.retry(done);
+        assert!(matches!(q.get(done).unwrap().state, JobState::Done(_)));
+
+        let queued = q.push(convert("queued.txt"));
+        q.retry(queued);
+        assert_eq!(q.get(queued).unwrap().state, JobState::Queued);
+        assert_eq!(
+            q.jobs()
+                .filter(|j| matches!(j.state, JobState::Queued))
+                .count(),
+            1,
+            "retry of a Queued job adds no second runnable"
+        );
+
+        let running = q.push(convert("running.txt"));
+        // Advance the queue: queued runs first, then running — pin `running`
+        // into Running by finishing `queued` then Starting `running`.
+        q.tick(QueueEvent::Started {
+            id: queued,
+            total: 1,
+        });
+        q.tick(QueueEvent::Finished {
+            id: queued,
+            out: PathBuf::from("queued.synth.taletrek"),
+        });
+        q.tick(QueueEvent::Started {
+            id: running,
+            total: 1,
+        });
+        q.retry(running);
+        assert_eq!(
+            q.get(running).unwrap().state,
+            JobState::Running { done: 0, total: 1 }
+        );
     }
 
     #[test]

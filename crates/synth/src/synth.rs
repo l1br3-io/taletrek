@@ -117,6 +117,14 @@ pub enum SynthError {
     /// The input text normalized to empty (whitespace-only). Nothing to synth.
     #[error("synthesize_paragraph received text that normalized to empty")]
     EmptyText,
+
+    /// The host cancelled the run between paragraphs. Not a pipeline
+    /// failure: the host's runner wrapper ([`PiperRunner`] decorator) checks
+    /// a cooperative cancel flag before each predict and raises this so
+    /// rayon's abort-on-first-error short-circuit unwinds the pool
+    /// promptly. Hosts surface it as "Cancelled", not "Failed".
+    #[error("cancelled")]
+    Cancelled,
 }
 
 /// Synthesize one chunk of normalized text to raw PCM WAV bytes via Piper.
@@ -350,6 +358,14 @@ mod tests {
         let mut opts = SynthOptions::new(Path::new("/dev/null"), &mut runner, &encoder);
         let err = synthesize_paragraph("v", "   \n  ", &mut opts).unwrap_err();
         assert!(matches!(err, SynthError::EmptyText));
+    }
+
+    #[test]
+    fn cancelled_renders_as_a_single_word() {
+        // Hosts branch on this variant to show "Cancelled", never "Failed";
+        // the display stays a plain marker so it never masquerades as a
+        // pipeline failure in logs.
+        assert_eq!(SynthError::Cancelled.to_string(), "cancelled");
     }
 
     #[test]
