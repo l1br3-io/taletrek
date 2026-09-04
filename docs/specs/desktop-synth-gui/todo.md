@@ -10,4 +10,4 @@
 - [x] T8 — voice picker (catalog + download) + re-voice queue action → [`tasks/008-voice-picker-revoice.md`](./tasks/008-voice-picker-revoice.md)
 - [x] T9 — settings, failure/cancel UX, drag-drop → [`tasks/009-settings-failure-ux.md`](./tasks/009-settings-failure-ux.md)
 - [x] T10 — release workflow (GH Actions matrix → artifacts) → [`tasks/010-release-workflow.md`](./tasks/010-release-workflow.md)
-- [ ] T11 — docs close-out + full gates + reader smoke → [`tasks/011-docs-final-verify.md`](./tasks/011-docs-final-verify.md)
+- [x] T11 — docs close-out + full gates + reader smoke → [`tasks/011-docs-final-verify.md`](./tasks/011-docs-final-verify.md)

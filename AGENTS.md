@@ -4,7 +4,7 @@
 
 ## Current effort
 
-**Efforts 1–2 complete (pending merge) — `native-pivot`, then `kernel-parse`:** the pivot re-founded the repo on the Rust-kernel direction — personal server deleted, SPA scoped to reader + landing, docs re-telling the native story (decision: [ADR-0015](docs/adrs/0015-native-pivot-rust-kernel-and-native-apps.md); the why + locked stack: [`docs/ideas/native-pivot.md`](docs/ideas/native-pivot.md)). `kernel-parse` built the ingest front door: `crates/parse` + `taletrek-desktop parse --input <doc>` → text-only `.taletrek`, and the chained `synth --input <doc>` → full audio bundle. Specs: [`native-pivot`](docs/specs/native-pivot/spec.md) · [`kernel-parse`](docs/specs/kernel-parse/spec.md). Next efforts: `desktop-synth-gui` → `android-app` → `ios-app` — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**Efforts 1–3 shipped — the desktop processor is real.** `native-pivot` re-founded the repo on the Rust-kernel direction (decision: [ADR-0015](docs/adrs/0015-native-pivot-rust-kernel-and-native-apps.md); the why + locked stack: [`docs/ideas/native-pivot.md`](docs/ideas/native-pivot.md)). `kernel-parse` built the ingest front door: `crates/parse` + `taletrek-desktop parse --input <doc>` → text-only `.taletrek`, chained `synth --input <doc>` → full audio bundle. `desktop-synth-gui` gave the kernel a face and removed its external binaries: in-process sherpa-onnx TTS (`SherpaRunner`, feature `sherpa`) + native Opus encode (`NativeOpusEncoder`, feature `native-encode`) are the defaults (subprocess `--piper`/`--ffmpeg` stay as overrides), an egui GUI (`gui` subcommand; bare run opens it) turns documents into bundles via a job queue with voice picker/catalog download, and a tag push builds release artifacts. Specs: [`native-pivot`](docs/specs/native-pivot/spec.md) · [`kernel-parse`](docs/specs/kernel-parse/spec.md) · [`desktop-synth-gui`](docs/specs/desktop-synth-gui/spec.md). Next effort: `android-app` → then `ios-app` — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Live status always lives in the current effort's `spec.md` frontmatter (`status:`) + `todo.md` — **not here**.
 
@@ -29,11 +29,12 @@ pnpm verify               # lint + typecheck + test + build (run before commits)
 pnpm -C spike/piper dev       # Piper spike app on :5174 (throwaway)
 pnpm -C spike/web-audio dev   # Web Audio mobile-engine spike on :5175 (throwaway)
 
-# Rust (run from repo root) — desktop CLI + shared crates
+# Rust (run from repo root) — desktop app (GUI + CLI) + shared crates
 cargo build --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo test --workspace -- --ignored    # real piper+ffmpeg; needs TALETREK_VOICE_PATH — see docs/testing.md
+cargo test --workspace -- --ignored    # real piper+ffmpeg+sherpa; needs TALETREK_VOICE_PATH — see docs/testing.md
+just gui                               # run the desktop GUI (egui)
 ```
 
 Workspace: pnpm + cargo. `web/` (landing + reader) + `spike/{piper,web-audio}/` (throwaway de-risking apps) on Node 24 / pnpm 10.31.0; `desktop/` + `crates/{parse,synth,worker}/` on Rust 1.97.0 (see [`docs/testing.md`](docs/testing.md) for the full test matrix).
@@ -62,11 +63,18 @@ web/              the web app — landing page + `.taletrek` reader (Vite 8 + Re
                     datasource/ (local), backup.ts
 spike/piper/       throwaway Piper TTS validation app
 spike/web-audio/   throwaway Web Audio mobile-engine spike
-desktop/           the headless kernel CLI — Rust + clap (binary taletrek-desktop;
-                    parse + synth + resynth — source → bundle → audio)
+desktop/           the kernel app — Rust + clap + egui (binary taletrek-desktop;
+                    gui subcommand / bare run = windowed converter; CLI: parse +
+                    synth + resynth — source → bundle → audio)
+  src/gui/         eframe app: pure queue state machine + executor + views;
+                    egui never appears outside this dir
+.github/workflows/ ci.yml (gates) + release.yml (tag v* → per-target release
+                    artifacts — see docs/releasing.md)
 crates/parse/      the ingest core: format detect + per-format parsers + M4 clean
                     (bytes in → ParsedBook out → text-only bundle; UniFFI-ready pure data)
-crates/synth/      shared pure core: bundle I/O, synth, encode, cache_key (the interchange format)
+crates/synth/      shared pure core: bundle I/O, synth, encode, cache_key (the interchange format);
+                    engine impls behind features — sherpa_runner.rs (`sherpa`),
+                    opus_native.rs (`native-encode`), subprocess piper/ffmpeg stay
 crates/worker/     shared host-level: voice acquire + rayon pool + manifest stamping
 ```
 
@@ -102,7 +110,7 @@ Full detail lives in [`docs/gotchas.md`](docs/gotchas.md) — **read the relevan
 
 Open opencode in this repo and say, e.g.:
 
-> "Current effort is `native-pivot` — read `docs/specs/native-pivot/spec.md` + `todo.md`, then run `/build` for the next pending task. Direction: `docs/ROADMAP.md` (native track, ADR-0015)."
+> "Current effort is `android-app` — read `docs/specs/android-app/spec.md` + `todo.md`, then run `/build` for the next pending task. Direction: `docs/ROADMAP.md` (native track, ADR-0015)."
 
 ## Non-goals (product)
 

@@ -1,5 +1,5 @@
 ---
-status: active        # draft → active → shipped
+status: shipped       # draft → active → shipped   (merged 2026-09-02; the merge-commit flip was missed — done retroactively in desktop-synth-gui T11's close-out sweep)
 started: 2026-08-30
 ---
 
