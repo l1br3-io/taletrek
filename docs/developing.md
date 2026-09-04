@@ -96,3 +96,8 @@ Vulkan-less environments (Xvfb, some VMs/remote sessions).
 `just test-web` · `just test-rust` (hermetic) · `just test-e2e` (real
 piper+ffmpeg, gate pre-wired) · `just verify` (SPA gates) · `just verify-rust`
 (clippy `-D warnings` + tests). Details per layer: [`docs/testing.md`](testing.md).
+
+## Releasing
+
+Tag push → CI matrix → GitHub-release artifacts (`taletrek-<version>-<target>`):
+see [`docs/releasing.md`](releasing.md).
