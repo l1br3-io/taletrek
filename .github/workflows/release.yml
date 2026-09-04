@@ -1,0 +1,142 @@
+# Release builds — tag `v*` → per-target artifacts (spec: desktop-synth-gui).
+#
+# Hand-rolled on purpose: no cargo-dist scaffolding. One job, a target matrix,
+# the binary the workspace already produces.
+#
+#   x86_64-unknown-linux-gnu  first-class — smoke-tested before upload
+#   aarch64-linux / windows / macos  best-effort (continue-on-error) —
+#     informed by the T1/T2 spikes: sherpa-onnx statically links its prebuilt
+#     per-platform archive (no cmake/libclang), the `opus` crate's bundled
+#     libopus needs cmake + a C compiler. Nothing else is installed.
+#
+# Dry runs: workflow_dispatch on any branch — same build + smoke + artifact
+# upload, but no GitHub release is created (tag pushes only). See
+# docs/releasing.md.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: # dry run — no release, artifacts stay on the run
+
+permissions:
+  contents: write # attach artifacts to the tag's GitHub release
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    # glibc (gnu) Linux target: the spikes proved onnxruntime + espeak-ng +
+    # piper_phonemize + libopus all statically link under gnu, leaving only
+    # baseline system libs dynamic — musl would buy nothing and risk the
+    # k2-fsa prebuilt link. Recorded in tasks/010-release-workflow.md.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            bin_ext: ''
+            best_effort: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest # cross-compiled from x86_64
+            archive: tar.gz
+            bin_ext: ''
+            best_effort: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+            bin_ext: '.exe'
+            best_effort: true
+          - target: aarch64-apple-darwin
+            os: macos-latest # arm64 runner — native build
+            archive: tar.gz
+            bin_ext: ''
+            best_effort: true
+    continue-on-error: ${{ matrix.best_effort }}
+
+    # Cross-link config for the aarch64-linux entry (no-ops elsewhere: the
+    # env keys are target-specific). sherpa's prebuilt archive is C++; the
+    # bundled libopus is cmake-built C — both need the cross toolchain.
+    env:
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+      CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+      AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          pkgs='cmake' # bundled libopus (T2); sherpa needs nothing (T1)
+          if [ "${{ matrix.target }}" = 'aarch64-unknown-linux-gnu' ]; then
+            pkgs="$pkgs gcc-aarch64-linux-gnu g++-aarch64-linux-gnu"
+          fi
+          sudo apt-get update && sudo apt-get install -y $pkgs
+
+      - name: Build (release, default features = native engines)
+        run: cargo build --release --locked -p taletrek-desktop --target '${{ matrix.target }}'
+
+      # Prove the artifact works before it is shipped: version + a real parse
+      # (text-only path — no voice, no audio, no display). Linux first-class
+      # only; the other targets have no smoke coverage (best-effort, per spec).
+      - name: Smoke (headless)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          bin="target/${{ matrix.target }}/release/taletrek-desktop"
+          "$bin" --version
+          out="$(mktemp -d)/plain.taletrek"
+          "$bin" parse --input crates/parse/testdata/plain.txt --output "$out"
+          test -s "$out" && echo "smoke OK: $(wc -c < "$out") bytes"
+
+      - name: Resolve version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = 'tag' ]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+            echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          fi
+
+      - name: Package
+        run: |
+          stage="dist/taletrek-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.target }}/release/taletrek-desktop${{ matrix.bin_ext }}" "$stage/"
+          name="taletrek-${VERSION}-${{ matrix.target }}"
+          if [ "${{ matrix.archive }}" = 'zip' ]; then
+            powershell -NoProfile -Command "Compress-Archive -Path '$stage' -DestinationPath 'dist/${name}.zip'"
+          else
+            tar -czf "dist/${name}.tar.gz" -C dist "taletrek-${VERSION}-${{ matrix.target }}"
+          fi
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taletrek-${{ env.VERSION }}-${{ matrix.target }}
+          path: dist/taletrek-*-${{ matrix.target }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+      - name: Attach to the GitHub release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/taletrek-*-${{ matrix.target }}.${{ matrix.archive }}
