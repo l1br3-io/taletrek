@@ -1,7 +1,7 @@
 # Roadmap
 
 > Directional overview — no dates, no calendar. The *what's next*, not the spec.
-> **Current effort:** [`native-pivot`](./specs/native-pivot/spec.md) — effort 1 of the native track (below), active since 2026-08-30: purge the old product, re-found the repo on the Rust-kernel direction. The decision: [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md). The why + locked stack: [`ideas/native-pivot.md`](./ideas/native-pivot.md).
+> **Next effort:** `android-app` — effort 4 of the native track (below); efforts 1–3 (`native-pivot`, `kernel-parse`, `desktop-synth-gui`) are shipped. The decision: [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md). The why + locked stack: [`ideas/native-pivot.md`](./ideas/native-pivot.md).
 > Companion: [`VISION.md`](./VISION.md) — the problem and goals.
 
 TaleTrek is a free, open-source **reading companion**: turn any ebook or document into an audiobook using an OSS neural TTS engine (sherpa-onnx — Piper + Kokoro voices) running in-process in a Rust kernel. It strips links, images, and footnotes so only the story flows, then plays it as background audio that survives screen lock, app switching, and phone closure. You go for a run; your book comes with you. Free app-store downloads, no subscription, no cloud — one kernel, three native apps, and a web landing page + `.taletrek` reader.
@@ -60,9 +60,9 @@ Five efforts, dependency-aware:
 
 | # | Effort | State |
 | --- | --- | --- |
-| 1 | `native-pivot` — purge + re-foundation: ADR-0015, server deletion, SPA scoped down to reader + landing, docs rewrite, landing v1 | 🚧 active ([spec](./specs/native-pivot/spec.md)) |
+| 1 | `native-pivot` — purge + re-foundation: ADR-0015, server deletion, SPA scoped down to reader + landing, docs rewrite, landing v1 | ✅ shipped ([spec](./specs/native-pivot/spec.md)) |
 | 2 | `kernel-parse` — `crates/parse` (EPUB/TXT/HTML/MD/DOCX/PDF; MOBI open) + CLI file→bundle — closes the interim no-producer gap | ✅ shipped ([spec](./specs/kernel-parse/spec.md)) |
-| 3 | `desktop-synth-gui` — the processor app (GUI + CLI); egui vs Tauri decided in its spec | planned |
+| 3 | `desktop-synth-gui` — the processor app: in-process sherpa-onnx TTS + native Opus encode behind the existing traits, egui GUI + unchanged CLI, release workflow | ✅ shipped ([spec](./specs/desktop-synth-gui/spec.md)) |
 | 4 | `android-app` — Jetpack Compose + Media3 player; kernel via UniFFI; free Play Store download | planned |
 | 5 | `ios-app` — SwiftUI + AVFoundation player; kernel via UniFFI; free App Store download ($99/yr accepted) | planned |
 
