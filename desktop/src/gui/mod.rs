@@ -7,13 +7,18 @@
 //! `queue.rs`/`executor.rs`/`sink.rs` stay importable with zero UI
 //! dependencies, so their logic is unit-testable headlessly.
 //!
-//! T8 adds voice as a first-class concern: the [`views::voice`] picker
-//! (curated catalog, cached flags) backed by a persisted default voice, and
-//! the second queue action — re-voice an existing `.taletrek` via
-//! [`Executor::add_bundles`]. Settings and failure/cancel UX arrive in T9.
+//! T8 added voice as a first-class concern: the [`views::voice`] picker
+//! (curated catalog, cached flags) backed by the persisted default voice,
+//! and the second queue action — re-voice an existing `.taletrek` via
+//! [`Executor::add_bundles`]. T9 rounds it into a resilient utility:
+//! persistent [`settings`] (output dir, default voice, workers), cooperative
+//! cancel + retry on every queue row, typed failures surfaced as human
+//! sentences, and drag-drop as the primary add path (the dialogs stay as
+//! fallback).
 
 pub mod executor;
 pub mod queue;
+pub mod settings;
 pub mod sink;
 pub mod views;
 
@@ -24,13 +29,10 @@ use anyhow::Result;
 
 use eframe::egui;
 
-use executor::Executor;
+use executor::{DropReport, Executor};
 use queue::{Job, JobKind, JobState};
-use taletrek_worker::{default_cache_dir, DEFAULT_VOICE_ID};
-
-/// egui-storage key for the persisted default voice id. Absent (first run)
-/// → [`DEFAULT_VOICE_ID`]; written whenever the picker selection changes.
-const VOICE_STORAGE_KEY: &str = "taletrek.default-voice";
+use settings::Settings;
+use taletrek_worker::default_cache_dir;
 
 /// MiB constant for download-progress rendering.
 const MIB: f64 = 1024.0 * 1024.0;
@@ -68,39 +70,77 @@ pub fn run() -> Result<()> {
 
 /// The eframe app: an [`Executor`] plus its render surface. All state
 /// changes flow through the executor (queue events); this type only renders
-/// and forwards user actions — plus the persisted default-voice selection
-/// the picker writes and enqueueing reads.
+/// and forwards user actions — plus the [`Settings`] (output dir, default
+/// voice, workers) that enqueueing and job spawning read.
 struct TaleTrekApp {
     /// The queue owner + job thread manager.
     executor: Executor,
-    /// The default voice new jobs are stamped with (the picker's current
-    /// selection; each job snapshots it at enqueue time as its per-job
-    /// override). Persisted via egui storage ([`VOICE_STORAGE_KEY`]).
-    default_voice: String,
+    /// Persistent settings (egui storage) — the picker's default voice,
+    /// the output directory override, the worker count.
+    settings: Settings,
     /// The platform voice cache dir (for the picker's "downloaded" flags);
     /// `None` when no cache home is discoverable.
     cache_dir: Option<PathBuf>,
+    /// The latest drag-drop outcome — surfaced next to the queue until the
+    /// next drop replaces it (rejected files carry their reasons here).
+    last_drop: Option<DropReport>,
 }
 
 impl TaleTrekApp {
-    /// A fresh app: the persisted default voice (first run →
-    /// [`DEFAULT_VOICE_ID`]) and an empty queue.
+    /// A fresh app: persisted settings (first run → defaults) and an empty
+    /// queue.
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let default_voice = cc
-            .egui_ctx
-            .data_mut(|data| data.get_persisted(egui::Id::new(VOICE_STORAGE_KEY)))
-            .unwrap_or_else(|| DEFAULT_VOICE_ID.to_string());
         Self {
             executor: Executor::new(),
-            default_voice,
+            settings: Settings::load(&cc.egui_ctx),
             cache_dir: default_cache_dir(),
+            last_drop: None,
         }
     }
 
-    /// Set the default voice and persist it for the next run.
+    /// Set the default voice and persist every setting for the next run.
     fn set_default_voice(&mut self, ctx: &egui::Context, id: String) {
-        ctx.data_mut(|data| data.insert_persisted(egui::Id::new(VOICE_STORAGE_KEY), id.clone()));
-        self.default_voice = id;
+        self.settings.default_voice = id;
+        self.settings.save(ctx);
+    }
+
+    /// Enqueue this frame's dropped files (the primary add path, T9):
+    /// classify → Convert/ReVoice, dedup by path, reject unsupported
+    /// formats with a visible reason. egui reports the drop on the frame it
+    /// arrives; the queue-path dedup makes that idempotent regardless.
+    fn handle_drops(&mut self, ctx: &egui::Context) {
+        let dropped: Vec<PathBuf> = ctx.input(|input| {
+            input
+                .raw
+                .dropped_files
+                .iter()
+                .filter_map(|file| file.path.clone())
+                .collect()
+        });
+        if dropped.is_empty() {
+            return;
+        }
+        let voice = self.settings.default_voice.clone();
+        self.last_drop = Some(self.executor.add_dropped(&dropped, &voice));
+    }
+
+    /// The one-line summary of the latest drop — counts plus every
+    /// rejection reason (the "visible reason" contract).
+    fn drop_summary(report: &DropReport) -> String {
+        let mut parts = vec![format!("Added {} file(s)", report.enqueued)];
+        parts.extend(
+            report
+                .duplicates
+                .iter()
+                .map(|p| format!("already queued: {}", p.display())),
+        );
+        parts.extend(
+            report
+                .rejected
+                .iter()
+                .map(|(p, reason)| format!("rejected {} — {reason}", p.display())),
+        );
+        parts.join(" · ")
     }
 
     /// Open the file dialog (multi-select over every format Convert
@@ -116,39 +156,40 @@ impl TaleTrekApp {
             )
             .pick_files();
         if let Some(paths) = picked {
-            let _ = self.executor.add_files(&paths, &self.default_voice);
+            let voice = self.settings.default_voice.clone();
+            let _ = self.executor.add_files(&paths, &voice);
         }
     }
 
     /// Open the `.taletrek` picker ("Add existing bundle…") and queue
     /// whatever comes back as ReVoice jobs under the current default voice
-    /// — a full-bundle voice swap, output written beside the input as
+    /// — a full-bundle voice swap, output written as
     /// `<stem>.<voice>.taletrek`.
     fn pick_bundle(&mut self) {
         let picked = rfd::FileDialog::new()
             .add_filter("TaleTrek bundles", &["taletrek"])
             .pick_files();
         if let Some(paths) = picked {
-            let _ = self.executor.add_bundles(&paths, &self.default_voice);
+            let voice = self.settings.default_voice.clone();
+            let _ = self.executor.add_bundles(&paths, &voice);
         }
     }
 
-    /// One queue row: the input's file name plus its state (progress bar
-    /// while running, output path when done, message when failed).
-    fn render_job(&self, ui: &mut egui::Ui, job: &Job) {
+    /// One queue row: the input's file name, its state (progress bar while
+    /// running, output path when done, human message when failed), and its
+    /// row action — Cancel while pending/running, Retry from a terminal
+    /// failure/cancel.
+    fn render_job(&mut self, ui: &mut egui::Ui, job: &Job) {
+        let (input, voice) = match &job.kind {
+            JobKind::Convert { input, voice } | JobKind::ReVoice { input, voice } => (input, voice),
+        };
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                let (input, voice) = match &job.kind {
-                    JobKind::Convert { input, voice } | JobKind::ReVoice { input, voice } => {
-                        (input, voice)
-                    }
-                };
                 let name = input
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| input.display().to_string());
                 ui.strong(name);
-                // The job's voice snapshot (its per-job override) + kind.
                 let kind = match &job.kind {
                     JobKind::Convert { .. } => "convert",
                     JobKind::ReVoice { .. } => "re-voice",
@@ -157,6 +198,24 @@ impl TaleTrekApp {
                     egui::RichText::new(format!("{kind} · {voice}"))
                         .small()
                         .color(ui.visuals().weak_text_color()),
+                );
+                // The row action, right-aligned: cancel pending/running
+                // jobs, retry failed/cancelled ones.
+                ui.with_layout(
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| match &job.state {
+                        JobState::Queued | JobState::Running { .. } => {
+                            if ui.button("Cancel").clicked() {
+                                self.executor.cancel(job.id);
+                            }
+                        }
+                        JobState::Failed(_) | JobState::Cancelled => {
+                            if ui.button("Retry").clicked() {
+                                self.executor.retry(job.id);
+                            }
+                        }
+                        JobState::Done(_) => {}
+                    },
                 );
             });
             match &job.state {
@@ -195,6 +254,11 @@ impl TaleTrekApp {
                             .small()
                             .color(egui::Color32::from_rgb(200, 80, 80)),
                     );
+                    ui.label(
+                        egui::RichText::new(input.display().to_string())
+                            .small()
+                            .color(ui.visuals().weak_text_color()),
+                    );
                 }
                 JobState::Cancelled => {
                     ui.label("Cancelled");
@@ -206,12 +270,15 @@ impl TaleTrekApp {
 
 impl eframe::App for TaleTrekApp {
     /// The non-painting half of each frame: drain worker messages, admit
-    /// the next job, and keep the frames coming while a job runs (worker
-    /// events arrive off-frame). Also runs while the window is hidden if a
-    /// repaint was requested — progress keeps flowing minimized.
+    /// dropped files, start the next job, and keep the frames coming while
+    /// a job runs (worker events arrive off-frame). Also runs while the
+    /// window is hidden if a repaint was requested — progress keeps flowing
+    /// minimized.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.executor.drain();
-        self.executor.pump();
+        self.handle_drops(ctx);
+        let run = self.settings.run_config();
+        self.executor.pump(&run);
         if self.executor.is_busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -228,6 +295,27 @@ impl eframe::App for TaleTrekApp {
                     self.pick_bundle();
                 }
             });
+            ui.label(
+                egui::RichText::new("…or drop files anywhere in this window.")
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+            );
+            if let Some(report) = &self.last_drop {
+                ui.label(
+                    egui::RichText::new(Self::drop_summary(report))
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
+            }
+            ui.add_space(8.0);
+
+            egui::CollapsingHeader::new("Settings")
+                .default_open(false)
+                .show(ui, |ui| {
+                    if settings::render(ui, &mut self.settings) {
+                        self.settings.save(ui.ctx());
+                    }
+                });
             ui.add_space(8.0);
 
             ui.heading("Voice");
@@ -236,24 +324,25 @@ impl eframe::App for TaleTrekApp {
                     .small()
                     .color(ui.visuals().weak_text_color()),
             );
-            if let Some(id) =
-                views::voice::render(ui, &self.default_voice, self.cache_dir.as_deref())
-            {
+            let picked =
+                views::voice::render(ui, &self.settings.default_voice, self.cache_dir.as_deref());
+            if let Some(id) = picked {
                 self.set_default_voice(ui.ctx(), id);
             }
             ui.add_space(8.0);
 
             ui.heading("Queue");
-            let mut job_count = 0;
+            // Snapshot the rows first — the actions below need &mut self.
+            let jobs: Vec<Job> = self.executor.queue().jobs().cloned().collect();
+            let job_count = jobs.len();
             egui::ScrollArea::vertical().show(ui, |ui| {
-                for job in self.executor.queue().jobs() {
-                    job_count += 1;
+                for job in &jobs {
                     self.render_job(ui, job);
                 }
             });
             if job_count == 0 {
                 ui.label(
-                    "No files yet — add a document to turn it into an audiobook, \
+                    "No files yet — drop a document to turn it into an audiobook, \
                      or add an existing bundle to re-voice it.",
                 );
             }
