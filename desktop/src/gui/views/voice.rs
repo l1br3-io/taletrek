@@ -31,8 +31,9 @@ pub fn size_label(bytes: u64) -> String {
     format!("~{} MiB", bytes / (1024 * 1024))
 }
 
-/// The quality tier as a catalog-list label.
-fn quality_label(quality: VoiceQuality) -> &'static str {
+/// The quality tier as a lowercase label — the catalog list and the
+/// status line share this rendering.
+pub(crate) fn quality_label(quality: VoiceQuality) -> &'static str {
     match quality {
         VoiceQuality::Low => "low",
         VoiceQuality::Medium => "medium",

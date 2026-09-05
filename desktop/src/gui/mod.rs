@@ -15,6 +15,16 @@
 //! cancel + retry on every queue row, typed failures surfaced as human
 //! sentences, and drag-drop as the primary add path (the dialogs stay as
 //! fallback).
+//!
+//! # Shell regions (`desktop-ux-refresh`)
+//!
+//! The window decomposes into panels that encode the workflow (input →
+//! voice → output); `ui` shows them in dependency order — top bar (brand +
+//! side-panel toggle), prompt strip (the add path: dialogs, drop hint,
+//! drop-summary line), bottom status line (read-only [`views::status`]
+//! fold), right side panel (voice picker + settings — everything that
+//! *configures* jobs), and finally the central panel, which is queue-only
+//! (job rows in one scroll + the empty-state label).
 
 pub mod executor;
 pub mod queue;
@@ -58,7 +68,7 @@ pub fn run() -> Result<()> {
         renderer,
         viewport: egui::ViewportBuilder::default()
             .with_title("TaleTrek")
-            .with_inner_size([600.0, 680.0]),
+            .with_inner_size([780.0, 720.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -82,9 +92,11 @@ struct TaleTrekApp {
     /// The platform voice cache dir (for the picker's "downloaded" flags);
     /// `None` when no cache home is discoverable.
     cache_dir: Option<PathBuf>,
-    /// The latest drag-drop outcome — surfaced next to the queue until the
-    /// next drop replaces it (rejected files carry their reasons here).
+    /// The latest drag-drop outcome — surfaced under the prompt strip until
+    /// the next drop replaces it (rejected files carry their reasons here).
     last_drop: Option<DropReport>,
+    /// Whether the right side panel (voice picker + settings) is showing.
+    panel_open: bool,
 }
 
 impl TaleTrekApp {
@@ -99,6 +111,7 @@ impl TaleTrekApp {
             settings,
             cache_dir: default_cache_dir(),
             last_drop: None,
+            panel_open: false,
         }
     }
 
@@ -177,6 +190,120 @@ impl TaleTrekApp {
             let voice = self.settings.default_voice.clone();
             let _ = self.executor.add_bundles(&paths, &voice);
         }
+    }
+
+    /// The top bar: the `❯~` brand mark and the side-panel toggle — the
+    /// window's persistent identity strip.
+    fn top_bar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("top-bar").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong("❯~ TaleTrek");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("⚙").on_hover_text("Voice & settings").clicked() {
+                        self.panel_open = !self.panel_open;
+                    }
+                });
+            });
+        });
+    }
+
+    /// The prompt strip: the add path — both dialogs, the drop hint, and
+    /// the latest drop's summary line (reject reasons included, so drop
+    /// feedback lives where the drop happened).
+    fn prompt_strip(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("prompt-strip").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Add files…").clicked() {
+                    self.pick_files();
+                }
+                if ui.button("Add existing bundle…").clicked() {
+                    self.pick_bundle();
+                }
+                ui.label(
+                    egui::RichText::new("…or drop files anywhere in this window.")
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
+            });
+            if let Some(report) = &self.last_drop {
+                ui.label(
+                    egui::RichText::new(Self::drop_summary(report))
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
+            }
+        });
+    }
+
+    /// The bottom status line: `❯ <voice> · <quality>` left, live queue
+    /// and worker counts right — a read-only fold resolved by
+    /// [`views::status`] from queue states plus settings.
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::bottom("status-bar").show(ui, |ui| {
+            let states: Vec<&JobState> =
+                self.executor.queue().jobs().map(|job| &job.state).collect();
+            let line = views::status::status_line(
+                &self.settings.default_voice,
+                states,
+                self.settings.run_config().jobs,
+            );
+            views::status::render(ui, &line);
+        });
+    }
+
+    /// The toggleable right side panel: the voice picker and the settings
+    /// collapse — everything that configures jobs rather than being one.
+    fn side_panel(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::right("side-panel")
+            .default_size(300.0)
+            .show(ui, |ui| {
+                ui.heading("Voice");
+                ui.label(
+                    egui::RichText::new("New jobs use this voice; models download on first use.")
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
+                let picked = views::voice::render(
+                    ui,
+                    &self.settings.default_voice,
+                    self.cache_dir.as_deref(),
+                );
+                if let Some(id) = picked {
+                    self.set_default_voice(ui.ctx(), id);
+                }
+                ui.add_space(8.0);
+
+                egui::CollapsingHeader::new("Settings")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        if settings::render(ui, &mut self.settings) {
+                            self.settings.save(ui.ctx());
+                        }
+                    });
+            });
+    }
+
+    /// The central queue: every job's row in one scroll, plus the
+    /// empty-state label when there are none — queue-only, by the shell's
+    /// region split.
+    fn queue_panel(&mut self, ui: &mut egui::Ui) {
+        egui::CentralPanel::default().show(ui, |ui| {
+            // Snapshot the rows first — the actions below need &mut self.
+            let jobs: Vec<Job> = self.executor.queue().jobs().cloned().collect();
+            egui::ScrollArea::vertical()
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    if jobs.is_empty() {
+                        ui.label(
+                            "No files yet — drop a document to turn it into an audiobook, \
+                             or add an existing bundle to re-voice it.",
+                        );
+                    }
+                    for job in &jobs {
+                        self.render_job(ui, job);
+                    }
+                });
+        });
     }
 
     /// One queue row: the input's file name, its state (progress bar while
@@ -289,68 +416,16 @@ impl eframe::App for TaleTrekApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("TaleTrek");
-            ui.horizontal(|ui| {
-                if ui.button("Add files…").clicked() {
-                    self.pick_files();
-                }
-                if ui.button("Add existing bundle…").clicked() {
-                    self.pick_bundle();
-                }
-            });
-            ui.label(
-                egui::RichText::new("…or drop files anywhere in this window.")
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
-            );
-            if let Some(report) = &self.last_drop {
-                ui.label(
-                    egui::RichText::new(Self::drop_summary(report))
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                );
-            }
-            ui.add_space(8.0);
-
-            egui::CollapsingHeader::new("Settings")
-                .default_open(false)
-                .show(ui, |ui| {
-                    if settings::render(ui, &mut self.settings) {
-                        self.settings.save(ui.ctx());
-                    }
-                });
-            ui.add_space(8.0);
-
-            ui.heading("Voice");
-            ui.label(
-                egui::RichText::new("New jobs use this voice; models download on first use.")
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
-            );
-            let picked =
-                views::voice::render(ui, &self.settings.default_voice, self.cache_dir.as_deref());
-            if let Some(id) = picked {
-                self.set_default_voice(ui.ctx(), id);
-            }
-            ui.add_space(8.0);
-
-            ui.heading("Queue");
-            // Snapshot the rows first — the actions below need &mut self.
-            let jobs: Vec<Job> = self.executor.queue().jobs().cloned().collect();
-            let job_count = jobs.len();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for job in &jobs {
-                    self.render_job(ui, job);
-                }
-            });
-            if job_count == 0 {
-                ui.label(
-                    "No files yet — drop a document to turn it into an audiobook, \
-                     or add an existing bundle to re-voice it.",
-                );
-            }
-        });
+        // Panel order is layout order: top bar, then prompt strip below it,
+        // status line at the bottom, side panel beside what remains, and
+        // the central queue last inside whatever is left.
+        self.top_bar(ui);
+        self.prompt_strip(ui);
+        self.status_bar(ui);
+        if self.panel_open {
+            self.side_panel(ui);
+        }
+        self.queue_panel(ui);
     }
 
     /// Graceful shutdown: join the running job thread so the output bundle
