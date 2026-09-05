@@ -352,6 +352,16 @@ pub fn style(theme: Theme) -> egui::Style {
     }
 }
 
+/// A queue-card frame: surface fill, hairline line stroke, 4 px rounding,
+/// and a comfortable inner margin — the chrome around every job row.
+pub fn card_frame(t: Tokens) -> egui::Frame {
+    egui::Frame::default()
+        .fill(t.surface)
+        .stroke(egui::Stroke::new(1.0, t.line))
+        .corner_radius(egui::CornerRadius::same(4))
+        .inner_margin(egui::Margin::same(10))
+}
+
 /// Install a theme on a live context: select the egui dark/light mode,
 /// install the style, and register the fonts. The single egui-mutating
 /// entry point (everything else is pure).
@@ -600,5 +610,27 @@ mod tests {
         assert_eq!(Theme::from_persisted(Some("sepia-tomorrow")), Theme::Dark);
         assert_eq!(Theme::from_persisted(Some("")), Theme::Dark);
         assert_eq!(Theme::default(), Theme::Dark);
+    }
+
+    #[test]
+    fn card_frame_presents_surface_line_and_card_rounding() {
+        for theme in [Theme::Dark, Theme::Sepia] {
+            let t = theme.tokens();
+            let frame = card_frame(t);
+            assert_eq!(frame.fill, t.surface, "{theme:?} card fill");
+            assert_eq!(frame.stroke.color, t.line, "{theme:?} card stroke color");
+            assert_eq!(frame.stroke.width, 1.0, "{theme:?} card hairline");
+            assert!(
+                (3..=4).contains(&frame.corner_radius.nw) && frame.corner_radius.is_same(),
+                "{theme:?} card rounding {} outside 3–4 px",
+                frame.corner_radius.nw
+            );
+            assert!(
+                frame.inner_margin.left >= 8 && frame.inner_margin.top >= 8,
+                "{theme:?} card margin {}x{} not comfortable",
+                frame.inner_margin.left,
+                frame.inner_margin.top
+            );
+        }
     }
 }

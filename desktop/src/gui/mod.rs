@@ -33,7 +33,7 @@ pub mod sink;
 pub mod theme;
 pub mod views;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -47,6 +47,11 @@ use taletrek_worker::default_cache_dir;
 
 /// MiB constant for download-progress rendering.
 const MIB: f64 = 1024.0 * 1024.0;
+
+/// Longest job-card title in characters before an ellipsis truncates it —
+/// keeps every card one readable row at any window size (the spec's
+/// "no blown-out cards").
+const TITLE_MAX_CHARS: usize = 36;
 
 /// Open the TaleTrek window (bare invocation and the `gui` subcommand both
 /// land here). Blocks until the window closes; a job still running at close
@@ -158,6 +163,34 @@ impl TaleTrekApp {
                 .map(|(p, reason)| format!("rejected {} — {reason}", p.display())),
         );
         parts.join(" · ")
+    }
+
+    /// The card title for a job's input: its file name (the only serif
+    /// text in the chrome), or the full display path when the path has no
+    /// file name (root, `..`). Truncated to [`TITLE_MAX_CHARS`]
+    /// characters with a single ellipsis so no card row blows out.
+    fn job_title(input: &Path) -> String {
+        let raw = input
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| input.display().to_string());
+        if raw.chars().count() <= TITLE_MAX_CHARS {
+            raw
+        } else {
+            raw.chars()
+                .take(TITLE_MAX_CHARS - 1)
+                .chain(std::iter::once('…'))
+                .collect()
+        }
+    }
+
+    /// The card's meta line: the job kind and its voice
+    /// (`convert · en_US-amy-medium`).
+    fn job_meta(kind: &JobKind) -> String {
+        match kind {
+            JobKind::Convert { voice, .. } => format!("convert · {voice}"),
+            JobKind::ReVoice { voice, .. } => format!("re-voice · {voice}"),
+        }
     }
 
     /// Open the file dialog (multi-select over every format Convert
@@ -306,96 +339,133 @@ impl TaleTrekApp {
         });
     }
 
-    /// One queue row: the input's file name, its state (progress bar while
-    /// running, output path when done, human message when failed), and its
-    /// row action — Cancel while pending/running, Retry from a terminal
-    /// failure/cancel.
+    /// One queue row as the spec's job card: a framed surface card whose
+    /// title row pairs the input's serif file name (XCharter Bold — the
+    /// one serif usage in the chrome) with the small mono meta line at
+    /// the right, and whose state row carries the state treatment with
+    /// the row action right-aligned — accent progress while running,
+    /// success path when done, danger message + muted input path when
+    /// failed, muted label when cancelled/queued.
     fn render_job(&mut self, ui: &mut egui::Ui, job: &Job) {
-        let (input, voice) = match &job.kind {
-            JobKind::Convert { input, voice } | JobKind::ReVoice { input, voice } => (input, voice),
+        let input = match &job.kind {
+            JobKind::Convert { input, .. } | JobKind::ReVoice { input, .. } => input,
         };
-        ui.group(|ui| {
+        let t = self.settings.theme.tokens();
+        // Voice-model download bytes attach to the running job — resolved
+        // before the card so the frame's closures only borrow the string.
+        let download = if matches!(job.state, JobState::Running { .. })
+            && self.executor.current_job() == Some(job.id)
+        {
+            self.executor.download().map(|(done, total)| {
+                if total > 0 {
+                    format!(
+                        "Downloading voice… {:.1}/{:.1} MiB",
+                        done as f64 / MIB,
+                        total as f64 / MIB
+                    )
+                } else {
+                    format!("Downloading voice… {:.1} MiB", done as f64 / MIB)
+                }
+            })
+        } else {
+            None
+        };
+
+        theme::card_frame(t).show(ui, |ui| {
+            // Title row: serif file name left, mono meta right.
             ui.horizontal(|ui| {
-                let name = input
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| input.display().to_string());
-                ui.strong(name);
-                let kind = match &job.kind {
-                    JobKind::Convert { .. } => "convert",
-                    JobKind::ReVoice { .. } => "re-voice",
-                };
                 ui.label(
-                    egui::RichText::new(format!("{kind} · {voice}"))
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
+                    egui::RichText::new(Self::job_title(input))
+                        .font(egui::FontId::new(18.0, theme::story_bold_family())),
                 );
-                // The row action, right-aligned: cancel pending/running
-                // jobs, retry failed/cancelled ones.
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| match &job.state {
-                        JobState::Queued | JobState::Running { .. } => {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(Self::job_meta(&job.kind))
+                            .small()
+                            .color(t.muted),
+                    );
+                });
+            });
+
+            // State row: the state treatment with its action right-aligned.
+            match &job.state {
+                JobState::Queued => {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Queued").color(t.muted));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Cancel").clicked() {
                                 self.executor.cancel(job.id);
                             }
-                        }
-                        JobState::Failed(_) | JobState::Cancelled => {
-                            if ui.button("Retry").clicked() {
-                                self.executor.retry(job.id);
-                            }
-                        }
-                        JobState::Done(_) => {}
-                    },
-                );
-            });
-            match &job.state {
-                JobState::Queued => {
-                    ui.label("Queued");
+                        });
+                    });
                 }
                 JobState::Running { done, total } => {
-                    let frac = if *total > 0 {
-                        *done as f32 / *total as f32
-                    } else {
-                        1.0
-                    };
-                    ui.add(egui::ProgressBar::new(frac).text(format!("{done}/{total} paragraphs")));
-                    // Voice-model download bytes attach to the running job.
-                    if self.executor.current_job() == Some(job.id) {
-                        if let Some((done, total)) = self.executor.download() {
-                            let line = if total > 0 {
-                                format!(
-                                    "Downloading voice… {:.1}/{:.1} MiB",
-                                    done as f64 / MIB,
-                                    total as f64 / MIB
-                                )
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Cancel").clicked() {
+                                self.executor.cancel(job.id);
+                            }
+                            // The styled bar's track (extreme_bg) and text
+                            // (selection stroke) don't follow tokens — the
+                            // theme pins both to colors that vanish on a
+                            // surface card. Override locally: elevated
+                            // track, fg text, accent fill.
+                            ui.style_mut().visuals.extreme_bg_color = t.elevated;
+                            ui.style_mut().visuals.override_text_color = Some(t.fg);
+                            let frac = if *total > 0 {
+                                *done as f32 / *total as f32
                             } else {
-                                format!("Downloading voice… {:.1} MiB", done as f64 / MIB)
+                                1.0
                             };
-                            ui.label(line);
-                        }
+                            ui.add(
+                                egui::ProgressBar::new(frac)
+                                    .text(format!("{done}/{total} paragraphs"))
+                                    .fill(t.accent)
+                                    .corner_radius(3),
+                            );
+                        });
+                    });
+                    if let Some(line) = download {
+                        ui.label(egui::RichText::new(line).small().color(t.muted));
                     }
                 }
                 JobState::Done(out) => {
-                    ui.label(format!("Done → {}", out.display()));
+                    ui.label(
+                        egui::RichText::new(format!("Done → {}", out.display())).color(t.success),
+                    );
                 }
                 JobState::Failed(message) => {
-                    ui.label(
-                        egui::RichText::new(format!("Failed: {message}"))
-                            .small()
-                            .color(egui::Color32::from_rgb(200, 80, 80)),
-                    );
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Failed: {message}"))
+                                .small()
+                                .color(t.danger),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Retry").clicked() {
+                                self.executor.retry(job.id);
+                            }
+                        });
+                    });
                     ui.label(
                         egui::RichText::new(input.display().to_string())
                             .small()
-                            .color(ui.visuals().weak_text_color()),
+                            .color(t.muted),
                     );
                 }
                 JobState::Cancelled => {
-                    ui.label("Cancelled");
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Cancelled").color(t.muted));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Retry").clicked() {
+                                self.executor.retry(job.id);
+                            }
+                        });
+                    });
                 }
             }
         });
+        ui.add_space(6.0);
     }
 }
 
@@ -432,5 +502,134 @@ impl eframe::App for TaleTrekApp {
     /// is never half-written (documented behavior — see [`Executor::shutdown`]).
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.executor.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_title_uses_the_file_name() {
+        let title = TaleTrekApp::job_title(Path::new("/books/Fable of the Fox.epub"));
+        assert_eq!(title, "Fable of the Fox.epub");
+    }
+
+    #[test]
+    fn job_title_truncates_long_names_with_one_ellipsis() {
+        let exactly = "a".repeat(TITLE_MAX_CHARS);
+        assert_eq!(
+            TaleTrekApp::job_title(Path::new(&exactly)),
+            exactly,
+            "a title at the budget passes through untouched"
+        );
+
+        let long = format!("{}.epub", "b".repeat(TITLE_MAX_CHARS));
+        let title = TaleTrekApp::job_title(Path::new(&long));
+        assert_eq!(title.chars().count(), TITLE_MAX_CHARS);
+        assert!(title.ends_with('…'));
+        assert!(title.starts_with(&"b".repeat(TITLE_MAX_CHARS - 1)));
+    }
+
+    #[test]
+    fn job_title_truncates_by_characters_not_bytes() {
+        let long = "日".repeat(TITLE_MAX_CHARS + 10);
+        let title = TaleTrekApp::job_title(Path::new(&long));
+        assert_eq!(title.chars().count(), TITLE_MAX_CHARS);
+        assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn job_title_falls_back_to_the_display_path_without_a_file_name() {
+        assert_eq!(TaleTrekApp::job_title(Path::new("/")), "/");
+        assert_eq!(TaleTrekApp::job_title(Path::new("..")), "..");
+        assert_eq!(TaleTrekApp::job_title(Path::new("/books/..")), "/books/..");
+    }
+
+    #[test]
+    fn job_meta_names_the_kind_and_voice() {
+        let convert = JobKind::Convert {
+            input: PathBuf::from("a.epub"),
+            voice: "en_US-amy-medium".to_owned(),
+        };
+        assert_eq!(
+            TaleTrekApp::job_meta(&convert),
+            "convert · en_US-amy-medium"
+        );
+
+        let revoice = JobKind::ReVoice {
+            input: PathBuf::from("a.taletrek"),
+            voice: "v".to_owned(),
+        };
+        assert_eq!(TaleTrekApp::job_meta(&revoice), "re-voice · v");
+    }
+
+    #[test]
+    fn render_job_paints_every_state_under_both_themes() {
+        use queue::JobId;
+
+        let convert = |name: String| JobKind::Convert {
+            input: PathBuf::from(format!("/books/{name}")),
+            voice: "en_US-amy-medium".to_owned(),
+        };
+        let jobs = vec![
+            Job {
+                id: JobId::for_test(0),
+                kind: convert("Fable of the Fox.epub".to_owned()),
+                state: JobState::Queued,
+            },
+            Job {
+                id: JobId::for_test(1),
+                kind: convert("Fable of the Fox.epub".to_owned()),
+                state: JobState::Running {
+                    done: 12,
+                    total: 19,
+                },
+            },
+            Job {
+                id: JobId::for_test(2),
+                kind: convert("Fable of the Fox.epub".to_owned()),
+                state: JobState::Done(PathBuf::from("/out/Fable of the Fox.taletrek")),
+            },
+            Job {
+                id: JobId::for_test(3),
+                kind: convert("Fable of the Fox.epub".to_owned()),
+                state: JobState::Failed("could not parse the document".to_owned()),
+            },
+            Job {
+                id: JobId::for_test(4),
+                kind: convert("Fable of the Fox.epub".to_owned()),
+                state: JobState::Cancelled,
+            },
+            // A blown-out title exercises the truncation path end to end.
+            Job {
+                id: JobId::for_test(5),
+                kind: convert(format!("{}.epub", "x".repeat(120))),
+                state: JobState::Queued,
+            },
+        ];
+
+        for theme in [theme::Theme::Dark, theme::Theme::Sepia] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx, theme);
+            let mut settings = Settings::load(&ctx);
+            settings.theme = theme;
+            let mut app = TaleTrekApp {
+                executor: Executor::new(),
+                settings,
+                cache_dir: None,
+                last_drop: None,
+                panel_open: false,
+            };
+            let _ = ctx.run_ui(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    for job in &jobs {
+                        app.render_job(ui, job);
+                    }
+                });
+            });
+        }
+        // Rendering every card under the real theme/fonts without panicking
+        // is the assertion — egui aborts on layout/font misuse.
     }
 }
