@@ -20,11 +20,14 @@
 //!
 //! The window decomposes into panels that encode the workflow (input →
 //! voice → output); `ui` shows them in dependency order — top bar (brand +
-//! side-panel toggle), prompt strip (the add path: dialogs, drop hint,
-//! drop-summary line), bottom status line (read-only [`views::status`]
-//! fold), right side panel (voice picker + settings — everything that
-//! *configures* jobs), and finally the central panel, which is queue-only
-//! (job rows in one scroll + the empty-state label).
+//! side-panel toggle), prompt strip (the add path and the window's drop
+//! target: the `❯ drop a book▊` hero with its blinking cursor while the
+//! queue is empty, a compact one-line strip once it isn't, plus the
+//! dialogs and the drop-summary line), bottom status line (read-only
+//! [`views::status`] fold), right side panel (voice picker + settings —
+//! everything that *configures* jobs), and finally the central panel,
+//! which is queue-only (job rows in one scroll; the empty state's
+//! guidance lives in the prompt hero, so an idle queue body is bare).
 
 pub mod executor;
 pub mod queue;
@@ -52,6 +55,73 @@ const MIB: f64 = 1024.0 * 1024.0;
 /// keeps every card one readable row at any window size (the spec's
 /// "no blown-out cards").
 const TITLE_MAX_CHARS: usize = 36;
+
+/// The hero cursor's blink period in seconds — the spec's 1.1 s step-end
+/// cadence: on for half, off for half, jumping at the boundary (no fade).
+const BLINK_PERIOD_SECS: f64 = 1.1;
+
+/// The hero prompt line's size in pt — the strip's signature scale,
+/// a step above the 18 pt serif titles.
+const HERO_PT: f32 = 24.0;
+
+/// Whether the hero's block cursor is on at `elapsed` seconds (step-end:
+/// on for the first half of each [`BLINK_PERIOD_SECS`], off for the
+/// second, jumping at the boundary).
+fn cursor_on(elapsed: f64) -> bool {
+    elapsed.rem_euclid(BLINK_PERIOD_SECS) < BLINK_PERIOD_SECS / 2.0
+}
+
+/// The delay to the cursor's next on/off toggle — what the hero requests
+/// as its repaint delay, so the blink steps precisely (two wakeups per
+/// period) instead of polling every frame.
+fn blink_step_delay(elapsed: f64) -> Duration {
+    let phase = elapsed.rem_euclid(BLINK_PERIOD_SECS);
+    let to_toggle = if cursor_on(elapsed) {
+        BLINK_PERIOD_SECS / 2.0 - phase
+    } else {
+        BLINK_PERIOD_SECS - phase
+    };
+    Duration::from_secs_f64(to_toggle)
+}
+
+/// One styled span of the hero prompt line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HeroSpan {
+    /// The accent `❯` glyph that opens the prompt.
+    Prompt,
+    /// Machine-chrome words in the mono face (`drop a`).
+    Machine(String),
+    /// The story word in XCharter (`book`) — the story voice inside
+    /// the machine.
+    Story(String),
+    /// The block cursor `▊`; the flag is its on/off step. Always laid
+    /// out — only the color changes — so the line never shifts as it
+    /// blinks.
+    Cursor(bool),
+}
+
+/// The empty-queue hero, resolved pure (headless-testable): the prompt
+/// line's spans in draw order, plus the muted guidance line beneath.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PromptHero {
+    spans: Vec<HeroSpan>,
+    guidance: String,
+}
+
+/// Resolve the hero at `elapsed` seconds (drives the cursor step).
+fn hero(elapsed: f64) -> PromptHero {
+    PromptHero {
+        spans: vec![
+            HeroSpan::Prompt,
+            HeroSpan::Machine("drop a".to_owned()),
+            HeroSpan::Story("book".to_owned()),
+            HeroSpan::Cursor(cursor_on(elapsed)),
+        ],
+        guidance: "Drop a document to turn it into an audiobook, \
+                   or add an existing bundle to re-voice it."
+            .to_owned(),
+    }
+}
 
 /// Open the TaleTrek window (bare invocation and the `gui` subcommand both
 /// land here). Blocks until the window closes; a job still running at close
@@ -240,31 +310,120 @@ impl TaleTrekApp {
         });
     }
 
-    /// The prompt strip: the add path — both dialogs, the drop hint, and
-    /// the latest drop's summary line (reject reasons included, so drop
-    /// feedback lives where the drop happened).
+    /// The prompt strip: the add path and the window's drop target.
+    /// Empty queue: the hero prompt line ([`Self::prompt_hero`]) with
+    /// the Add buttons riding it as quiet secondary actions; otherwise
+    /// the compact one-line strip ([`Self::prompt_compact`]). The frame
+    /// reads as the drop target — hairline at rest, accent stroke +
+    /// elevated fill while files hover the window — and the latest
+    /// drop's summary renders beneath in muted small text (reject
+    /// reasons included, so feedback lives where the drop happened).
     fn prompt_strip(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("prompt-strip").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Add files…").clicked() {
-                    self.pick_files();
+        let t = self.settings.theme.tokens();
+        let empty = self.executor.queue().jobs().next().is_none();
+        let dragging = ui.ctx().input(|input| !input.raw.hovered_files.is_empty());
+        egui::Frame::default()
+            .fill(if dragging {
+                t.elevated
+            } else {
+                egui::Color32::TRANSPARENT
+            })
+            .stroke(egui::Stroke::new(
+                if dragging { 1.5 } else { 1.0 },
+                if dragging { t.accent } else { t.line },
+            ))
+            .corner_radius(egui::CornerRadius::same(4))
+            .inner_margin(egui::Margin::same(8))
+            .show(ui, |ui| {
+                if empty {
+                    self.prompt_hero(ui);
+                } else {
+                    self.prompt_compact(ui);
                 }
+                if let Some(report) = &self.last_drop {
+                    ui.label(
+                        egui::RichText::new(Self::drop_summary(report))
+                            .small()
+                            .color(t.muted),
+                    );
+                }
+            });
+    }
+
+    /// The empty-queue hero: the signature `❯ drop a book▊` prompt line —
+    /// accent `❯` and block cursor, mono machine words, the story word
+    /// "book" in XCharter — with the Add buttons on the same line and
+    /// the muted guidance beneath.
+    fn prompt_hero(&mut self, ui: &mut egui::Ui) {
+        let t = self.settings.theme.tokens();
+        let hero = hero(ui.ctx().time());
+        ui.horizontal(|ui| {
+            for span in &hero.spans {
+                match span {
+                    HeroSpan::Prompt => {
+                        ui.label(egui::RichText::new("❯").size(HERO_PT).color(t.accent));
+                    }
+                    HeroSpan::Machine(words) => {
+                        ui.label(egui::RichText::new(words).size(HERO_PT).color(t.fg));
+                    }
+                    HeroSpan::Story(word) => {
+                        ui.label(
+                            egui::RichText::new(word)
+                                .font(egui::FontId::new(HERO_PT, theme::story_bold_family()))
+                                .color(t.fg),
+                        );
+                    }
+                    HeroSpan::Cursor(on) => {
+                        // Always laid out; the color steps, so the line
+                        // never shifts as the cursor blinks.
+                        let color = if *on {
+                            t.accent
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        ui.label(egui::RichText::new("▊").size(HERO_PT).color(color));
+                    }
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Add existing bundle…").clicked() {
                     self.pick_bundle();
                 }
-                ui.label(
-                    egui::RichText::new("…or drop files anywhere in this window.")
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                );
+                if ui.button("Add files…").clicked() {
+                    self.pick_files();
+                }
             });
-            if let Some(report) = &self.last_drop {
-                ui.label(
-                    egui::RichText::new(Self::drop_summary(report))
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                );
+        });
+        ui.label(egui::RichText::new(&hero.guidance).small().color(t.muted));
+        // Idle-gated motion (the blink rationale's code home): the cursor
+        // is the app's only ambient animation, and its repaints are
+        // requested solely on this empty-queue path — with any job
+        // present the hero stops rendering and this request stops with
+        // it, so a busy window pays zero blink wakeups. egui has no OS
+        // reduced-motion signal; gating motion to idle is the spec's
+        // accepted desktop equivalent.
+        ui.ctx()
+            .request_repaint_after(blink_step_delay(ui.ctx().time()));
+    }
+
+    /// The working-queue strip: one compact line — small accent `❯`,
+    /// both Add buttons, the drop hint — no cursor, no guidance (the
+    /// queue itself is the message).
+    fn prompt_compact(&mut self, ui: &mut egui::Ui) {
+        let t = self.settings.theme.tokens();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("❯").color(t.accent));
+            if ui.button("Add files…").clicked() {
+                self.pick_files();
             }
+            if ui.button("Add existing bundle…").clicked() {
+                self.pick_bundle();
+            }
+            ui.label(
+                egui::RichText::new("…or drop files anywhere in this window.")
+                    .small()
+                    .color(t.muted),
+            );
         });
     }
 
@@ -316,9 +475,10 @@ impl TaleTrekApp {
             });
     }
 
-    /// The central queue: every job's row in one scroll, plus the
-    /// empty-state label when there are none — queue-only, by the shell's
-    /// region split.
+    /// The central queue: every job's row in one scroll — queue-only, by
+    /// the shell's region split. The empty state's guidance lives up in
+    /// the prompt hero, so an empty queue body renders nothing (the
+    /// terminal idles at its prompt).
     fn queue_panel(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
             // Snapshot the rows first — the actions below need &mut self.
@@ -326,12 +486,6 @@ impl TaleTrekApp {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
                 .show(ui, |ui| {
-                    if jobs.is_empty() {
-                        ui.label(
-                            "No files yet — drop a document to turn it into an audiobook, \
-                             or add an existing bundle to re-voice it.",
-                        );
-                    }
                     for job in &jobs {
                         self.render_job(ui, job);
                     }
@@ -562,6 +716,123 @@ mod tests {
             voice: "v".to_owned(),
         };
         assert_eq!(TaleTrekApp::job_meta(&revoice), "re-voice · v");
+    }
+
+    #[test]
+    fn cursor_blinks_on_a_1_1s_step_end_cycle() {
+        // On for the first half of each 1.1 s period, off for the
+        // second, jumping at the boundary (step-end — no fade).
+        assert!(cursor_on(0.0));
+        assert!(cursor_on(0.54));
+        assert!(!cursor_on(0.56));
+        assert!(!cursor_on(1.09));
+        // The period wraps: t = 1.1 is t = 0 again.
+        assert!(cursor_on(BLINK_PERIOD_SECS));
+        assert!(cursor_on(BLINK_PERIOD_SECS * 2.0));
+        assert!(!cursor_on(BLINK_PERIOD_SECS + 0.56));
+    }
+
+    #[test]
+    fn blink_delay_targets_the_next_toggle_exactly() {
+        let close = |at: f64, want: f64| {
+            let got = blink_step_delay(at).as_secs_f64();
+            assert!(
+                (got - want).abs() < 1e-9,
+                "blink_step_delay({at}) = {got:.9}s, want {want}s"
+            );
+        };
+        close(0.0, 0.55);
+        close(0.5, 0.05);
+        // Just past the off-toggle, the next wake is the period wrap.
+        close(0.6, 0.5);
+        close(1.05, 0.05);
+        close(BLINK_PERIOD_SECS, 0.55);
+        // A toggle is always in the future — never a zero (busy-loop) delay.
+        for probe in [0.0, 0.25, 0.55, 0.8, 1.09] {
+            assert!(
+                blink_step_delay(probe).as_secs_f64() > 0.0,
+                "zero delay at {probe}"
+            );
+        }
+    }
+
+    #[test]
+    fn hero_places_the_story_word_inside_the_machine_prompt() {
+        let on = hero(0.0);
+        assert_eq!(
+            on.spans,
+            vec![
+                HeroSpan::Prompt,
+                HeroSpan::Machine("drop a".to_owned()),
+                HeroSpan::Story("book".to_owned()),
+                HeroSpan::Cursor(true),
+            ]
+        );
+        // Mid-off-phase: same line, cursor stepped off — the layout
+        // never changes, only the cursor's color does.
+        assert_eq!(
+            hero(0.6).spans,
+            vec![
+                HeroSpan::Prompt,
+                HeroSpan::Machine("drop a".to_owned()),
+                HeroSpan::Story("book".to_owned()),
+                HeroSpan::Cursor(false),
+            ]
+        );
+        // The guidance keeps the empty-state contract: what to drop and
+        // the bundle re-voice hint.
+        assert!(on.guidance.contains("document"));
+        assert!(on.guidance.contains("audiobook"));
+        assert!(on.guidance.contains("re-voice"));
+    }
+
+    #[test]
+    fn prompt_strip_paints_hero_drag_and_compact_states_under_both_themes() {
+        for theme in [theme::Theme::Dark, theme::Theme::Sepia] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx, theme);
+            let mut settings = Settings::load(&ctx);
+            settings.theme = theme;
+            let mut app = TaleTrekApp {
+                executor: Executor::new(),
+                settings,
+                cache_dir: None,
+                last_drop: None,
+                panel_open: false,
+            };
+
+            // Empty queue at t=0: the hero, cursor on.
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.prompt_strip(ui);
+            });
+
+            // Empty queue mid-blink (t=0.6, cursor off) with a file
+            // dragging over the window: hero + accent drop-target frame.
+            let drag = egui::RawInput {
+                time: Some(0.6),
+                hovered_files: vec![egui::HoveredFile::default()],
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(drag, |ui| {
+                app.prompt_strip(ui);
+            });
+
+            // A queued job: the compact strip plus a drop summary under
+            // it (rejection reason included).
+            app.last_drop = Some(DropReport {
+                enqueued: 1,
+                duplicates: vec![],
+                rejected: vec![(PathBuf::from("/books/art.zip"), "unsupported".to_owned())],
+            });
+            let _ = app
+                .executor
+                .add_files(&[PathBuf::from("/books/Fable of the Fox.epub")], "v");
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.prompt_strip(ui);
+            });
+        }
+        // Painting every strip state under the real theme/fonts without
+        // panicking is the assertion — egui aborts on layout/font misuse.
     }
 
     #[test]
