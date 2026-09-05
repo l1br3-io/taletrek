@@ -160,14 +160,18 @@ pub fn resolve_output(default: PathBuf, output_dir: Option<&Path>) -> PathBuf {
 
 /// Render the inline settings panel. Mutates `settings` in place and returns
 /// whether anything changed (the caller then calls [`Settings::save`]).
-/// Purely presentational — no queue or executor access.
+/// Purely presentational — no queue or executor access. The
+/// `desktop-ux-refresh` restyle: muted field labels, machine-face values
+/// (the path text and the worker count are machine data), hints small
+/// muted — every control's behavior is unchanged.
 pub fn render(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    let t = settings.theme.tokens();
     let mut changed = false;
     egui::Grid::new("settings-grid")
         .num_columns(3)
         .spacing([8.0, 4.0])
         .show(ui, |ui| {
-            ui.label("Output folder");
+            ui.label(egui::RichText::new("Output folder").color(t.muted));
             let mut dir_text = settings
                 .output_dir
                 .as_ref()
@@ -176,6 +180,7 @@ pub fn render(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 .add(
                     egui::TextEdit::singleline(&mut dir_text)
                         .hint_text("beside each input")
+                        .font(egui::TextStyle::Monospace)
                         .desired_width(f32::INFINITY),
                 )
                 .changed()
@@ -196,19 +201,17 @@ pub fn render(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             }
             ui.end_row();
 
-            ui.label("Synth workers");
+            ui.label(egui::RichText::new("Synth workers").color(t.muted));
             let mut jobs = settings.jobs.unwrap_or(NATIVE_DEFAULT_JOBS) as i32;
+            // The count is a machine value — render it in the machine face.
+            ui.style_mut().drag_value_text_style = egui::TextStyle::Monospace;
             let response = ui.add(egui::DragValue::new(&mut jobs).range(1..=16));
             let hint = if settings.jobs.is_none() {
                 format!("default: {NATIVE_DEFAULT_JOBS}")
             } else {
                 "explicit".to_string()
             };
-            ui.label(
-                egui::RichText::new(hint)
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
-            );
+            ui.label(egui::RichText::new(hint).small().color(t.muted));
             if response.changed() {
                 settings.jobs = Some(jobs.max(1) as usize);
                 changed = true;
@@ -295,5 +298,42 @@ mod tests {
             PathBuf::from("/audiobooks/fable.synth.taletrek"),
             "set = same file name inside the configured dir"
         );
+    }
+
+    #[test]
+    fn render_paints_under_both_themes_without_reporting_a_stray_change() {
+        for theme in [Theme::Dark, Theme::Sepia] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx, theme);
+
+            // Both control states paint: an explicit output dir + jobs
+            // (the "Beside input"/"Default" buttons show) and the defaults.
+            for jobs in [None, Some(3)] {
+                let mut settings = Settings {
+                    theme,
+                    jobs,
+                    ..Settings::default()
+                };
+                settings.output_dir = (jobs.is_some()).then(|| PathBuf::from("/tmp/audiobooks"));
+                let before = settings.clone();
+                let mut changed = false;
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.set_max_width(300.0);
+                        changed = render(ui, &mut settings);
+                    });
+                });
+                assert!(
+                    !changed,
+                    "{theme:?} jobs={jobs:?}: no input headless — render must not report a change"
+                );
+                assert_eq!(
+                    settings, before,
+                    "render must not mutate on a paint-only pass"
+                );
+            }
+        }
+        // Painting every control state under the real theme/fonts without
+        // panicking is the assertion — egui aborts on layout/font misuse.
     }
 }

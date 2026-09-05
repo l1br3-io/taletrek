@@ -457,6 +457,7 @@ impl TaleTrekApp {
                 );
                 let picked = views::voice::render(
                     ui,
+                    self.settings.theme.tokens(),
                     &self.settings.default_voice,
                     self.cache_dir.as_deref(),
                 );
