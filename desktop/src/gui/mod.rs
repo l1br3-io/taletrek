@@ -20,6 +20,7 @@ pub mod executor;
 pub mod queue;
 pub mod settings;
 pub mod sink;
+pub mod theme;
 pub mod views;
 
 use std::path::PathBuf;
@@ -88,11 +89,14 @@ struct TaleTrekApp {
 
 impl TaleTrekApp {
     /// A fresh app: persisted settings (first run → defaults) and an empty
-    /// queue.
+    /// queue. The persisted theme is installed before the first frame, so
+    /// the window never flashes stock egui.
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let settings = Settings::load(&cc.egui_ctx);
+        theme::apply(&cc.egui_ctx, settings.theme);
         Self {
             executor: Executor::new(),
-            settings: Settings::load(&cc.egui_ctx),
+            settings,
             cache_dir: default_cache_dir(),
             last_drop: None,
         }

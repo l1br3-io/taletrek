@@ -12,6 +12,8 @@
 //!   time; the key is T8's, so an existing persisted choice survives.
 //! - synth workers — `None` means the engine default (T5's native guidance:
 //!   2, per-model memory); explicit values are clamped to `>= 1`.
+//! - theme — the desktop-ux-refresh identity choice (dark default); the key
+//!   is `taletrek.settings.theme` (see [`crate::gui::theme`]).
 //!
 //! [`RunConfig`] is the settings-derived snapshot the executor's job threads
 //! consume (resolved jobs count + output dir) — pure data, headless-testable.
@@ -26,6 +28,7 @@ use eframe::egui;
 use taletrek_worker::DEFAULT_VOICE_ID;
 
 use crate::engine::NATIVE_DEFAULT_JOBS;
+use crate::gui::theme::{self, Theme};
 
 /// egui-storage key for the persisted default voice id (T8's key, kept
 /// stable so a persisted choice survives the T9 settings consolidation).
@@ -47,6 +50,8 @@ pub struct Settings {
     /// Synth worker count; `None` = the engine default
     /// ([`NATIVE_DEFAULT_JOBS`], T5's per-model-memory guidance).
     pub jobs: Option<usize>,
+    /// The visual theme — "Phosphor ink" dark by default, sepia by choice.
+    pub theme: Theme,
 }
 
 impl Default for Settings {
@@ -55,6 +60,7 @@ impl Default for Settings {
             output_dir: None,
             default_voice: DEFAULT_VOICE_ID.to_string(),
             jobs: None,
+            theme: Theme::default(),
         }
     }
 }
@@ -76,10 +82,14 @@ impl Settings {
                 .get_persisted(egui::Id::new(JOBS_STORAGE_KEY))
                 .filter(|j: &u32| *j >= 1)
                 .map(|j| j as usize);
+            let raw_theme: Option<String> =
+                data.get_persisted(egui::Id::new(theme::THEME_STORAGE_KEY));
+            let theme = Theme::from_persisted(raw_theme.as_deref());
             Self {
                 output_dir,
                 default_voice,
                 jobs,
+                theme,
             }
         })
     }
@@ -97,6 +107,10 @@ impl Settings {
             data.insert_persisted(
                 egui::Id::new(JOBS_STORAGE_KEY),
                 self.jobs.map_or(0u32, |j| j as u32),
+            );
+            data.insert_persisted(
+                egui::Id::new(theme::THEME_STORAGE_KEY),
+                self.theme.persist_name().to_owned(),
             );
         });
     }
@@ -213,11 +227,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_beside_input_default_voice_and_native_jobs() {
+    fn defaults_are_beside_input_default_voice_native_jobs_and_dark() {
         let s = Settings::default();
         assert_eq!(s.output_dir, None);
         assert_eq!(s.default_voice, DEFAULT_VOICE_ID);
         assert_eq!(s.jobs, None);
+        assert_eq!(s.theme, Theme::Dark);
     }
 
     #[test]
@@ -227,6 +242,7 @@ mod tests {
             output_dir: Some(PathBuf::from("/tmp/audiobooks")),
             default_voice: "en_GB-cori-medium".to_string(),
             jobs: Some(4),
+            theme: Theme::Sepia,
         };
         settings.save(&ctx);
 
@@ -259,6 +275,7 @@ mod tests {
             output_dir: Some(PathBuf::from("/out")),
             default_voice: DEFAULT_VOICE_ID.to_string(),
             jobs: Some(6),
+            theme: Theme::Dark,
         }
         .run_config();
         assert_eq!(explicit.jobs, 6);
