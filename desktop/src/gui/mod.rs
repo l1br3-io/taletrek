@@ -295,19 +295,52 @@ impl TaleTrekApp {
         }
     }
 
-    /// The top bar: the `❯~` brand mark and the side-panel toggle — the
-    /// window's persistent identity strip.
+    /// The top bar: the `❯~ TaleTrek` brand (accent glyph + machine-bold
+    /// word, mirroring the web nav) with the theme toggle and the
+    /// side-panel toggle — the window's persistent identity strip,
+    /// elevated one step off the ground (the spec's region diagram).
     fn top_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("top-bar").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.strong("❯~ TaleTrek");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("⚙").on_hover_text("Voice & settings").clicked() {
-                        self.panel_open = !self.panel_open;
-                    }
+        let t = self.settings.theme.tokens();
+        egui::Panel::top("top-bar")
+            .frame(
+                egui::Frame::default()
+                    .fill(t.elevated)
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("❯~").size(15.0).color(t.accent));
+                    ui.label(
+                        egui::RichText::new("TaleTrek")
+                            .font(egui::FontId::new(15.0, theme::machine_bold_family()))
+                            .color(t.fg),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Right-to-left: the theme toggle takes the far
+                        // corner (the spec's `[sepia ◐]`), ⚙ beside it.
+                        if ui
+                            .button(self.settings.theme.toggle_label())
+                            .on_hover_text("Switch theme")
+                            .clicked()
+                        {
+                            self.toggle_theme(ui.ctx());
+                        }
+                        if ui.button("⚙").on_hover_text("Voice & settings").clicked() {
+                            self.panel_open = !self.panel_open;
+                        }
+                    });
                 });
             });
-        });
+    }
+
+    /// Flip the theme (the top-bar toggle): swap `Settings.theme`, apply
+    /// the new identity to the context in the same frame, and persist —
+    /// the choice survives the next launch (dark stays the first-run
+    /// default; unknown/absent stored values still resolve dark).
+    fn toggle_theme(&mut self, ctx: &egui::Context) {
+        self.settings.theme = self.settings.theme.other();
+        theme::apply(ctx, self.settings.theme);
+        self.settings.save(ctx);
     }
 
     /// The prompt strip: the add path and the window's drop target.
@@ -446,6 +479,7 @@ impl TaleTrekApp {
     /// The toggleable right side panel: the voice picker and the settings
     /// collapse — everything that configures jobs rather than being one.
     fn side_panel(&mut self, ui: &mut egui::Ui) {
+        let t = self.settings.theme.tokens();
         egui::Panel::right("side-panel")
             .default_size(300.0)
             .show(ui, |ui| {
@@ -453,11 +487,11 @@ impl TaleTrekApp {
                 ui.label(
                     egui::RichText::new("New jobs use this voice; models download on first use.")
                         .small()
-                        .color(ui.visuals().weak_text_color()),
+                        .color(t.muted),
                 );
                 let picked = views::voice::render(
                     ui,
-                    self.settings.theme.tokens(),
+                    t,
                     &self.settings.default_voice,
                     self.cache_dir.as_deref(),
                 );
@@ -663,6 +697,7 @@ impl eframe::App for TaleTrekApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gui::theme::Theme;
 
     #[test]
     fn job_title_uses_the_file_name() {
@@ -834,6 +869,70 @@ mod tests {
         }
         // Painting every strip state under the real theme/fonts without
         // panicking is the assertion — egui aborts on layout/font misuse.
+    }
+
+    #[test]
+    fn toggle_theme_flips_applies_and_persists_for_the_next_launch() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, Theme::Dark);
+        let mut app = TaleTrekApp {
+            executor: Executor::new(),
+            settings: Settings::load(&ctx),
+            cache_dir: None,
+            last_drop: None,
+            panel_open: false,
+        };
+        assert_eq!(app.settings.theme, Theme::Dark, "first run stays dark");
+
+        app.toggle_theme(&ctx);
+        assert_eq!(app.settings.theme, Theme::Sepia);
+        // Applied in the same frame: the live style already carries
+        // sepia's ground.
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        assert_eq!(
+            ctx.style_of(egui::Theme::Light).visuals.panel_fill,
+            Theme::Sepia.tokens().bg
+        );
+        // Persisted: a fresh load — the relaunch — sees sepia.
+        assert_eq!(Settings::load(&ctx).theme, Theme::Sepia);
+
+        // Flipping back restores dark, in style and in storage alike.
+        app.toggle_theme(&ctx);
+        assert_eq!(app.settings.theme, Theme::Dark);
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        assert_eq!(
+            ctx.style_of(egui::Theme::Dark).visuals.panel_fill,
+            Theme::Dark.tokens().bg
+        );
+        assert_eq!(Settings::load(&ctx).theme, Theme::Dark);
+    }
+
+    #[test]
+    fn top_bar_paints_under_both_themes() {
+        for theme in [theme::Theme::Dark, theme::Theme::Sepia] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx, theme);
+            let mut settings = Settings::load(&ctx);
+            settings.theme = theme;
+            let mut app = TaleTrekApp {
+                executor: Executor::new(),
+                settings,
+                cache_dir: None,
+                last_drop: None,
+                panel_open: false,
+            };
+            // Both side-panel states: the ⚙ toggle rides the bar either way.
+            for panel_open in [false, true] {
+                app.panel_open = panel_open;
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    app.top_bar(ui);
+                });
+            }
+        }
+        // Painting the bar (brand mark + theme toggle + panel toggle,
+        // elevated frame, machine-bold face) under the real theme/fonts
+        // without panicking is the assertion — egui aborts on
+        // layout/font misuse.
     }
 
     #[test]

@@ -166,6 +166,24 @@ impl Theme {
     pub const fn is_dark(self) -> bool {
         matches!(self, Self::Dark)
     }
+
+    /// The theme a toggle click lands on — the other one. Flipping twice
+    /// returns to the starting theme.
+    #[must_use]
+    pub const fn other(self) -> Self {
+        match self {
+            Self::Dark => Self::Sepia,
+            Self::Sepia => Self::Dark,
+        }
+    }
+
+    /// The top-bar toggle's label: the half-moon glyph plus the name of
+    /// the theme a click would switch to (`◐ sepia` when dark,
+    /// `◐ dark` when sepia) — the button always names its destination.
+    #[must_use]
+    pub fn toggle_label(self) -> String {
+        format!("◐ {}", self.other().persist_name())
+    }
 }
 
 /// The story family — XCharter Regular. Book titles and the empty-state
@@ -360,6 +378,25 @@ pub fn card_frame(t: Tokens) -> egui::Frame {
         .stroke(egui::Stroke::new(1.0, t.line))
         .corner_radius(egui::CornerRadius::same(4))
         .inner_margin(egui::Margin::same(10))
+}
+
+/// How much accent the "downloaded" chip's wash carries — 15 % into the
+/// panel ground: soft enough to read as a tint, strong enough to read as
+/// phosphor in both themes.
+const CHIP_MIX: f32 = 0.15;
+
+/// The "downloaded" chip's fill: the accent mixed [`CHIP_MIX`] into the
+/// panel ground — an opaque accent-soft tint, with the chip's text at
+/// full-strength accent (the identity's chip rule). Color construction
+/// stays in this module, so no `Color32::from_rgb` call survives outside
+/// it (the toggle-audit grep contract).
+pub fn chip_fill(t: Tokens) -> egui::Color32 {
+    let mix = |from: u8, to: u8| {
+        (f32::from(from) * (1.0 - CHIP_MIX) + f32::from(to) * CHIP_MIX).round() as u8
+    };
+    let [br, bg, bb, _] = t.bg.to_array();
+    let [ar, ag, ab, _] = t.accent.to_array();
+    egui::Color32::from_rgb(mix(br, ar), mix(bg, ag), mix(bb, ab))
 }
 
 /// Install a theme on a live context: select the egui dark/light mode,
@@ -577,6 +614,57 @@ mod tests {
         for theme in [Theme::Dark, Theme::Sepia] {
             let name = theme.persist_name();
             assert_eq!(Theme::from_persisted(Some(name)), theme);
+        }
+    }
+
+    #[test]
+    fn other_swaps_the_pair_and_toggle_labels_name_the_landing_theme() {
+        // The toggle's landing theme is the other one, and flipping twice
+        // is the identity (the toggle is an involution).
+        assert_eq!(Theme::Dark.other(), Theme::Sepia);
+        assert_eq!(Theme::Sepia.other(), Theme::Dark);
+        for theme in [Theme::Dark, Theme::Sepia] {
+            assert_eq!(theme.other().other(), theme);
+        }
+
+        // The button always names where a click lands — never the theme
+        // you're on.
+        assert_eq!(Theme::Dark.toggle_label(), "◐ sepia");
+        assert_eq!(Theme::Sepia.toggle_label(), "◐ dark");
+        for theme in [Theme::Dark, Theme::Sepia] {
+            let label = theme.toggle_label();
+            assert!(label.starts_with("◐ "));
+            assert!(!label.contains(theme.persist_name()));
+            assert!(label.contains(theme.other().persist_name()));
+        }
+    }
+
+    #[test]
+    fn chip_fill_is_a_soft_accent_wash_between_bg_and_accent() {
+        for theme in [Theme::Dark, Theme::Sepia] {
+            let t = theme.tokens();
+            let fill = chip_fill(t);
+
+            assert_ne!(
+                fill, t.bg,
+                "{theme:?}: chip must not vanish into the ground"
+            );
+            assert_ne!(
+                fill, t.accent,
+                "{theme:?}: chip must stay soft, not full accent"
+            );
+
+            // Every channel of the wash lies between ground and accent.
+            let [fr, fgc, fb, _] = fill.to_array();
+            let [br, bgr, bb, _] = t.bg.to_array();
+            let [ar, agc, ab, _] = t.accent.to_array();
+            for (f, b, a) in [(fr, br, ar), (fgc, bgr, agc), (fb, bb, ab)] {
+                let (lo, hi) = (b.min(a), b.max(a));
+                assert!(
+                    (lo..=hi).contains(&f),
+                    "{theme:?}: channel {f} outside the [{lo}, {hi}] wash range"
+                );
+            }
         }
     }
 

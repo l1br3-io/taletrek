@@ -11,8 +11,9 @@
 //! download progress shown on that job's row), so the picker stays a pure
 //! choice and the network stays off the UI thread.
 //!
-//! The pure helpers ([`is_voice_cached`], [`size_label`], [`row_meta`],
-//! [`chip_fill`]) are headless-testable; only [`render`] touches egui.
+//! The pure helpers ([`is_voice_cached`], [`size_label`], [`row_meta`])
+//! are headless-testable; only [`render`] touches egui (the chip's
+//! accent-soft fill is [`theme::chip_fill`](crate::gui::theme::chip_fill)).
 
 use std::path::Path;
 
@@ -20,7 +21,7 @@ use eframe::egui;
 
 use taletrek_worker::{Voice, VoiceQuality, CURATED_VOICES};
 
-use crate::gui::theme::Tokens;
+use crate::gui::theme::{chip_fill, Tokens};
 
 /// Whether a voice's model pair is already in the local cache — both the
 /// `.onnx` and its `.json` config must be present, mirroring the worker's
@@ -45,23 +46,6 @@ pub(crate) fn quality_label(quality: VoiceQuality) -> &'static str {
         VoiceQuality::Medium => "medium",
         VoiceQuality::High => "high",
     }
-}
-
-/// How much accent the "downloaded" chip's wash carries — 15 % into the
-/// panel ground: soft enough to read as a tint, strong enough to read as
-/// phosphor in both themes.
-const CHIP_MIX: f32 = 0.15;
-
-/// The "downloaded" chip's fill: the accent mixed [`CHIP_MIX`] into the
-/// panel ground — an opaque accent-soft tint, with the chip's text at
-/// full-strength accent (the identity's chip rule).
-pub(crate) fn chip_fill(t: Tokens) -> egui::Color32 {
-    let mix = |from: u8, to: u8| {
-        (f32::from(from) * (1.0 - CHIP_MIX) + f32::from(to) * CHIP_MIX).round() as u8
-    };
-    let [br, bg, bb, _] = t.bg.to_array();
-    let [ar, ag, ab, _] = t.accent.to_array();
-    egui::Color32::from_rgb(mix(br, ar), mix(bg, ag), mix(bb, ab))
 }
 
 /// The row's one muted meta run — quality and size joined with the same
@@ -262,35 +246,6 @@ mod tests {
             language: "en_US",
         };
         assert_eq!(row_meta(&synthetic), "low · ~3 MiB");
-    }
-
-    #[test]
-    fn chip_fill_is_a_soft_accent_wash_between_bg_and_accent() {
-        for theme in [theme::Theme::Dark, theme::Theme::Sepia] {
-            let t = theme.tokens();
-            let fill = chip_fill(t);
-
-            assert_ne!(
-                fill, t.bg,
-                "{theme:?}: chip must not vanish into the ground"
-            );
-            assert_ne!(
-                fill, t.accent,
-                "{theme:?}: chip must stay soft, not full accent"
-            );
-
-            // Every channel of the wash lies between ground and accent.
-            let [fr, fgc, fb, _] = fill.to_array();
-            let [br, bgr, bb, _] = t.bg.to_array();
-            let [ar, agc, ab, _] = t.accent.to_array();
-            for (f, b, a) in [(fr, br, ar), (fgc, bgr, agc), (fb, bb, ab)] {
-                let (lo, hi) = (b.min(a), b.max(a));
-                assert!(
-                    (lo..=hi).contains(&f),
-                    "{theme:?}: channel {f} outside the [{lo}, {hi}] wash range"
-                );
-            }
-        }
     }
 
     #[test]
