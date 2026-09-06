@@ -224,13 +224,6 @@ const CUT_XCHARTER_REGULAR: &str = "XCharter-Regular";
 /// Font-data name for the story face's bold cut.
 const CUT_XCHARTER_BOLD: &str = "XCharter-Bold";
 
-/// Install a TaleTrek primary in front of a family's existing fallbacks
-/// (the builtin emoji/symbol faces must stay reachable behind our cuts).
-fn set_primary(list: &mut Vec<String>, cut: &str) {
-    list.retain(|name| name != cut);
-    list.insert(0, cut.to_owned());
-}
-
 /// The TaleTrek font stack: both builtin families become JetBrains Mono
 /// (the machine face), XCharter installs as the Story family, and the
 /// bold cuts get dedicated families (egui 0.35 has no weight selection).
@@ -258,35 +251,44 @@ pub fn font_definitions() -> egui::FontDefinitions {
     );
 
     // The builtin symbol/emoji fallback chain (everything the default
-    // Proportional family offered besides its primary) — reused behind
-    // every TaleTrek primary.
+    // Monospace family offered besides its primary — a superset of
+    // Proportional's chain: Hack joins Ubuntu-Light/NotoEmoji/
+    // emoji-icon-font, and Hack is the one builtin face covering `◐`
+    // U+25D0, which JetBrains Mono lacks) — reused behind every
+    // TaleTrek primary.
     let fallbacks: Vec<String> = fonts
         .families
-        .get(&egui::FontFamily::Proportional)
+        .get(&egui::FontFamily::Monospace)
         .cloned()
         .unwrap_or_default();
 
-    if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-        set_primary(list, CUT_JETBRAINS_REGULAR);
-    }
-    if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-        set_primary(list, CUT_JETBRAINS_REGULAR);
-    }
-
-    let story_stack = |cut: &str| {
+    // Every TaleTrek family is the same shape: our primary cut in front
+    // of the shared builtin fallback chain above — including the two
+    // builtin families themselves, whose default lists differ (only
+    // Monospace ships Hack).
+    let primary_stack = |cut: &str| {
         let mut list = vec![cut.to_owned()];
         list.extend(fallbacks.iter().cloned());
         list
     };
+    fonts.families.insert(
+        egui::FontFamily::Proportional,
+        primary_stack(CUT_JETBRAINS_REGULAR),
+    );
+    fonts.families.insert(
+        egui::FontFamily::Monospace,
+        primary_stack(CUT_JETBRAINS_REGULAR),
+    );
+
     fonts
         .families
-        .insert(story_family(), story_stack(CUT_XCHARTER_REGULAR));
+        .insert(story_family(), primary_stack(CUT_XCHARTER_REGULAR));
     fonts
         .families
-        .insert(story_bold_family(), story_stack(CUT_XCHARTER_BOLD));
+        .insert(story_bold_family(), primary_stack(CUT_XCHARTER_BOLD));
     fonts
         .families
-        .insert(machine_bold_family(), story_stack(CUT_JETBRAINS_BOLD));
+        .insert(machine_bold_family(), primary_stack(CUT_JETBRAINS_BOLD));
 
     fonts
 }
@@ -550,6 +552,24 @@ mod tests {
             assert_eq!(list.first().map(String::as_str), Some(cut));
             assert!(list.len() > 1, "{f}: builtin glyph fallbacks dropped");
         }
+    }
+
+    #[test]
+    fn every_family_chain_keeps_hack_the_half_circle_cover() {
+        // `◐` (U+25D0, the theme-toggle glyph) is absent from JetBrains
+        // Mono and XCharter; of egui's builtin fallback faces only Hack
+        // covers it (Ubuntu-Light/NotoEmoji/emoji-icon-font do not). The
+        // default Proportional chain omits Hack — it lives only in the
+        // builtin Monospace chain — so every TaleTrek family must carry
+        // the Monospace chain's fallbacks or the toggle tofus.
+        let fonts = font_definitions();
+        assert!(
+            fonts
+                .families
+                .values()
+                .all(|chain| chain.iter().any(|f| f == "Hack")),
+            "a family dropped Hack from its fallback chain — ◐ would tofu"
+        );
     }
 
     #[test]

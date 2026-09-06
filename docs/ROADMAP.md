@@ -63,6 +63,7 @@ Five efforts, dependency-aware:
 | 1 | `native-pivot` — purge + re-foundation: ADR-0015, server deletion, SPA scoped down to reader + landing, docs rewrite, landing v1 | ✅ shipped ([spec](./specs/native-pivot/spec.md)) |
 | 2 | `kernel-parse` — `crates/parse` (EPUB/TXT/HTML/MD/DOCX/PDF; MOBI open) + CLI file→bundle — closes the interim no-producer gap | ✅ shipped ([spec](./specs/kernel-parse/spec.md)) |
 | 3 | `desktop-synth-gui` — the processor app: in-process sherpa-onnx TTS + native Opus encode behind the existing traits, egui GUI + unchanged CLI, release workflow | ✅ shipped ([spec](./specs/desktop-synth-gui/spec.md)) |
+| 3.5 | `desktop-ux-refresh` — identity pass on the processor: web-pinned two-theme tokens, embedded mono+serif fonts, panel layout, dark/sepia toggle | ✅ shipped ([spec](./specs/desktop-ux-refresh/spec.md)) |
 | 4 | `android-app` — Jetpack Compose + Media3 player; kernel via UniFFI; free Play Store download | planned |
 | 5 | `ios-app` — SwiftUI + AVFoundation player; kernel via UniFFI; free App Store download ($99/yr accepted) | planned |
 

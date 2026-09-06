@@ -101,7 +101,7 @@ cargo test -p taletrek-desktop --test synth_e2e -- --ignored --nocapture  # real
 | Layer               | Where                         | What it covers                                                |
 | ------------------ | ----------------------------- | ------------------------------------------------------------- |
 | Unit (inline)       | `src/bundle_io.rs`, `src/cli.rs` | argument parsing, bundle read/write, error paths              |
-| GUI unit (inline)   | `src/gui/**` (`queue.rs`, `executor.rs`, `settings.rs`, `views/`) | the pure job-queue state machine + executor cores (voice snapshot, cancel, retry, re-voice, humanized errors, settings persistence snapshots) — no egui types in the tested seams; the GUI is state-machine-tested only, manual smoke is the release gate |
+| GUI unit (inline)   | `src/gui/**` (`queue.rs`, `executor.rs`, `settings.rs`, `views/`, `theme.rs`) | the pure job-queue state machine + executor cores (voice snapshot, cancel, retry, re-voice, humanized errors, settings persistence snapshots) — no egui types in the tested seams; plus the theme layer (`desktop-ux-refresh`): token tables pinned to the exact web hexes in both themes, WCAG contrast sanity, embedded-font registration incl. the builtin fallback chains (the `◐` cover — Hack is the one builtin face with U+25D0), and `ctx.run_ui` paint passes rendering real views through the production path (egui aborts on layout/font misuse); manual smoke is the release gate |
 | Integration (gated) | `tests/synth_e2e.rs`            | spawns itself via `env!("CARGO_BIN_EXE_taletrek-desktop")`, full synth + resynth round-trip (`#[ignore]`d) |
 
 Same `TALETREK_VOICE_PATH` gate as the crates; same `include_bytes!` of the
