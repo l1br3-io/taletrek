@@ -30,6 +30,12 @@ taletrek-parse = { path = "../crates/parse" }
 eframe = { version = "0.35", features = ["glow", "persistence"] }
 rfd = "0.17"
 crossbeam-channel = "0.5"
+# GOTCHA: cpal links ALSA unconditionally on Linux (alsa-sys → pkg-config +
+# libasound2-dev at build time; ubuntu-latest CI runners ship neither — the
+# rust job needs an apt step once it builds this crate, ask-first per spec).
+cpal = "0.15"
+ogg = "0.9"
+opus = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

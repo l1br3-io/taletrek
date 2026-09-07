@@ -31,6 +31,7 @@
 
 pub mod executor;
 pub mod queue;
+pub mod reader;
 pub mod settings;
 pub mod sink;
 pub mod theme;
