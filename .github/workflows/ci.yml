@@ -39,6 +39,10 @@ jobs:
           toolchain: "1.97.0"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # cpal links ALSA unconditionally on Linux (alsa-sys → pkg-config +
+      # libasound2-dev); ubuntu-latest runners ship neither (reader T1).
+      - name: Install build deps (cpal → ALSA)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Build
         run: cargo build --workspace --all-targets
       - name: Clippy
@@ -65,8 +69,12 @@ jobs:
           echo "TALETREK_PIPER_BIN=$RUNNER_TEMP/piper/piper" >> "$GITHUB_ENV"
           echo "TALETREK_VOICE_PATH=$RUNNER_TEMP/voices/en_US-hfc_female-medium.onnx" >> "$GITHUB_ENV"
 
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      # libasound2-dev: the workspace --ignored compile pulls in desktop's
+      # cpal. The device test itself still needs real audio hardware and is
+      # expected to fail on runners — absorbed by continue-on-error (same
+      # convention as the piper/ffmpeg ignored tests needing their env).
+      - name: Install ffmpeg + ALSA dev
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libasound2-dev
 
       - name: Install piper (rhasspy TTS)
         run: |

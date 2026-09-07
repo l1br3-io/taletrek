@@ -42,6 +42,10 @@ Artifacts land on the run page (not on any release).
 ## Build requirements (what CI installs)
 
 Nothing beyond a Rust toolchain, **cmake + a C compiler** for the `opus`
-crate's bundled libopus (T2), and — for the aarch64-linux cross only — the
-`gcc-aarch64-linux-gnu` cross toolchain. sherpa-onnx statically links its own
-prebuilt archive; no cmake/libclang/onnxruntime system deps (T1).
+crate's bundled libopus (T2), **`libasound2-dev`** for cpal's alsa-sys
+(reader effort T1), and — for the aarch64-linux cross only — the
+`gcc-aarch64-linux-gnu` cross toolchain plus the arm64 multiarch
+`libasound2-dev:arm64` with `PKG_CONFIG_LIBDIR` pointed at the arm64 pc
+dir (CI does the `dpkg --add-architecture arm64` dance). sherpa-onnx
+statically links its own prebuilt archive; no
+cmake/libclang/onnxruntime system deps (T1).

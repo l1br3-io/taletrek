@@ -7,7 +7,8 @@
 #   aarch64-linux / windows / macos  best-effort (continue-on-error) —
 #     informed by the T1/T2 spikes: sherpa-onnx statically links its prebuilt
 #     per-platform archive (no cmake/libclang), the `opus` crate's bundled
-#     libopus needs cmake + a C compiler. Nothing else is installed.
+#     libopus needs cmake + a C compiler, and cpal's alsa-sys needs
+#     libasound2-dev (arm64 multiarch for the aarch64 cross).
 #
 # Dry runs: workflow_dispatch on any branch — same build + smoke + artifact
 # upload, but no GitHub release is created (tag pushes only). See
@@ -86,9 +87,20 @@ jobs:
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
         run: |
-          pkgs='cmake' # bundled libopus (T2); sherpa needs nothing (T1)
+          # cmake: bundled libopus (T2); libasound2-dev: cpal/alsa-sys (reader T1);
+          # sherpa needs nothing (T1).
+          pkgs='cmake libasound2-dev'
           if [ "${{ matrix.target }}" = 'aarch64-unknown-linux-gnu' ]; then
             pkgs="$pkgs gcc-aarch64-linux-gnu g++-aarch64-linux-gnu"
+            # alsa-sys cross-links against arm64 libasound: enable multiarch,
+            # install the :arm64 headers/lib, and point pkg-config at the arm64
+            # pc dir for later steps (Build). PKG_CONFIG_LIBDIR replaces the
+            # whole search path, so it is exported ONLY on the cross entry.
+            sudo dpkg --add-architecture arm64
+            sudo apt-get update
+            sudo apt-get install -y libasound2-dev:arm64
+            echo 'PKG_CONFIG_ALLOW_CROSS=1' >> "$GITHUB_ENV"
+            echo 'PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig' >> "$GITHUB_ENV"
           fi
           sudo apt-get update && sudo apt-get install -y $pkgs
 
