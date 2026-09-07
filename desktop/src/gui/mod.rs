@@ -175,8 +175,10 @@ enum Screen {
     /// The converter: prompt strip + queue + status line.
     #[default]
     Converter,
-    /// The reader: one open session's view.
-    Reader(ReaderView),
+    /// The reader: one open session's view (boxed — the view carries
+    /// the playback controller and the book index; keeping the enum
+    /// lean keeps every Screen-sized value cheap to move).
+    Reader(Box<ReaderView>),
 }
 
 /// The eframe app: an [`Executor`] plus its render surface. All state
@@ -336,7 +338,7 @@ impl TaleTrekApp {
         match reader::session::open(&path) {
             Ok(session) => {
                 self.open_error = None;
-                self.screen = Screen::Reader(ReaderView::new(session));
+                self.screen = Screen::Reader(Box::new(ReaderView::new(session)));
             }
             Err(err) => {
                 self.open_error = Some(format!(

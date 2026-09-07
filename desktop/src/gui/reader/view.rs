@@ -1,13 +1,17 @@
-//! The reader screen's egui surface (task 004): title/meta header,
-//! chapter outline, per-chapter text pane, and the transport placeholder.
+//! The reader screen's egui surface: title/meta header, chapter
+//! outline, per-chapter text pane, and the transport bar.
 //!
 //! Presentational (the views' pattern): it renders the [`ReaderSession`]
-//! it owns and returns user intents ([`ReaderAction::Back`]) — no queue,
-//! executor, or audio knowledge. The whole book is never one scroll:
-//! the outline switches chapters and the pane renders exactly one
-//! (web-reader precedent; the big-book mitigation). Playback arrives in
-//! task 005 — until then the transport is a disabled placeholder, with an
-//! explanatory hint on text-only bundles (they must read *fully* here).
+//! it owns and returns user intents ([`ReaderAction::Back`]) — no queue
+//! or executor knowledge. The whole book is never one scroll: the
+//! outline switches chapters and the pane renders exactly one
+//! (web-reader precedent; the big-book mitigation). Task 005 wired
+//! playback: the view owns a [`Playback`] controller (spawned only for
+//! narrated bundles — a text-only session spawns no audio thread at
+//! all), pumps it every frame, forwards transport-button intents as
+//! [`PlayerEvent`]s, and renders the machine it gets back — the active
+//! position and the failure line. It adds no sequencing of its own;
+//! sync UX (highlight, click-to-seek, scrub) arrives in task 006.
 //!
 //! Type note: book *content* renders in the story face (XCharter) — the
 //! reading typeface — while chrome (outline, transport, meta) stays in
@@ -15,8 +19,15 @@
 //! machine face for converter chrome before a reader existed; a reading
 //! app setting book text in monospace would invert the identity.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use eframe::egui;
 
+use taletrek_reader::{PlayerEvent, PlayerState};
+
+use super::audio::{AudioEngine, CpalDevice};
+use super::playback::Playback;
 use super::session::ReaderSession;
 use crate::gui::theme::{self, Tokens};
 
@@ -30,6 +41,10 @@ const TITLE_PT: f32 = 18.0;
 /// The outline panel's width in points.
 const OUTLINE_WIDTH: f32 = 200.0;
 
+/// How long the reader may sleep before another frame while audio
+/// plays — the tick cadence the transport's position label follows.
+const PLAYING_REPAINT: Duration = Duration::from_millis(150);
+
 /// What the reader screen asks the shell to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReaderAction {
@@ -39,20 +54,32 @@ pub(crate) enum ReaderAction {
 }
 
 /// The reader screen: one open session plus the view-local state (the
-/// selected chapter). Grows the sync UX in task 006.
+/// selected chapter, the playback controller for narrated bundles).
 pub(crate) struct ReaderView {
     /// The opened bundle (open-flow output).
     session: ReaderSession,
     /// The chapter the text pane shows (index into `session.book.chapters`).
     chapter: usize,
+    /// The playback controller — `None` on text-only bundles (no engine
+    /// thread spawns; the transport renders disabled with its hint).
+    playback: Option<Playback>,
 }
 
 impl ReaderView {
-    /// A fresh view over an opened session, starting at the first chapter.
+    /// A fresh view over an opened session, starting at the first
+    /// chapter. Narrated sessions spawn the audio engine here; the
+    /// device itself stays untouched until the first play.
     pub(crate) fn new(session: ReaderSession) -> Self {
+        let playback = session.book.audio_present.then(|| {
+            Playback::new(Box::new(AudioEngine::new(
+                session.path.clone(),
+                Arc::new(CpalDevice),
+            )))
+        });
         Self {
             session,
             chapter: 0,
+            playback,
         }
     }
 
@@ -67,10 +94,15 @@ impl ReaderView {
     }
 
     /// Paint the reader screen inside `ui`: header (top), transport
-    /// placeholder (bottom), outline (left), text pane (center).
-    /// Returns the intent if the user asked to leave.
+    /// (bottom), outline (left), text pane (center). Pumps the engine
+    /// first so the bar renders this frame's truth. Returns the intent
+    /// if the user asked to leave.
     pub(crate) fn render(&mut self, ui: &mut egui::Ui, t: Tokens) -> Option<ReaderAction> {
         let mut action = None;
+
+        if let Some(playback) = &mut self.playback {
+            playback.pump(&self.session.book);
+        }
 
         // Chrome sits on surface; the reading pane stays on the panel
         // ground — the paper the story renders on.
@@ -108,6 +140,16 @@ impl ReaderView {
         self.transport(ui, t);
         self.outline(ui, t);
         self.text_pane(ui, t);
+
+        // While audio plays, keep frames coming so ticks land (the
+        // position label and task 006's highlight ride them).
+        if self
+            .playback
+            .as_ref()
+            .is_some_and(|pb| matches!(pb.state(), PlayerState::Playing { .. }))
+        {
+            ui.ctx().request_repaint_after(PLAYING_REPAINT);
+        }
         action
     }
 
@@ -214,11 +256,16 @@ impl ReaderView {
         });
     }
 
-    /// The transport placeholder (task 005 wires the engine): disabled
-    /// ASCII controls on surface chrome, with the explanatory hint when
-    /// the bundle carries no audio — a text-only book must explain its
-    /// own silence.
-    fn transport(&self, ui: &mut egui::Ui, t: Tokens) {
+    /// The transport bar: prev/next chapter (`|<`, `>|`), prev/next
+    /// paragraph (`<`, `>`), and the play/pause toggle, all forwarded
+    /// as [`PlayerEvent`]s through the controller; the machine's
+    /// position and failure log render beside them. Text-only bundles
+    /// keep task 004's disabled controls + hint (they must read *fully*
+    /// here, and no engine ever spawned).
+    fn transport(&mut self, ui: &mut egui::Ui, t: Tokens) {
+        let ReaderView {
+            session, playback, ..
+        } = self;
         egui::Panel::bottom("reader-transport")
             .resizable(false)
             .frame(
@@ -228,11 +275,56 @@ impl ReaderView {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for label in ["|<", "<", "Play", ">", ">|"] {
-                        ui.add_enabled(false, egui::Button::new(label));
-                    }
-                    if let Some(hint) = transport_hint(self.session.book.audio_present) {
-                        ui.label(egui::RichText::new(hint).small().color(t.muted));
+                    match playback {
+                        None => {
+                            for label in ["|<", "<", "Play", ">", ">|"] {
+                                ui.add_enabled(false, egui::Button::new(label));
+                            }
+                            if let Some(hint) = transport_hint(false) {
+                                ui.label(egui::RichText::new(hint).small().color(t.muted));
+                            }
+                        }
+                        Some(playback) => {
+                            // Snapshot the machine first: the click
+                            // handlers below need `&mut` playback.
+                            let state = playback.state().clone();
+                            let playing = matches!(state, PlayerState::Playing { .. });
+                            let toggle = if playing {
+                                ("Pause", PlayerEvent::Pause)
+                            } else {
+                                ("Play", PlayerEvent::Play)
+                            };
+                            let buttons: [(&str, PlayerEvent); 5] = [
+                                ("|<", PlayerEvent::PrevChapter),
+                                ("<", PlayerEvent::PrevParagraph),
+                                toggle,
+                                (">", PlayerEvent::NextParagraph),
+                                (">|", PlayerEvent::NextChapter),
+                            ];
+                            for (label, ev) in buttons {
+                                if ui.button(label).clicked() {
+                                    playback.send(ev, &session.book);
+                                }
+                            }
+                            if let Some(position) = position_label(&state) {
+                                ui.label(egui::RichText::new(position).small().color(t.muted));
+                            }
+                            // The skip path's non-modal surfacing: one
+                            // line, danger-tinted, no dialogs.
+                            let failures = state.failures();
+                            if failures.skipped > 0 {
+                                let last =
+                                    failures.last_error.as_deref().unwrap_or("unknown error");
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Skipped {} — {last}",
+                                        failures.skipped
+                                    ))
+                                    .small()
+                                    .color(t.danger),
+                                );
+                            }
+                        }
                     }
                 });
             });
@@ -240,8 +332,8 @@ impl ReaderView {
 }
 
 /// The transport placeholder's hint: `None` when the bundle carries
-/// audio (the buttons are disabled until task 005 wires the engine — no
-/// copy needed), and the explanatory sentence when it doesn't.
+/// audio, and the explanatory sentence when it doesn't — a text-only
+/// book must explain its own silence.
 pub(crate) fn transport_hint(audio_present: bool) -> Option<&'static str> {
     if audio_present {
         None
@@ -253,9 +345,21 @@ pub(crate) fn transport_hint(audio_present: bool) -> Option<&'static str> {
     }
 }
 
+/// The transport's position readout: `m:ss` into the current paragraph
+/// while playing or paused; nothing before the first play.
+pub(crate) fn position_label(state: &PlayerState) -> Option<String> {
+    let offset = match state {
+        PlayerState::Playing { offset, .. } | PlayerState::Paused { offset, .. } => *offset,
+        PlayerState::Idle { .. } => return None,
+    };
+    let total = offset.max(0.0).floor() as u64;
+    Some(format!("{}:{:02}", total / 60, total % 60))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gui::reader::playback::ScriptedTransport;
     use crate::gui::reader::session::{self, ReaderSession};
     use crate::gui::theme::Theme;
     use taletrek_reader::BookIndex;
@@ -338,6 +442,25 @@ mod tests {
     }
 
     #[test]
+    fn position_label_formats_minutes_seconds_and_hides_at_idle() {
+        let playing = PlayerState::Playing {
+            para: taletrek_reader::ParagraphPos::new(0, 0),
+            offset: 0.0,
+            failures: Default::default(),
+        };
+        assert_eq!(position_label(&playing).as_deref(), Some("0:00"));
+
+        let paused = PlayerState::Paused {
+            para: taletrek_reader::ParagraphPos::new(0, 0),
+            offset: 65.9,
+            failures: Default::default(),
+        };
+        assert_eq!(position_label(&paused).as_deref(), Some("1:05"));
+
+        assert_eq!(position_label(&PlayerState::idle()), None);
+    }
+
+    #[test]
     fn select_chapter_clamps_to_the_book() {
         let mut view = ReaderView::new(fixture(true));
         assert_eq!(view.chapter, 0);
@@ -365,14 +488,41 @@ mod tests {
     }
 
     #[test]
+    fn narrated_sessions_spawn_a_playback_controller_text_only_do_not() {
+        let narrated = ReaderView::new(fixture(true));
+        assert!(
+            narrated.playback.is_some(),
+            "narrated bundles get the controller (engine thread + channels)"
+        );
+
+        let text_only = ReaderView::new(fixture(false));
+        assert!(
+            text_only.playback.is_none(),
+            "text-only bundles spawn no audio thread at all"
+        );
+    }
+
+    #[test]
     fn render_paints_all_regions_under_both_themes() {
         for theme in [Theme::Dark, Theme::Sepia] {
             let ctx = egui::Context::default();
             theme::apply(&ctx, theme);
 
-            // Populated, mid-book (chapter 2 selected), narrated.
+            // Populated, mid-book (chapter 2 selected), narrated — with
+            // a scripted controller so the paint covers the live
+            // transport: playing, positioned, one skipped paragraph.
             let mut view = ReaderView::new(fixture(true));
             view.select_chapter(2);
+            let scripted = std::sync::Arc::new(ScriptedTransport::new());
+            let mut live = crate::gui::reader::playback::controller(scripted.clone());
+            live.send(PlayerEvent::Play, &view.session.book);
+            scripted.push(crate::gui::reader::audio::AudioEvent::Loaded {
+                key: view.session.book.chapters[2].paragraphs[0]
+                    .segment_key
+                    .clone(),
+            });
+            live.send(PlayerEvent::Pause, &view.session.book);
+            view.playback = Some(live);
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
                 view.render(ui, theme.tokens());
             });
@@ -383,9 +533,10 @@ mod tests {
                 view.render(ui, theme.tokens());
             });
         }
-        // Painting header + outline + per-chapter pane + placeholder
-        // transport under the real theme/fonts without panicking is the
-        // assertion — egui aborts on layout/font misuse.
+        // Painting header + outline + per-chapter pane + live transport
+        // (and the text-only hint path) under the real theme/fonts
+        // without panicking is the assertion — egui aborts on
+        // layout/font misuse.
     }
 
     #[test]

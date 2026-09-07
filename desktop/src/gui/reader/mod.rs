@@ -3,10 +3,13 @@
 //!
 //! Layering invariant: cpal and the opus/ogg decode crates never appear
 //! outside [`audio`] — the sequencing core under `crates/reader` (task 002)
-//! must stay importable without either. Task 004 adds the UI-free open
-//! flow ([`session`]) and the egui screen ([`view`]); egui types stay
+//! must stay importable without either. Task 004 added the UI-free open
+//! flow ([`session`]) and the egui screen ([`view`]); task 005 wired
+//! playback: [`playback`] is the UI-free controller that runs the kernel
+//! `PlayerState` machine over the [`audio`] engine. egui types stay
 //! confined to `view.rs` within this tree, per the shell's rule.
 
 pub mod audio;
+pub mod playback;
 pub mod session;
 pub mod view;
