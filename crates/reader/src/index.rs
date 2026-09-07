@@ -1,5 +1,6 @@
 //! [`BookIndex`] — the navigable model over a bundle's manifest + chapters.
 
+use crate::state::ParagraphPos;
 use taletrek_synth::{cache_key, ChapterText, Manifest};
 
 /// A book's navigable structure: chapters, paragraphs, and per-paragraph
@@ -70,6 +71,111 @@ impl BookIndex {
                 })
                 .collect(),
         }
+    }
+}
+
+/// Reading-order navigation over a [`BookIndex`] — the sequencing
+/// primitives [`crate::PlayerState`] ticks against (and the outline
+/// renders from). Empty chapters have no addressable paragraphs, so every
+/// walk skips them; every method is total (out-of-range positions yield
+/// `None`, never a panic).
+impl BookIndex {
+    /// The paragraph at `pos`, if it exists — validates both the chapter
+    /// and the paragraph-within-chapter index.
+    #[must_use]
+    pub fn paragraph(&self, pos: ParagraphPos) -> Option<&ParagraphIndex> {
+        let (chapter, index) = self.coordinates(pos)?;
+        self.chapters.get(chapter)?.paragraphs.get(index)
+    }
+
+    /// The book's first paragraph, skipping leading empty chapters.
+    /// `None` when the book has no paragraphs at all.
+    #[must_use]
+    pub fn first_paragraph(&self) -> Option<ParagraphPos> {
+        let (chapter, _) = self
+            .chapters
+            .iter()
+            .enumerate()
+            .find(|(_, ch)| !ch.paragraphs.is_empty())?;
+        Some(ParagraphPos::new(u32::try_from(chapter).ok()?, 0))
+    }
+
+    /// The paragraph after `pos` in reading order, crossing chapter
+    /// boundaries (empty chapters are skipped). `None` at book end.
+    #[must_use]
+    pub fn next_paragraph(&self, pos: ParagraphPos) -> Option<ParagraphPos> {
+        let (chapter, index) = self.coordinates(pos)?;
+        if index + 1 < self.chapters[chapter].paragraphs.len() {
+            return Some(ParagraphPos::new(
+                pos.chapter,
+                u32::try_from(index + 1).ok()?,
+            ));
+        }
+        self.chapter_start_after(chapter)
+    }
+
+    /// The paragraph before `pos` in reading order, crossing chapter
+    /// boundaries (empty chapters are skipped). `None` at book start.
+    #[must_use]
+    pub fn prev_paragraph(&self, pos: ParagraphPos) -> Option<ParagraphPos> {
+        let (chapter, index) = self.coordinates(pos)?;
+        if index > 0 {
+            return Some(ParagraphPos::new(
+                pos.chapter,
+                u32::try_from(index - 1).ok()?,
+            ));
+        }
+        let (prev_c, prev_ch) = self.chapters[..chapter]
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, ch)| !ch.paragraphs.is_empty())?;
+        let last = prev_ch.paragraphs.len() - 1;
+        Some(ParagraphPos::new(
+            u32::try_from(prev_c).ok()?,
+            u32::try_from(last).ok()?,
+        ))
+    }
+
+    /// The first paragraph of the next non-empty chapter after `pos`'s
+    /// chapter. `None` when `pos` sits in the last chapter (or nowhere).
+    #[must_use]
+    pub fn next_chapter_start(&self, pos: ParagraphPos) -> Option<ParagraphPos> {
+        let (chapter, _) = self.coordinates(pos)?;
+        self.chapter_start_after(chapter)
+    }
+
+    /// The first paragraph of the nearest previous non-empty chapter.
+    /// `None` when `pos` sits in the first chapter (or nowhere).
+    #[must_use]
+    pub fn prev_chapter_start(&self, pos: ParagraphPos) -> Option<ParagraphPos> {
+        let (chapter, _) = self.coordinates(pos)?;
+        let (prev_c, _) = self.chapters[..chapter]
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, ch)| !ch.paragraphs.is_empty())?;
+        Some(ParagraphPos::new(u32::try_from(prev_c).ok()?, 0))
+    }
+
+    /// `(chapter, paragraph)` indexes for a validated position — the
+    /// position must name a paragraph that actually exists.
+    fn coordinates(&self, pos: ParagraphPos) -> Option<(usize, usize)> {
+        let chapter = usize::try_from(pos.chapter).ok()?;
+        let index = usize::try_from(pos.index).ok()?;
+        self.chapters.get(chapter)?.paragraphs.get(index)?;
+        Some((chapter, index))
+    }
+
+    /// The first paragraph of the first non-empty chapter strictly after
+    /// chapter `after`.
+    fn chapter_start_after(&self, after: usize) -> Option<ParagraphPos> {
+        self.chapters
+            .iter()
+            .enumerate()
+            .skip(after + 1)
+            .find(|(_, ch)| !ch.paragraphs.is_empty())
+            .and_then(|(chapter, _)| Some(ParagraphPos::new(u32::try_from(chapter).ok()?, 0)))
     }
 }
 
@@ -165,5 +271,90 @@ mod tests {
         let index = BookIndex::new(&manifest(true), &[]);
         assert_eq!(index.book_id, "bk_test");
         assert!(index.chapters.is_empty());
+    }
+
+    // --- navigation ------------------------------------------------------
+
+    fn pos(chapter: u32, index: u32) -> ParagraphPos {
+        ParagraphPos::new(chapter, index)
+    }
+
+    /// Chapters 0 and 2 have paragraphs; chapters 1 (middle) and 3
+    /// (trailing) are empty and must be skipped by every walk.
+    fn nav_book() -> BookIndex {
+        let chapters = vec![
+            ChapterText::new("bk_test", 0, "One", vec!["P0.".into(), "P1.".into()]),
+            ChapterText::new("bk_test", 1, "Two", vec![]),
+            ChapterText::new("bk_test", 2, "Three", vec!["P2.".into()]),
+            ChapterText::new("bk_test", 3, "Four", vec![]),
+        ];
+        BookIndex::new(&manifest(true), &chapters)
+    }
+
+    #[test]
+    fn paragraph_lookup_validates_chapter_and_index() {
+        let book = nav_book();
+        assert!(book.paragraph(pos(0, 0)).is_some());
+        assert!(book.paragraph(pos(0, 1)).is_some());
+        assert!(book.paragraph(pos(2, 0)).is_some());
+        // Empty chapter, out-of-range chapter, out-of-range index, huge
+        // values — all None, no panic.
+        assert!(book.paragraph(pos(1, 0)).is_none());
+        assert!(book.paragraph(pos(4, 0)).is_none());
+        assert!(book.paragraph(pos(0, 2)).is_none());
+        assert!(book.paragraph(pos(u32::MAX, u32::MAX)).is_none());
+    }
+
+    #[test]
+    fn first_paragraph_skips_leading_empty_chapters() {
+        let book = nav_book();
+        assert_eq!(book.first_paragraph(), Some(pos(0, 0)));
+
+        let chapters = vec![
+            ChapterText::new("bk_test", 0, "Empty", vec![]),
+            ChapterText::new("bk_test", 1, "Full", vec!["Late.".into()]),
+        ];
+        let led = BookIndex::new(&manifest(true), &chapters);
+        assert_eq!(led.first_paragraph(), Some(pos(1, 0)));
+    }
+
+    #[test]
+    fn next_paragraph_walks_and_crosses_skipping_empty_chapters() {
+        let book = nav_book();
+        assert_eq!(book.next_paragraph(pos(0, 0)), Some(pos(0, 1)));
+        assert_eq!(book.next_paragraph(pos(0, 1)), Some(pos(2, 0)));
+        // Book end — the trailing empty chapter is not a stop.
+        assert_eq!(book.next_paragraph(pos(2, 0)), None);
+    }
+
+    #[test]
+    fn prev_paragraph_walks_and_crosses_skipping_empty_chapters() {
+        let book = nav_book();
+        assert_eq!(book.prev_paragraph(pos(2, 0)), Some(pos(0, 1)));
+        assert_eq!(book.prev_paragraph(pos(0, 1)), Some(pos(0, 0)));
+        assert_eq!(book.prev_paragraph(pos(0, 0)), None);
+    }
+
+    #[test]
+    fn chapter_starts_target_nonempty_chapters_only() {
+        let book = nav_book();
+        assert_eq!(book.next_chapter_start(pos(0, 1)), Some(pos(2, 0)));
+        assert_eq!(book.next_chapter_start(pos(2, 0)), None);
+        assert_eq!(book.prev_chapter_start(pos(2, 0)), Some(pos(0, 0)));
+        assert_eq!(book.prev_chapter_start(pos(0, 1)), None);
+        // Invalid positions have no chapter to navigate from.
+        assert_eq!(book.next_chapter_start(pos(9, 9)), None);
+        assert_eq!(book.prev_chapter_start(pos(9, 9)), None);
+    }
+
+    #[test]
+    fn empty_book_has_no_navigation() {
+        let book = BookIndex::new(&manifest(true), &[]);
+        let anywhere = pos(0, 0);
+        assert_eq!(book.first_paragraph(), None);
+        assert_eq!(book.next_paragraph(anywhere), None);
+        assert_eq!(book.prev_paragraph(anywhere), None);
+        assert_eq!(book.next_chapter_start(anywhere), None);
+        assert_eq!(book.prev_chapter_start(anywhere), None);
     }
 }
