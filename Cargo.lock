@@ -4349,6 +4349,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "taletrek-reader"
+version = "0.1.0"
+dependencies = [
+ "taletrek-synth",
+ "tempfile",
+]
+
+[[package]]
 name = "taletrek-synth"
 version = "0.1.0"
 dependencies = [

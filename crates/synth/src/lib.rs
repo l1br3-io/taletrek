@@ -31,7 +31,9 @@ pub use bundle::{audio, error, io, library, manifest, text};
 // Flat type re-exports — the primary public API.
 pub use bundle::audio::{AudioCodec, AudioSegment};
 pub use bundle::error::BundleError;
-pub use bundle::io::{read_audio_segment, read_book_bundle, validate_audio_key, write_book_bundle};
+pub use bundle::io::{
+    read_audio_segment, read_book_bundle, read_book_metadata, validate_audio_key, write_book_bundle,
+};
 pub use bundle::library::{
     read_library_bundle, write_library_bundle, LibraryBundle, LibraryEntry, LibraryKind,
     LibraryManifest,

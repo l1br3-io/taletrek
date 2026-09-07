@@ -9,7 +9,7 @@ use zip::{ZipArchive, ZipWriter};
 use super::audio::{AudioCodec, AudioSegment};
 use super::error::BundleError;
 use super::manifest::{Manifest, SCHEMA_VERSION};
-use super::text::TextFile;
+use super::text::{ChapterText, TextFile};
 use super::BookBundle;
 
 const MANIFEST_ENTRY: &str = "manifest.json";
@@ -153,6 +153,51 @@ pub fn read_audio_segment(
         codec: manifest.audio.codec,
         bytes,
     }))
+}
+
+/// Read a `.taletrek` file's **manifest + chapter text** from disk — no
+/// audio bytes (G27: the reader's open path must not load the whole book's
+/// audio into memory; audio streams per paragraph via [`read_audio_segment`]).
+///
+/// Returns the parsed [`Manifest`] and the chapters in reading order. The
+/// `audio/` entries are never scanned or decompressed — a corrupt audio
+/// payload cannot fail this read. Both text-only and audio-present bundles
+/// parse identically (audio presence is a manifest flag). Budgeted like
+/// every bundle read under the default [`ReadBudget`].
+pub fn read_book_metadata(bundle_path: &Path) -> Result<(Manifest, Vec<ChapterText>), BundleError> {
+    read_book_metadata_with_budget(bundle_path, ReadBudget::default())
+}
+
+/// [`read_book_metadata`] under a caller-supplied [`ReadBudget`].
+pub fn read_book_metadata_with_budget(
+    bundle_path: &Path,
+    budget: ReadBudget,
+) -> Result<(Manifest, Vec<ChapterText>), BundleError> {
+    let file = std::fs::File::open(bundle_path)?;
+    let mut archive = ZipArchive::new(std::io::BufReader::new(file))?;
+    let mut remaining = budget.total_bytes;
+
+    let manifest: Manifest = read_json_entry(
+        &mut archive,
+        MANIFEST_ENTRY,
+        "manifest.json",
+        budget,
+        &mut remaining,
+    )?;
+    if manifest.schema_version != SCHEMA_VERSION {
+        return Err(BundleError::UnknownSchema {
+            found: manifest.schema_version,
+            supported: SCHEMA_VERSION,
+        });
+    }
+    let text: TextFile = read_json_entry(
+        &mut archive,
+        TEXT_ENTRY,
+        "text.json",
+        budget,
+        &mut remaining,
+    )?;
+    Ok((manifest, text.chapters))
 }
 
 /// Parse a `.taletrek` ZIP from `input` into a [`BookBundle`] under the
@@ -560,5 +605,123 @@ mod tests {
         // Real keys are `${voice}:${NORM_VERSION}:${sha256}` — colons must pass.
         let key = cache_key(TEST_VOICE, "Hello world.");
         assert!(validate_audio_key(&key).is_ok());
+    }
+
+    // ---- read_book_metadata (manifest+text-only disk read, reader open path) ----
+
+    #[test]
+    fn read_book_metadata_parses_a_text_only_bundle() {
+        let (_tmp, path) = bundle_on_disk(&bundle_with_audio(AudioCodec::Opus, HashMap::new()));
+        let (manifest, chapters) = read_book_metadata(&path).expect("metadata read");
+        assert_eq!(manifest.book.id, "bk_audio");
+        assert!(!manifest.audio.present);
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(
+            chapters[0].paragraphs,
+            ["Hello world.", "Second paragraph."]
+        );
+    }
+
+    #[test]
+    fn read_book_metadata_parses_an_audio_present_bundle() {
+        let (_tmp, path, _) = opus_bundle_on_disk();
+        let (manifest, chapters) = read_book_metadata(&path).expect("metadata read");
+        assert!(manifest.audio.present);
+        assert_eq!(chapters[0].title, "Ch");
+    }
+
+    #[test]
+    fn read_book_metadata_never_reads_a_corrupt_audio_entry() {
+        // An audio-present archive whose one `audio/` entry is corrupt (CRC
+        // mismatch — reading that entry errors). The metadata read must
+        // succeed without ever touching it.
+        let (_tmp, path, bytes) = corrupt_audio_bundle_on_disk();
+        let (manifest, chapters) = read_book_metadata(&path).expect("parses despite corrupt audio");
+        assert!(manifest.audio.present);
+        assert_eq!(chapters[0].paragraphs.len(), 2);
+
+        // Sanity: the corruption is real — the full read that DOES scan
+        // audio entries fails on it.
+        assert!(read_book_bundle(&bytes).is_err());
+    }
+
+    #[test]
+    fn read_book_metadata_rejects_an_unknown_schema() {
+        let mut bundle = bundle_with_audio(AudioCodec::Opus, HashMap::new());
+        bundle.manifest.schema_version = SCHEMA_VERSION + 1;
+        let (_tmp, path) = bundle_on_disk(&bundle);
+        match read_book_metadata(&path) {
+            Err(BundleError::UnknownSchema { found, supported }) => {
+                assert_eq!(found, SCHEMA_VERSION + 1);
+                assert_eq!(supported, SCHEMA_VERSION);
+            }
+            other => panic!("expected UnknownSchema, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_book_metadata_enforces_the_budget() {
+        let bytes = archive_with_inflated_text(64 * 1024);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.taletrek");
+        std::fs::write(&path, &bytes).unwrap();
+        let budget = ReadBudget {
+            max_entry_bytes: 16 * 1024,
+            total_bytes: 1024 * 1024,
+        };
+        let err = read_book_metadata_with_budget(&path, budget).unwrap_err();
+        assert!(
+            matches!(err, BundleError::EntryTooLarge { ref name, .. } if name == TEXT_ENTRY),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_book_metadata_missing_file_is_io_error() {
+        let err = read_book_metadata(std::path::Path::new(
+            "/nonexistent-taletrek-test/bundle.taletrek",
+        ))
+        .unwrap_err();
+        assert!(matches!(err, BundleError::Io(_)), "got: {err}");
+    }
+
+    /// An audio-present archive (manifest + text + one `audio/` entry, all
+    /// stored uncompressed) whose audio entry's bytes are flipped mid-data —
+    /// the central directory's CRC no longer matches, so reading THAT entry
+    /// errors. Returns (kept-alive tempdir, bundle path, raw bytes).
+    fn corrupt_audio_bundle_on_disk() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>) {
+        let mut bundle = bundle_with_audio(AudioCodec::Opus, HashMap::new());
+        bundle.manifest.audio.present = true;
+        bundle.manifest.audio.segment_count = 1;
+        let text = TextFile {
+            schema_version: SCHEMA_VERSION,
+            chapters: bundle.chapters.clone(),
+        };
+        let probe: &[u8] = b"CORRUPT-AUDIO-PROBE-BYTES-UNIQUE-9876543210";
+
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        let stored =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file(MANIFEST_ENTRY, stored).unwrap();
+        zip.write_all(&serde_json::to_vec(&bundle.manifest).unwrap())
+            .unwrap();
+        zip.start_file(TEXT_ENTRY, stored).unwrap();
+        zip.write_all(&serde_json::to_vec(&text).unwrap()).unwrap();
+        zip.start_file("audio/whatever-key.opus", stored).unwrap();
+        zip.write_all(probe).unwrap();
+        let mut bytes = zip.finish().unwrap().into_inner();
+
+        // Flip one byte inside the stored probe data — the entry now fails
+        // CRC on read while manifest/text stay byte-identical.
+        let pos = bytes
+            .windows(probe.len())
+            .position(|w| w == probe)
+            .expect("probe present");
+        bytes[pos + probe.len() / 2] ^= 0xFF;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("corrupt-audio.taletrek");
+        std::fs::write(&path, &bytes).unwrap();
+        (tmp, path, bytes)
     }
 }

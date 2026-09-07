@@ -1,0 +1,21 @@
+[package]
+name = "taletrek-reader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "TaleTrek read-side kernel core — navigable book model + playback sequencing. By l1br3."
+
+[lib]
+name = "taletrek_reader"
+path = "src/lib.rs"
+
+[dependencies]
+taletrek-synth = { path = "../synth" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
