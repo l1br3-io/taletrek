@@ -16,18 +16,29 @@
 //! sentences, and drag-drop as the primary add path (the dialogs stay as
 //! fallback).
 //!
+//! `desktop-reader-page` adds a screen switch: the shell renders either
+//! the converter (below) or the [`reader`] screen (an opened bundle).
+//! Entry points are the **Read** action on `Done` rows and **Open
+//! bundle…** in the top bar; back is a pure screen flip — the queue
+//! lives in the executor, so it is intact by construction (and jobs keep
+//! running while a book is open). Open failures surface as human
+//! sentences in a dismissible banner ([`Self::error_banner`]).
+//!
 //! # Shell regions (`desktop-ux-refresh`)
 //!
 //! The window decomposes into panels that encode the workflow (input →
 //! voice → output); `ui` shows them in dependency order — top bar (brand +
-//! side-panel toggle), prompt strip (the add path and the window's drop
-//! target: the `❯ drop a book▊` hero with its blinking cursor while the
-//! queue is empty, a compact one-line strip once it isn't, plus the
-//! dialogs and the drop-summary line), bottom status line (read-only
-//! [`views::status`] fold), right side panel (voice picker + settings —
-//! everything that *configures* jobs), and finally the central panel,
-//! which is queue-only (job rows in one scroll; the empty state's
-//! guidance lives in the prompt hero, so an idle queue body is bare).
+//! side-panel toggle + Open bundle…), prompt strip (the add path and the
+//! window's drop target: the `❯ drop a book▊` hero with its blinking
+//! cursor while the queue is empty, a compact one-line strip once it
+//! isn't, plus the dialogs and the drop-summary line), bottom status line
+//! (read-only [`views::status`] fold), right side panel (voice picker +
+//! settings — everything that *configures* jobs), and finally the central
+//! panel, which is queue-only (job rows in one scroll; the empty state's
+//! guidance lives in the prompt hero, so an idle queue body is bare). On
+//! the reader screen the prompt strip, status line, and queue body are
+//! replaced by [`reader::view`]'s own regions (header, outline, text
+//! pane, transport); the top bar and the side panel persist.
 
 pub mod executor;
 pub mod queue;
@@ -46,6 +57,7 @@ use eframe::egui;
 
 use executor::{DropReport, Executor};
 use queue::{Job, JobKind, JobState};
+use reader::view::{ReaderAction, ReaderView};
 use settings::Settings;
 use taletrek_worker::default_cache_dir;
 
@@ -155,10 +167,23 @@ pub fn run() -> Result<()> {
     .map_err(|err| anyhow::anyhow!("opening window: {err}"))
 }
 
+/// Which screen the shell renders. The converter is the default; the
+/// reader is an opened bundle (see [`reader::view`]). Back is a pure
+/// flip — queue state lives in the [`Executor`], untouched either way.
+#[derive(Default)]
+enum Screen {
+    /// The converter: prompt strip + queue + status line.
+    #[default]
+    Converter,
+    /// The reader: one open session's view.
+    Reader(ReaderView),
+}
+
 /// The eframe app: an [`Executor`] plus its render surface. All state
 /// changes flow through the executor (queue events); this type only renders
 /// and forwards user actions — plus the [`Settings`] (output dir, default
-/// voice, workers) that enqueueing and job spawning read.
+/// voice, workers) that enqueueing and job spawning read, and the
+/// [`Screen`] it is showing.
 struct TaleTrekApp {
     /// The queue owner + job thread manager.
     executor: Executor,
@@ -173,6 +198,11 @@ struct TaleTrekApp {
     last_drop: Option<DropReport>,
     /// Whether the right side panel (voice picker + settings) is showing.
     panel_open: bool,
+    /// Which screen is rendering (converter ⇄ reader).
+    screen: Screen,
+    /// The latest bundle-open failure as a human sentence — surfaced in a
+    /// dismissible banner until read or replaced. `None` while healthy.
+    open_error: Option<String>,
 }
 
 impl TaleTrekApp {
@@ -188,6 +218,8 @@ impl TaleTrekApp {
             cache_dir: default_cache_dir(),
             last_drop: None,
             panel_open: false,
+            screen: Screen::Converter,
+            open_error: None,
         }
     }
 
@@ -296,6 +328,37 @@ impl TaleTrekApp {
         }
     }
 
+    /// Open `path` in the reader screen (the shared tail of both entry
+    /// points — Read on a Done row and Open bundle…). A healthy bundle
+    /// switches screens and clears any stale error; a failure stays on
+    /// the current screen and surfaces the human sentence.
+    fn open_reader(&mut self, path: PathBuf) {
+        match reader::session::open(&path) {
+            Ok(session) => {
+                self.open_error = None;
+                self.screen = Screen::Reader(ReaderView::new(session));
+            }
+            Err(err) => {
+                self.open_error = Some(format!(
+                    "Couldn't open {} — {}",
+                    path.display(),
+                    err.sentence()
+                ));
+            }
+        }
+    }
+
+    /// Open the reader's `.taletrek` picker ("Open bundle…" in the top
+    /// bar) and open whatever comes back for reading.
+    fn pick_open_bundle(&mut self) {
+        let picked = rfd::FileDialog::new()
+            .add_filter("TaleTrek bundles", &["taletrek"])
+            .pick_file();
+        if let Some(path) = picked {
+            self.open_reader(path);
+        }
+    }
+
     /// The top bar: the `❯~ TaleTrek` brand (accent glyph + machine-bold
     /// word, mirroring the web nav) with the theme toggle and the
     /// side-panel toggle — the window's persistent identity strip,
@@ -318,7 +381,8 @@ impl TaleTrekApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Right-to-left: the theme toggle takes the far
-                        // corner (the spec's `[sepia ◐]`), ⚙ beside it.
+                        // corner (the spec's `[sepia ◐]`), ⚙ beside it,
+                        // and the reader entry point beside that.
                         if ui
                             .button(self.settings.theme.toggle_label())
                             .on_hover_text("Switch theme")
@@ -328,6 +392,13 @@ impl TaleTrekApp {
                         }
                         if ui.button("⚙").on_hover_text("Voice & settings").clicked() {
                             self.panel_open = !self.panel_open;
+                        }
+                        if ui
+                            .button("Open bundle…")
+                            .on_hover_text("Read a .taletrek file")
+                            .clicked()
+                        {
+                            self.pick_open_bundle();
                         }
                     });
                 });
@@ -342,6 +413,36 @@ impl TaleTrekApp {
         self.settings.theme = self.settings.theme.other();
         theme::apply(ctx, self.settings.theme);
         self.settings.save(ctx);
+    }
+
+    /// The dismissible open-failure banner: one danger-colored sentence
+    /// (the file path and reason are already joined in
+    /// [`Self::open_reader`]) with a × to clear it. Rendered just under
+    /// the top bar on either screen — where the user's open attempt
+    /// happened.
+    fn error_banner(&mut self, ui: &mut egui::Ui) {
+        let Some(message) = self.open_error.clone() else {
+            return;
+        };
+        let t = self.settings.theme.tokens();
+        egui::Panel::top("error-banner")
+            .frame(
+                egui::Frame::default()
+                    .fill(t.surface)
+                    .stroke(egui::Stroke::new(1.0, t.danger))
+                    .corner_radius(egui::CornerRadius::same(4))
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&message).small().color(t.danger));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("×").on_hover_text("Dismiss").clicked() {
+                            self.open_error = None;
+                        }
+                    });
+                });
+            });
     }
 
     /// The prompt strip: the add path and the window's drop target.
@@ -620,9 +721,21 @@ impl TaleTrekApp {
                     }
                 }
                 JobState::Done(out) => {
-                    ui.label(
-                        egui::RichText::new(format!("Done → {}", out.display())).color(t.success),
-                    );
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Done → {}", out.display()))
+                                .color(t.success),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button("Read")
+                                .on_hover_text("Open this bundle in the reader")
+                                .clicked()
+                            {
+                                self.open_reader(out.clone());
+                            }
+                        });
+                    });
                 }
                 JobState::Failed(message) => {
                     ui.horizontal(|ui| {
@@ -657,6 +770,17 @@ impl TaleTrekApp {
         });
         ui.add_space(6.0);
     }
+
+    /// The converter screen's regions below the shared chrome: prompt
+    /// strip, status line, side panel, queue body.
+    fn converter(&mut self, ui: &mut egui::Ui) {
+        self.prompt_strip(ui);
+        self.status_bar(ui);
+        if self.panel_open {
+            self.side_panel(ui);
+        }
+        self.queue_panel(ui);
+    }
 }
 
 impl eframe::App for TaleTrekApp {
@@ -675,17 +799,28 @@ impl eframe::App for TaleTrekApp {
         }
     }
 
+    /// The frame: shared chrome (top bar + error banner), then whichever
+    /// screen is showing. The side panel rides both screens (it
+    /// configures future jobs, reader or not) and must precede each
+    /// screen's central panel in layout order. The reader's Back is a
+    /// pure screen flip — the queue lives in the executor and keeps
+    /// running underneath.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Panel order is layout order: top bar, then prompt strip below it,
-        // status line at the bottom, side panel beside what remains, and
-        // the central queue last inside whatever is left.
         self.top_bar(ui);
-        self.prompt_strip(ui);
-        self.status_bar(ui);
-        if self.panel_open {
-            self.side_panel(ui);
+        self.error_banner(ui);
+        match std::mem::replace(&mut self.screen, Screen::Converter) {
+            Screen::Converter => self.converter(ui),
+            Screen::Reader(mut view) => {
+                if self.panel_open {
+                    self.side_panel(ui);
+                }
+                let action = view.render(ui, self.settings.theme.tokens());
+                match action {
+                    Some(ReaderAction::Back) => self.screen = Screen::Converter,
+                    None => self.screen = Screen::Reader(view),
+                }
+            }
         }
-        self.queue_panel(ui);
     }
 
     /// Graceful shutdown: join the running job thread so the output bundle
@@ -836,6 +971,8 @@ mod tests {
                 cache_dir: None,
                 last_drop: None,
                 panel_open: false,
+                screen: Screen::Converter,
+                open_error: None,
             };
 
             // Empty queue at t=0: the hero, cursor on.
@@ -882,6 +1019,8 @@ mod tests {
             cache_dir: None,
             last_drop: None,
             panel_open: false,
+            screen: Screen::Converter,
+            open_error: None,
         };
         assert_eq!(app.settings.theme, Theme::Dark, "first run stays dark");
 
@@ -921,6 +1060,8 @@ mod tests {
                 cache_dir: None,
                 last_drop: None,
                 panel_open: false,
+                screen: Screen::Converter,
+                open_error: None,
             };
             // Both side-panel states: the ⚙ toggle rides the bar either way.
             for panel_open in [false, true] {
@@ -992,6 +1133,8 @@ mod tests {
                 cache_dir: None,
                 last_drop: None,
                 panel_open: false,
+                screen: Screen::Converter,
+                open_error: None,
             };
             let _ = ctx.run_ui(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -1003,5 +1146,178 @@ mod tests {
         }
         // Rendering every card under the real theme/fonts without panicking
         // is the assertion — egui aborts on layout/font misuse.
+    }
+
+    // ---- reader screen switch (task 004) --------------------------------
+
+    use taletrek_synth::bundle::manifest::{AudioMeta, BookMeta, Generator, ManifestKind};
+    use taletrek_synth::{
+        write_book_bundle, AudioCodec, BookBundle, ChapterText, Manifest, NORM_VERSION,
+        SCHEMA_VERSION,
+    };
+
+    fn app_on_converter(ctx: &egui::Context) -> TaleTrekApp {
+        let mut settings = Settings::load(ctx);
+        settings.theme = theme::Theme::Dark;
+        TaleTrekApp {
+            executor: Executor::new(),
+            settings,
+            cache_dir: None,
+            last_drop: None,
+            panel_open: false,
+            screen: Screen::Converter,
+            open_error: None,
+        }
+    }
+
+    /// A healthy two-chapter bundle on disk; returns (kept-alive dir, path).
+    fn readable_bundle() -> (tempfile::TempDir, PathBuf) {
+        let bundle = BookBundle {
+            manifest: Manifest {
+                schema_version: SCHEMA_VERSION,
+                kind: ManifestKind::Book,
+                book: BookMeta {
+                    id: "bk_gui".into(),
+                    title: "GUI Fixture".into(),
+                    author: None,
+                    source_format: "txt".into(),
+                    chapter_count: 2,
+                    voice_id: "en_US-amy-medium".into(),
+                    created_at: 0,
+                    updated_at: 0,
+                    progress_fraction: None,
+                },
+                audio: AudioMeta {
+                    present: false,
+                    codec: AudioCodec::Opus,
+                    norm_version: NORM_VERSION.parse().unwrap(),
+                    segment_count: 0,
+                },
+                generator: Generator {
+                    app: "taletrek-test".into(),
+                    version: "0.0.0".into(),
+                },
+            },
+            chapters: vec![
+                ChapterText::new("bk_gui", 0, "One", vec!["First.".into()]),
+                ChapterText::new("bk_gui", 1, "Two", vec!["Second.".into()]),
+            ],
+            audio: std::collections::HashMap::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.taletrek");
+        let mut buf = std::io::Cursor::new(Vec::new());
+        write_book_bundle(&bundle, &mut buf).unwrap();
+        std::fs::write(&path, buf.into_inner()).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn open_reader_switches_to_the_reader_screen_and_clears_stale_errors() {
+        let (_dir, path) = readable_bundle();
+        let ctx = egui::Context::default();
+        let mut app = app_on_converter(&ctx);
+        app.open_error = Some("stale failure".to_owned());
+
+        app.open_reader(path.clone());
+
+        assert!(
+            matches!(app.screen, Screen::Reader(_)),
+            "a healthy bundle switches screens"
+        );
+        assert_eq!(app.open_error, None, "success clears the banner");
+    }
+
+    #[test]
+    fn open_reader_failure_stays_on_the_current_screen_with_a_sentence() {
+        let ctx = egui::Context::default();
+        let mut app = app_on_converter(&ctx);
+
+        app.open_reader(PathBuf::from("/nonexistent-taletrek-test/none.taletrek"));
+
+        assert!(matches!(app.screen, Screen::Converter));
+        let message = app.open_error.as_deref().expect("failure surfaces");
+        assert!(
+            message.contains("Couldn't open"),
+            "names the attempt: {message}"
+        );
+        assert!(
+            message.contains("missing"),
+            "carries the sentence: {message}"
+        );
+    }
+
+    #[test]
+    fn error_banner_and_reader_screen_paint_under_both_themes() {
+        let (_dir, path) = readable_bundle();
+        for theme in [theme::Theme::Dark, theme::Theme::Sepia] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx, theme);
+            let mut app = app_on_converter(&ctx);
+            app.settings.theme = theme;
+
+            // The failure banner: shared chrome over either screen.
+            app.open_error =
+                Some("Couldn't open /tmp/none.taletrek — the file is missing.".to_owned());
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.top_bar(ui);
+                app.error_banner(ui);
+            });
+
+            // The full reader path — the same calls `ui` dispatches: open,
+            // then shared chrome + panels around the view.
+            app.open_reader(path.clone());
+            app.panel_open = true;
+            if let Screen::Reader(mut view) = std::mem::replace(&mut app.screen, Screen::Converter)
+            {
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let action = view.render(ui, theme.tokens());
+                    assert_eq!(action, None, "no interaction means no action");
+                });
+                app.screen = Screen::Reader(view);
+            }
+        }
+        // Painting the banner and the reader screen (side panel open)
+        // under the real theme/fonts without panicking is the assertion.
+    }
+
+    #[test]
+    fn back_from_the_reader_is_a_pure_screen_flip_queue_intact() {
+        let (_dir, path) = readable_bundle();
+        let ctx = egui::Context::default();
+        let mut app = app_on_converter(&ctx);
+        let _ = app
+            .executor
+            .add_files(&[PathBuf::from("/books/Fable of the Fox.epub")], "v");
+        let queued = app.executor.queue().jobs().count();
+        assert_eq!(queued, 1);
+
+        app.open_reader(path);
+        assert!(matches!(app.screen, Screen::Reader(_)));
+
+        // The Back the view reports flips the screen and nothing else.
+        let screen = std::mem::replace(&mut app.screen, Screen::Converter);
+        drop(screen);
+        assert!(matches!(app.screen, Screen::Converter));
+        assert_eq!(
+            app.executor.queue().jobs().count(),
+            queued,
+            "the queue is the executor's — reading never touches it"
+        );
+    }
+
+    #[test]
+    fn reader_session_renders_chapters_from_the_kernel_index() {
+        // The shell hands the view a session built from the kernel core;
+        // the view never re-derives structure of its own.
+        let (_dir, path) = readable_bundle();
+        let session = reader::session::open(&path).expect("fixture opens");
+        assert_eq!(session.book.chapters.len(), 2);
+        assert!(session
+            .book
+            .chapters
+            .iter()
+            .all(|ch| !ch.paragraphs.is_empty()));
+        assert_eq!(session.book.title, "GUI Fixture");
     }
 }
