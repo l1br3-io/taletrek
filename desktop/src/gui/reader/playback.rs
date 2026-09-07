@@ -51,6 +51,11 @@ pub(crate) struct Playback {
     /// The key of the outstanding load, until its `Loaded`/`Failed`
     /// report arrives (see the module docs — the race closure).
     pending: Option<String>,
+    /// The current segment's decoded length in seconds — set by the
+    /// load ack, cleared when a new load is commanded. Audio time is
+    /// the platform's half of the kernel contract, and duration is its
+    /// edge: the scrub range and the `offset / duration` readout.
+    segment_duration: Option<f64>,
 }
 
 impl Playback {
@@ -60,6 +65,7 @@ impl Playback {
             state: PlayerState::idle(),
             transport,
             pending: None,
+            segment_duration: None,
         }
     }
 
@@ -67,6 +73,13 @@ impl Playback {
     /// highlight).
     pub(crate) fn state(&self) -> &PlayerState {
         &self.state
+    }
+
+    /// The current segment's decoded length, once its load ack arrived
+    /// (the scrub range / position readout; `None` while a load is in
+    /// flight or after a failure — then the UI omits the denominator).
+    pub(crate) fn segment_duration(&self) -> Option<f64> {
+        self.segment_duration
     }
 
     /// A user transport action (a button): through the machine, then
@@ -84,9 +97,10 @@ impl Playback {
     pub(crate) fn pump(&mut self, book: &BookIndex) {
         while let Some(ev) = self.transport.try_event() {
             match ev {
-                AudioEvent::Loaded { key } => {
+                AudioEvent::Loaded { key, duration } => {
                     if self.pending.as_deref() == Some(key.as_str()) {
                         self.pending = None;
+                        self.segment_duration = Some(duration);
                     }
                 }
                 AudioEvent::Drained { key } => {
@@ -135,6 +149,9 @@ impl Playback {
         match action {
             PlayerAction::LoadSegment { key, offset } => {
                 self.pending = Some(key.clone());
+                // The old segment's length no longer applies; the ack
+                // re-establishes it.
+                self.segment_duration = None;
                 self.transport.load(&key, offset);
             }
             PlayerAction::Stop => {
@@ -312,7 +329,10 @@ mod tests {
         let mut pb = controller(scripted.clone());
 
         pb.send(PlayerEvent::Play, &book);
-        scripted.push(AudioEvent::Loaded { key: key(&book, 0) });
+        scripted.push(AudioEvent::Loaded {
+            key: key(&book, 0),
+            duration: 9.0,
+        });
         pb.pump(&book);
         scripted.push(AudioEvent::Tick {
             key: key(&book, 0),
@@ -341,7 +361,10 @@ mod tests {
         let mut pb = controller(scripted.clone());
 
         pb.send(PlayerEvent::Play, &book);
-        scripted.push(AudioEvent::Loaded { key: key(&book, 0) });
+        scripted.push(AudioEvent::Loaded {
+            key: key(&book, 0),
+            duration: 9.0,
+        });
         pb.pump(&book);
 
         scripted.push(AudioEvent::Tick {
@@ -366,7 +389,10 @@ mod tests {
         let mut pb = controller(scripted.clone());
 
         pb.send(PlayerEvent::Play, &book);
-        scripted.push(AudioEvent::Loaded { key: key(&book, 0) });
+        scripted.push(AudioEvent::Loaded {
+            key: key(&book, 0),
+            duration: 9.0,
+        });
         pb.pump(&book);
         scripted.push(AudioEvent::Drained { key: key(&book, 0) });
         pb.pump(&book);
@@ -385,7 +411,10 @@ mod tests {
         let mut pb = controller(scripted.clone());
 
         pb.send(PlayerEvent::Play, &book);
-        scripted.push(AudioEvent::Loaded { key: key(&book, 0) });
+        scripted.push(AudioEvent::Loaded {
+            key: key(&book, 0),
+            duration: 9.0,
+        });
         pb.pump(&book);
         scripted.push(AudioEvent::Drained { key: key(&book, 0) });
         pb.pump(&book);
@@ -409,7 +438,10 @@ mod tests {
         let mut pb = controller(scripted.clone());
 
         pb.send(PlayerEvent::Play, &book);
-        scripted.push(AudioEvent::Loaded { key: k0.clone() });
+        scripted.push(AudioEvent::Loaded {
+            key: k0.clone(),
+            duration: 9.0,
+        });
         pb.pump(&book);
 
         // A normal advance to the (identical-key) second paragraph.
@@ -420,7 +452,10 @@ mod tests {
         // The race: the old load's drain lands *after* the re-load was
         // commanded but *before* its ack. It must be dropped.
         scripted.push(AudioEvent::Drained { key: k0 });
-        scripted.push(AudioEvent::Loaded { key: k1.clone() });
+        scripted.push(AudioEvent::Loaded {
+            key: k1.clone(),
+            duration: 9.0,
+        });
         pb.pump(&book);
         assert_eq!(
             pb.state(),
@@ -442,6 +477,44 @@ mod tests {
             "three loads — no phantom fourth from the double advance"
         );
         assert_eq!(pb.state().failures(), &Default::default());
+    }
+
+    #[test]
+    fn the_load_ack_establishes_the_segment_duration_until_the_next_load() {
+        let book = book(&["One.", "Two."]);
+        let scripted = Arc::new(ScriptedTransport::new());
+        let mut pb = controller(scripted.clone());
+
+        assert_eq!(pb.segment_duration(), None, "nothing loaded yet");
+
+        pb.send(PlayerEvent::Play, &book);
+        scripted.push(AudioEvent::Loaded {
+            key: key(&book, 0),
+            duration: 4.5,
+        });
+        pb.pump(&book);
+        assert_eq!(pb.segment_duration(), Some(4.5));
+
+        // Pause keeps the length — the paused readout still shows it.
+        pb.send(PlayerEvent::Pause, &book);
+        assert_eq!(pb.segment_duration(), Some(4.5));
+
+        // Resuming commands a new load: the old length no longer
+        // applies until this load's own ack lands.
+        pb.send(PlayerEvent::Play, &book);
+        assert_eq!(pb.segment_duration(), None, "cleared by the re-load");
+        scripted.push(AudioEvent::Loaded {
+            key: "some-other-key".into(),
+            duration: 99.0,
+        });
+        pb.pump(&book);
+        assert_eq!(pb.segment_duration(), None, "a foreign ack is not ours");
+        scripted.push(AudioEvent::Loaded {
+            key: key(&book, 0),
+            duration: 3.0,
+        });
+        pb.pump(&book);
+        assert_eq!(pb.segment_duration(), Some(3.0));
     }
 
     #[test]

@@ -171,8 +171,10 @@ pub(crate) enum AudioCmd {
 /// [`super::playback`] (see this module's ordering invariant).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum AudioEvent {
-    /// The commanded load succeeded; the segment is audible.
-    Loaded { key: String },
+    /// The commanded load succeeded; the segment is audible. `duration`
+    /// is the decoded segment's full length in seconds — the platform's
+    /// half of the contract (the kernel never knows segment durations).
+    Loaded { key: String, duration: f64 },
     /// The segment played to its end.
     Drained { key: String },
     /// The segment could not be read, decoded, or opened on the device
@@ -567,10 +569,13 @@ fn load_segment(
     match device.open(decoded.sample_rate, channels, playhead.clone()) {
         Ok(handle) => {
             *stream = Some(handle);
+            let frames = decoded.samples.len() / decoded.channels.max(1);
+            let duration = frames as f64 / f64::from(decoded.sample_rate.max(1));
             *playhead.lock().unwrap_or_else(|p| p.into_inner()) =
                 Playhead::from_decoded(key, decoded, offset);
             AudioEvent::Loaded {
                 key: key.to_owned(),
+                duration,
             }
         }
         Err(error) => failed(error),
@@ -939,11 +944,16 @@ mod tests {
         let engine = AudioEngine::new(path, stub.clone());
         engine.load(&key, 0.0);
 
-        assert_eq!(
-            wait_event(&engine),
-            AudioEvent::Loaded { key: key.clone() },
-            "the load ack arrives once the playhead is armed"
-        );
+        match wait_event(&engine) {
+            AudioEvent::Loaded { key: k, duration } => {
+                assert_eq!(k, key, "the load ack arrives once the playhead is armed");
+                assert!(
+                    (0.15..=0.2).contains(&duration),
+                    "the ack carries the decoded length (≈0.2 s), got {duration}"
+                );
+            }
+            other => panic!("expected a Loaded ack, got {other:?}"),
+        }
         assert_eq!(
             stub.last_open(),
             (16_000, 1),
@@ -1014,7 +1024,13 @@ mod tests {
         let engine = AudioEngine::new(path, stub.clone());
         engine.load(&key, 0.1);
 
-        assert_eq!(wait_event(&engine), AudioEvent::Loaded { key });
+        match wait_event(&engine) {
+            AudioEvent::Loaded { key: k, duration } => {
+                assert_eq!(k, key);
+                assert!((0.15..=0.2).contains(&duration));
+            }
+            other => panic!("expected a Loaded ack, got {other:?}"),
+        }
         let ph = stub.wait_playhead();
         let mut buf = [0.0f32; 1];
         ph.lock().unwrap().pull(&mut buf);
