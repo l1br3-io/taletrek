@@ -73,6 +73,15 @@ verify-rust:
 
 # --- Android (effort 4) --------------------------------------------------------
 
+# Android toolchain locations (docs/developing.md § Android — override via env)
+android_home := env_var_or_default('ANDROID_HOME', home_directory() / '.local' / 'share' / 'android-sdk')
+java_home    := env_var_or_default('JAVA_HOME', home_directory() / '.local' / 'share' / 'jdk')
+
+# Kernel → .so for both ABIs, placed into android jniLibs (cargo-ndk; NDK r28c)
+android-kernel:
+    ANDROID_HOME={{android_home}} cargo ndk -t arm64-v8a -t x86_64 \
+        -o android/app/src/main/jniLibs build -p taletrek-ffi --lib --release
+
 # Regenerate the checked-in UniFFI Kotlin bindings for crates/ffi into the
 # app's ffi package (task 002 consumes; Gradle never invokes Cargo).
 # One-time prerequisite: cargo install uniffi --features cli --version 0.32.0 --locked
@@ -81,3 +90,20 @@ android-bindings:
     cargo build -p taletrek-ffi --lib
     uniffi-bindgen generate --library target/debug/libtaletrek_ffi.so --language kotlin \
         --config crates/ffi/uniffi.toml --no-format --out-dir android/app/src/main/java
+
+# Build debug APK (kernel + gradle assembleDebug)
+android: android-kernel
+    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android assembleDebug
+
+# Install debug build on connected device/emulator
+android-install: android
+    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android installDebug
+
+# Kotlin JVM unit tests + ktlint (gradlew testDebugUnitTest — pure-Kotlin only;
+# the .so does not load on the JVM — instrumented is where kernel code runs)
+android-test:
+    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android testDebugUnitTest ktlintCheck
+
+# Instrumented tests on connected device (kernel round-trip, Compose UI)
+android-instrumented:
+    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android connectedDebugAndroidTest

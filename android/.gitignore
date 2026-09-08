@@ -1,0 +1,10 @@
+.gradle/
+build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.keystore
+!debug.keystore
+# Kernel .so are build outputs (just android-kernel) — regenerate, never commit
+app/src/main/jniLibs/
