@@ -1,0 +1,24 @@
+[package]
+name = "taletrek-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "TaleTrek UniFFI surface — the kernel's foreign-language API (Kotlin now, Swift next). By l1br3."
+
+# cdylib so `uniffi-bindgen generate --library` can read the proc-macro
+# metadata from the host-built artifact (`just android-bindings`); lib so
+# the workspace, tests, and clippy consume it like every other crate.
+[lib]
+name = "taletrek_ffi"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+taletrek-reader = { path = "../reader" }
+taletrek-synth = { path = "../synth" }
+uniffi = "0.32"
+
+[lints]
+workspace = true

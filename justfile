@@ -70,3 +70,14 @@ verify:
 verify-rust:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
+
+# --- Android (effort 4) --------------------------------------------------------
+
+# Regenerate the checked-in UniFFI Kotlin bindings for crates/ffi into the
+# app's ffi package (task 002 consumes; Gradle never invokes Cargo).
+# One-time prerequisite: cargo install uniffi --features cli --version 0.32.0 --locked
+# (host cdylib carries the proc-macro metadata; Linux names it .so)
+android-bindings:
+    cargo build -p taletrek-ffi --lib
+    uniffi-bindgen generate --library target/debug/libtaletrek_ffi.so --language kotlin \
+        --config crates/ffi/uniffi.toml --no-format --out-dir android/app/src/main/java
