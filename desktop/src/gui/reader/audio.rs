@@ -595,6 +595,36 @@ mod tests {
         assert!(decode_ogg_opus(&[]).is_err());
     }
 
+    /// The committed ffmpeg-lineage fixture (task 008, spec criterion 5):
+    /// 3 s of 440 Hz sine at 16 kHz mono, encoded once with the exact
+    /// `OpusEncoder` subprocess invocation (`ffmpeg -c:a libopus -b:a
+    /// 24000 -f opus`) so the decode path is proven against the other
+    /// OGG/Opus lineage without keeping ffmpeg in CI. Regenerate:
+    /// see `docs/testing.md` § Reader decode fixtures.
+    #[test]
+    fn decodes_ffmpeg_lineage_output() {
+        const FIXTURE: &[u8] = include_bytes!("../../../tests/fixtures/ffmpeg_opus.ogg");
+        assert_eq!(&FIXTURE[..4], b"OggS", "fixture is an OGG stream");
+
+        let dec = decode_ogg_opus(FIXTURE).expect("ffmpeg lineage decodes");
+        assert_eq!(dec.channels, 1, "mono in, mono out");
+        assert_eq!(dec.sample_rate, 16_000, "16 kHz source, passthrough");
+        let dur = dec.samples.len() as f64 / f64::from(dec.sample_rate);
+        assert!(
+            (dur - 3.0).abs() < 0.05,
+            "duration {dur:.3} s vs 3.0 s source"
+        );
+        assert!(
+            dec.samples.iter().map(|s| s.unsigned_abs()).max().unwrap() > 8_000,
+            "decoded signal must carry the sine's amplitude"
+        );
+        let est = tone_hz(&dec.samples, dec.sample_rate);
+        assert!(
+            ((est - 440.0) / 440.0).abs() < 0.05,
+            "tone drifted: {est:.1} Hz vs 440"
+        );
+    }
+
     // ---- shared fixture helpers (decode round-trip + engine) ----------
 
     const VOICE: &str = "en_US-amy-medium";

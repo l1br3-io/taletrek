@@ -13,6 +13,7 @@
 | SPA / PWA         | `web/`      | Vite 8 + React 19 + TS             | `pnpm test` (vitest)                | yes (`web`)       |
 | Desktop app (GUI + CLI) | `desktop/` | Rust + clap + egui            | `cargo test -p taletrek-desktop`    | yes (`rust`)      |
 | shared `synth`    | `crates/synth`  | Rust (pure core + bundle I/O)  | `cargo test -p taletrek-synth`      | yes (`rust`)      |
+| shared `reader`   | `crates/reader` | Rust (read-side kernel core)   | `cargo test -p taletrek-reader`     | yes (`rust`)      |
 | shared `worker`   | `crates/worker` | Rust (voice/synth pool)        | `cargo test -p taletrek-worker`     | yes (`rust`)      |
 | real-piper e2e (desktop) | `#[ignore]`d | cargo `--ignored` | manual or `integration` job | optional (`integration`, non-blocking) |
 
@@ -102,11 +103,29 @@ cargo test -p taletrek-desktop --test synth_e2e -- --ignored --nocapture  # real
 | ------------------ | ----------------------------- | ------------------------------------------------------------- |
 | Unit (inline)       | `src/bundle_io.rs`, `src/cli.rs` | argument parsing, bundle read/write, error paths              |
 | GUI unit (inline)   | `src/gui/**` (`queue.rs`, `executor.rs`, `settings.rs`, `views/`, `theme.rs`) | the pure job-queue state machine + executor cores (voice snapshot, cancel, retry, re-voice, humanized errors, settings persistence snapshots) — no egui types in the tested seams; plus the theme layer (`desktop-ux-refresh`): token tables pinned to the exact web hexes in both themes, WCAG contrast sanity, embedded-font registration incl. the builtin fallback chains (the `◐` cover — Hack is the one builtin face with U+25D0), and `ctx.run_ui` paint passes rendering real views through the production path (egui aborts on layout/font misuse); manual smoke is the release gate |
+| Reader unit (inline) | `src/gui/reader/**` (`audio.rs`, `playback.rs`, `scroll.rs`, `session.rs`, `view.rs`, `position_store.rs`) | the read-back loop (`desktop-reader-page`): hermetic OGG/Opus decode of **both** lineages — our native encoder's output round-tripped live, and the committed ffmpeg fixture below; the engine over a stub device (ack/tick/drain/fail events, offset resume, stop semantics); the playback controller over a scripted transport (the same-key re-load race, duration lifecycle, restore seeding); the egui screen through `ctx.run_ui` paint passes with pointer-event geometry probes (highlight, click-to-seek, scrub gestures, follow-vs-free wheel scrolls, restore-scroll landing); position persistence round-trips + corrupt-entry discard; the big-book walk (50×60 paragraphs through the real open path, per-chapter layout invariant + paint bound); the coexistence loop (executor drain/pump + reader render + scripted playback in one frame loop); real-device open is `#[ignore]`d (cpal) |
 | Integration (gated) | `tests/synth_e2e.rs`            | spawns itself via `env!("CARGO_BIN_EXE_taletrek-desktop")`, full synth + resynth round-trip (`#[ignore]`d) |
+| Integration (gated) | `tests/engine_parity.rs`        | native vs subprocess (`--piper`/`--ffmpeg`) engines → identical cache-key sets (`#[ignore]`d) |
 
 Same `TALETREK_VOICE_PATH` gate as the crates; same `include_bytes!` of the
 text-only fixture. The desktop's behavior is the regression gate for the
 `crates/worker` extraction — keep these green when touching shared code.
+
+### Reader decode fixtures
+
+- `tests/fixtures/ffmpeg_opus.ogg` — 3 s of 440 Hz sine at 16 kHz mono,
+  encoded with the **exact** `OpusEncoder` subprocess invocation, so the
+  decode path is pinned against the `--ffmpeg` lineage without keeping
+  ffmpeg in CI. Regenerate (only when the invocation changes — the bytes
+  are the contract, don't churn them):
+
+  ```sh
+  # 1. produce wav (3 s, 440 Hz, 16 kHz, mono, s16le) — any tool
+  # 2. the production invocation (crates/synth/src/encode.rs):
+  ffmpeg -hide_banner -loglevel error -i pipe:0 \
+         -c:a libopus -b:a 24000 -f opus pipe:1 < in.wav \
+         > desktop/tests/fixtures/ffmpeg_opus.ogg
+  ```
 
 ---
 
@@ -118,6 +137,17 @@ text-only fixture. The desktop's behavior is the regression gate for the
 - **Fixtures (cross-language):** `tests/fixtures/{book-text-only,book-full}.taletrek`, `library.taletrek-lib` — consumed by both the SPA's `parity.test.ts` and the desktop e2e tests. Regenerate via `examples/gen_fixtures.rs`.
 - **Inline tests:** `cache_key.rs`, `encode.rs`, `normalize.rs`, `pcm.rs`, `synth.rs`.
 - `cache_key_parity.rs` pins **exact SHA-256 values** — the foundation of cross-app audio dedup.
+
+### `crates/reader` — read-side kernel core ( Effort 3.6, shipped )
+
+- **Inline tests:** `src/{index,state,position}.rs` — `BookIndex` build +
+  navigation totality, the `PlayerState` event matrix (boundaries, races,
+  skip-on-fail, text-only absorption), `Position` round-trip + key
+  derivation.
+- **Anti-drift (`tests/anti_drift.rs`):** a real bundle written with
+  writer-shaped audio reads back with archive key set ≡ `BookIndex`-derived
+  key set — the cross-platform guarantee efforts 4–5 inherit.
+- Zero deps beyond `taletrek-synth` — no UI, audio, hardware, or fs.
 
 ### `crates/worker` — host-level voice/synth pool ( Effort 4 )
 
@@ -164,7 +194,15 @@ The assertions no test can make — *"synthesized audio actually plays"* and
 2. **SPA loop:** `just synth-fixture`, then `pnpm dev` (or `pnpm preview`),
    import `/tmp/book.synth.taletrek` in the library, and play it — on a real
    phone for lock-screen behavior (gotcha #5).
+3. **Desktop reader loop** (`desktop-reader-page`): `just gui` → convert a
+   document → **Read** on the done row → hear audio with the highlight
+   tracking and the pane following → click a paragraph / outline entry /
+   scrub → **Back to queue** and re-open (position resumes at the paragraph)
+   → close the app mid-book and relaunch → re-open (position restored) →
+   *Open bundle…* on a text-only `.taletrek` (reads fully, transport
+   disabled with the hint) and on an arbitrary disk bundle. Convert another
+   file while a book plays — playback must not stall.
 
 Run these before declaring an effort shipped, and whenever you touch the
-bundle pipeline, the playback engines, or the shared `crates/worker` stamp
-path.
+bundle pipeline, the playback engines, the reader, or the shared
+`crates/worker` stamp path.

@@ -1,7 +1,7 @@
 # Roadmap
 
 > Directional overview — no dates, no calendar. The *what's next*, not the spec.
-> **Next effort:** `android-app` — effort 4 of the native track (below); efforts 1–3 (`native-pivot`, `kernel-parse`, `desktop-synth-gui`) are shipped. The decision: [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md). The why + locked stack: [`ideas/native-pivot.md`](./ideas/native-pivot.md).
+> **Next effort:** `android-app` — effort 4 of the native track (below); efforts 1–3.6 (`native-pivot`, `kernel-parse`, `desktop-synth-gui`, `desktop-ux-refresh`, `desktop-reader-page`) are shipped. The decision: [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md). The why + locked stack: [`ideas/native-pivot.md`](./ideas/native-pivot.md).
 > Companion: [`VISION.md`](./VISION.md) — the problem and goals.
 
 TaleTrek is a free, open-source **reading companion**: turn any ebook or document into an audiobook using an OSS neural TTS engine (sherpa-onnx — Piper + Kokoro voices) running in-process in a Rust kernel. It strips links, images, and footnotes so only the story flows, then plays it as background audio that survives screen lock, app switching, and phone closure. You go for a run; your book comes with you. Free app-store downloads, no subscription, no cloud — one kernel, three native apps, and a web landing page + `.taletrek` reader.
@@ -54,9 +54,9 @@ browsable index. The next effort starts on a fresh branch with a fresh
 
 ## Active track — Native pivot: Rust kernel + platform-native apps (ADR-0015)
 
-One kernel (`crates/parse` + `crates/synth` + `crates/worker`) exposed via **UniFFI** to thin platform-native apps; `.taletrek` v1 bundles are the sole interchange; the web is a landing page + reader. Ship order: desktop synth processor → Android → iOS, free downloads on the stores. See [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md) and [`ideas/native-pivot.md`](./ideas/native-pivot.md).
+One kernel (`crates/parse` + `crates/synth` + `crates/reader` + `crates/worker`) exposed via **UniFFI** to thin platform-native apps; `.taletrek` v1 bundles are the sole interchange; the web is a landing page + reader. Ship order: desktop synth processor → Android → iOS, free downloads on the stores. See [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md) and [`ideas/native-pivot.md`](./ideas/native-pivot.md).
 
-Five efforts, dependency-aware:
+Efforts, dependency-aware:
 
 | # | Effort | State |
 | --- | --- | --- |
@@ -64,6 +64,7 @@ Five efforts, dependency-aware:
 | 2 | `kernel-parse` — `crates/parse` (EPUB/TXT/HTML/MD/DOCX/PDF; MOBI open) + CLI file→bundle — closes the interim no-producer gap | ✅ shipped ([spec](./specs/kernel-parse/spec.md)) |
 | 3 | `desktop-synth-gui` — the processor app: in-process sherpa-onnx TTS + native Opus encode behind the existing traits, egui GUI + unchanged CLI, release workflow | ✅ shipped ([spec](./specs/desktop-synth-gui/spec.md)) |
 | 3.5 | `desktop-ux-refresh` — identity pass on the processor: web-pinned two-theme tokens, embedded mono+serif fonts, panel layout, dark/sepia toggle | ✅ shipped ([spec](./specs/desktop-ux-refresh/spec.md)) |
+| 3.6 | `desktop-reader-page` — the read-back loop: `crates/reader` kernel core (BookIndex + PlayerState + Position) + in-app reader screen with paragraph-synced cpal/symphonia playback and position restore | ✅ shipped ([spec](./specs/desktop-reader-page/spec.md)) |
 | 4 | `android-app` — Jetpack Compose + Media3 player; kernel via UniFFI; free Play Store download | planned |
 | 5 | `ios-app` — SwiftUI + AVFoundation player; kernel via UniFFI; free App Store download ($99/yr accepted) | planned |
 

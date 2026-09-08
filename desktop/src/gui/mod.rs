@@ -1366,7 +1366,11 @@ mod tests {
         let Screen::Reader(view) = &app.screen else {
             panic!("a healthy narrated bundle opens");
         };
-        assert_eq!(view.shown_chapter(), 1, "the pane opens on the saved chapter");
+        assert_eq!(
+            view.shown_chapter(),
+            1,
+            "the pane opens on the saved chapter"
+        );
         assert_eq!(
             view.position(),
             Some(Position::new(1, 0, 4.5)),
@@ -1416,6 +1420,117 @@ mod tests {
             reader::position_store::load(&ctx, "bk_gui"),
             Some(Position::new(0, 0, 0.0)),
             "Back persists the position it leaves at"
+        );
+    }
+
+    // ---- coexistence smoke (task 008) ----------------------------------
+
+    /// A narrated one-chapter bundle with many paragraphs (the
+    /// coexistence fixture: enough runway for playback to advance
+    /// across the frame loop).
+    fn coexistence_bundle() -> (tempfile::TempDir, PathBuf) {
+        let paragraphs: Vec<String> = (0..30)
+            .map(|i| format!("Coexistence paragraph {i} says hello, then keeps talking."))
+            .collect();
+        let mut bundle = gui_bundle(true, "en_US-amy-medium");
+        bundle.chapters = vec![ChapterText::new("bk_gui", 0, "One", paragraphs)];
+        bundle_on_disk(&bundle)
+    }
+
+    /// The queue executor and an open, playing reader coexist in one
+    /// frame loop (spec criterion 9): the shell's two halves —
+    /// `logic()`'s executor drain/pump and `ui()`'s reader render with
+    /// its playback pump — interleave while a Convert job runs its
+    /// course. The job is a garbage `.epub` so it fails at parse (fast,
+    /// hermetic — no voice download, no engine); "runs to completion"
+    /// is the Failed state, which is the completion that matters for
+    /// the wiring. Playback keeps advancing throughout (scripted drains
+    /// standing in for the audio thread), and the loop stays on the
+    /// reader screen the whole time.
+    #[test]
+    fn a_conversion_completes_while_a_book_plays_in_one_frame_loop() {
+        use taletrek_reader::ParagraphPos;
+
+        let (_dir, path) = coexistence_bundle();
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, theme::Theme::Dark);
+        let mut app = app_on_converter(&ctx);
+
+        // The playing reader (scripted transport — no engine thread,
+        // already playing paragraph one; the real engine's coexistence
+        // with the GUI is the ignored suites' ground).
+        let session = reader::session::open(&path).expect("fixture opens");
+        let book = session.book.clone();
+        let (view, scripted) = ReaderView::scripted_for_test(session);
+        app.screen = Screen::Reader(Box::new(view));
+
+        // The conversion: a garbage .epub — parse fails fast, the job
+        // completes as Failed without any engine or network.
+        let bad = _dir.path().join("broken.epub");
+        std::fs::write(&bad, b"definitely not a zip, not an epub").unwrap();
+        let _ = app.executor.add_files(&[bad], "en_US-amy-medium");
+
+        let input = |events| egui::RawInput {
+            events,
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1024.0, 600.0),
+            )),
+            ..Default::default()
+        };
+
+        let mut furthest = 0_u32;
+        let t = std::time::Instant::now();
+        for _frame in 0..60 {
+            // --- the logic() half: executor drain + pump -----------
+            app.executor.drain();
+            let run = app.settings.run_config();
+            app.executor.pump(&run);
+
+            // --- the ui() half: the reader frame (render = pump) ---
+            if let Screen::Reader(mut v) = std::mem::replace(&mut app.screen, Screen::Converter) {
+                let _ = ctx.run_ui(input(vec![]), |ui| {
+                    v.render(ui, app.settings.theme.tokens());
+                });
+                // Feed the playing book: ack + drain the current
+                // segment so the next frame advances a paragraph.
+                if let Some(pos) = v.position() {
+                    let key = book
+                        .paragraph(ParagraphPos::new(pos.chapter, pos.index))
+                        .unwrap()
+                        .segment_key
+                        .clone();
+                    scripted.push(crate::gui::reader::audio::AudioEvent::Loaded {
+                        key: key.clone(),
+                        duration: 5.0,
+                    });
+                    scripted.push(crate::gui::reader::audio::AudioEvent::Drained { key });
+                    furthest = furthest.max(pos.index + 1);
+                }
+                app.screen = Screen::Reader(v);
+            }
+        }
+
+        // The conversion ran its course while the book played.
+        let job = app.executor.queue().jobs().next().expect("the job exists");
+        assert!(
+            matches!(job.state, JobState::Failed(_)),
+            "the conversion completed (as a parse failure) mid-playback, not {:?}",
+            job.state
+        );
+        // Playback advanced well into the book across those frames.
+        assert!(
+            furthest >= 10,
+            "playback kept advancing while the queue ran (furthest ¶{furthest})"
+        );
+        // The reader screen survived the whole loop.
+        assert!(matches!(app.screen, Screen::Reader(_)));
+        // And the loop itself stayed snappy — sixty full frames of
+        // executor + reader render in a debug-build bound.
+        assert!(
+            t.elapsed().as_secs_f64() < 30.0,
+            "60 frames took {:.1}s — the loop stalled",
+            t.elapsed().as_secs_f64()
         );
     }
 }

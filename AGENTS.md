@@ -64,14 +64,20 @@ web/              the web app — landing page + `.taletrek` reader (Vite 8 + Re
 spike/piper/       throwaway Piper TTS validation app
 spike/web-audio/   throwaway Web Audio mobile-engine spike
 desktop/           the kernel app — Rust + clap + egui (binary taletrek-desktop;
-                    gui subcommand / bare run = windowed converter; CLI: parse +
+                    gui subcommand / bare run = windowed converter + reader; CLI: parse +
                     synth + resynth — source → bundle → audio)
-  src/gui/         eframe app: pure queue state machine + executor + views;
-                    egui never appears outside this dir
+  src/gui/         eframe app: pure queue state machine + executor + views +
+                    reader screen; egui never appears outside this dir
+  src/gui/reader/  the read-back half: session open flow, egui screen, sync UX,
+                    playback controller, cpal+symphonia engine, position store
+                    (sequencing itself lives in crates/reader — never here)
 .github/workflows/ ci.yml (gates) + release.yml (tag v* → per-target release
                     artifacts — see docs/releasing.md)
 crates/parse/      the ingest core: format detect + per-format parsers + M4 clean
                     (bytes in → ParsedBook out → text-only bundle; UniFFI-ready pure data)
+crates/reader/     the read-side core: BookIndex + PlayerState sequencer + Position
+                    (manifest+text in → navigable book + pure playback sequencing;
+                    UniFFI-ready, zero UI/audio deps — desktop/Android/iOS consume it)
 crates/synth/      shared pure core: bundle I/O, synth, encode, cache_key (the interchange format);
                     engine impls behind features — sherpa_runner.rs (`sherpa`),
                     opus_native.rs (`native-encode`), subprocess piper/ffmpeg stay

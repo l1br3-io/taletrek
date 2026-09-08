@@ -159,6 +159,36 @@ impl ReaderView {
         self.chapter
     }
 
+    /// Test seam: a view whose playback is a scripted controller — no
+    /// audio-engine thread, events fed by hand — already **playing**
+    /// the first paragraph. The session must be narrated (a text-only
+    /// book absorbs every event by contract).
+    #[cfg(test)]
+    pub(crate) fn scripted_for_test(
+        session: ReaderSession,
+    ) -> (Self, std::sync::Arc<super::playback::ScriptedTransport>) {
+        assert!(
+            session.book.audio_present,
+            "the scripted seam needs a narrated session"
+        );
+        let scripted = std::sync::Arc::new(super::playback::ScriptedTransport::new());
+        let mut playback = super::playback::controller(scripted.clone());
+        playback.send(taletrek_reader::PlayerEvent::Play, &session.book);
+        let mut view = Self {
+            session,
+            chapter: 0,
+            playback: None,
+            following: true,
+            last_active: None,
+            anchor: false,
+            scrub: 0.0,
+            #[cfg(test)]
+            probe: PaintProbe::default(),
+        };
+        view.playback = Some(playback);
+        (view, scripted)
+    }
+
     /// The session's current position as durable data (`None` at idle
     /// or on a text-only book) — what [`Self::save_position`] writes.
     pub(crate) fn position(&self) -> Option<Position> {
@@ -1440,6 +1470,95 @@ mod tests {
         assert_eq!(
             super::super::position_store::load(&ctx, BOOK_ID),
             Some(Position::new(0, 1, 0.0))
+        );
+    }
+
+    // ---- big-book hardening (task 008) ----------------------------------
+
+    /// Big-PDF scale: 50 chapters × 60 paragraphs of ~80-word text
+    /// (~3,000 paragraphs) — the spec's large-book shape. The pane must
+    /// render per-chapter no matter the book's size: one chapter's
+    /// paragraphs laid out per paint, every chapter reachable through
+    /// the outline path, and each paint inside a generous bound.
+    #[test]
+    fn a_big_book_opens_walks_every_chapter_and_stays_per_chapter() {
+        use std::time::Instant;
+
+        const CHAPTERS: usize = 50;
+        const PARAS: usize = 60;
+
+        let words: Vec<String> = (0..80).map(|w| format!("word{w}")).collect();
+        let paragraph: String = {
+            let mut p = words.join(" ");
+            p.push('.');
+            p
+        };
+        let chapters: Vec<taletrek_synth::ChapterText> = (0..CHAPTERS)
+            .map(|c| {
+                taletrek_synth::ChapterText::new(
+                    "bk_big",
+                    u32::try_from(c).unwrap(),
+                    &format!("Chapter {c}"),
+                    vec![paragraph.clone(); PARAS],
+                )
+            })
+            .collect();
+
+        // The open path over a real big bundle on disk (zip write +
+        // manifest/text read), not just the in-memory model.
+        let bundle = taletrek_synth::BookBundle {
+            manifest: {
+                let mut m = manifest(false);
+                m.book.id = "bk_big".into();
+                m.book.title = "The Big Book".into();
+                m.book.chapter_count = u32::try_from(CHAPTERS).unwrap();
+                m
+            },
+            chapters,
+            audio: std::collections::HashMap::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.taletrek");
+        let mut buf = std::io::Cursor::new(Vec::new());
+        taletrek_synth::write_book_bundle(&bundle, &mut buf).unwrap();
+        std::fs::write(&path, buf.into_inner()).unwrap();
+        let opened = Instant::now();
+        let session = crate::gui::reader::session::open(&path).expect("big bundle opens");
+        let open_secs = opened.elapsed().as_secs_f64();
+        assert_eq!(session.book.chapters.len(), CHAPTERS);
+
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, Theme::Dark);
+        let mut view = ReaderView::new(session, None);
+
+        // Walk every chapter through the outline path (open_chapter =
+        // the pane switch the outline performs) and paint it.
+        let mut worst_paint = 0.0_f64;
+        for c in 0..CHAPTERS {
+            let t = Instant::now();
+            view.open_chapter(c);
+            view = paint(view, &ctx, vec![]);
+            let dt = t.elapsed().as_secs_f64();
+            worst_paint = worst_paint.max(dt);
+            // The per-chapter invariant: exactly the shown chapter's
+            // paragraphs laid out — the whole book is never one scroll.
+            assert_eq!(
+                view.probe.rects.len(),
+                PARAS,
+                "chapter {c} renders its own {PARAS} paragraphs, not the book's"
+            );
+        }
+        eprintln!(
+            "big-book: open {open_secs:.3}s, worst paint {worst_paint:.3}s \
+             ({CHAPTERS} chapters x {PARAS} paragraphs)"
+        );
+
+        // Generous bounds (debug, headless, ~30x headroom over observed):
+        // a regression to whole-book layout would be minutes, not a
+        // slow millisecond — the bound catches the cliff, not the jitter.
+        assert!(
+            worst_paint < 2.0,
+            "a single-chapter paint took {worst_paint:.3}s — per-chapter rendering regressed"
         );
     }
 }

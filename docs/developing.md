@@ -83,6 +83,18 @@ subcommand) opens the same window. The renderer is wgpu (Vulkan/GL) by
 default; `TALETREK_RENDERER=glow` selects the GLX fallback for
 Vulkan-less environments (Xvfb, some VMs/remote sessions).
 
+The same window reads books back (`desktop-reader-page`): **Read** on a
+done row, or **Open bundle…** in the top bar for any `.taletrek` on disk.
+The book opens with a chapter outline and a serif text pane; narrated
+bundles play paragraph-synced (highlight follows the voice, the pane
+follows the highlight until you scroll elsewhere; paragraphs and outline
+entries are click-to-seek; the scrub slider restarts the current
+paragraph at a decoded offset). Position persists per book — resume
+survives Back, close, and relaunch. Text-only bundles read with the
+transport disabled. Conversions keep running in the queue while a book
+is open. The full manual smoke loop: [`docs/testing.md`](testing.md) §
+Manual end-to-end runbook.
+
 ## Ports at a glance
 
 | Port | What                       | Why                                        |
