@@ -19,7 +19,9 @@
 //! and writer cannot drift (pinned by `tests/anti_drift.rs`).
 
 mod index;
+mod position;
 mod state;
 
 pub use index::{BookIndex, ChapterIndex, ParagraphIndex};
+pub use position::Position;
 pub use state::{FailureLog, ParagraphPos, PlayerAction, PlayerEvent, PlayerState};

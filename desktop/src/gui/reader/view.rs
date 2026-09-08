@@ -16,6 +16,10 @@
 //! ([`scroll::follow_decision`] — the pure rule), paragraph clicks and
 //! outline entries seek, and the scrub slider commits one
 //! restart-at-offset [`PlayerEvent::SeekWithinParagraph`] per gesture.
+//! Task 007 made the position durable: the view opens on a restored
+//! [`Position`] (paused at the saved paragraph, its chapter shown) and
+//! saves on cadence — paragraph advance and leaving the reader —
+//! through [`super::position_store`], never per-frame.
 //!
 //! Type note: book *content* renders in the story face (XCharter) — the
 //! reading typeface — while chrome (outline, transport, meta) stays in
@@ -28,10 +32,11 @@ use std::time::Duration;
 
 use eframe::egui;
 
-use taletrek_reader::{BookIndex, ParagraphPos, PlayerEvent, PlayerState};
+use taletrek_reader::{BookIndex, ParagraphPos, PlayerEvent, PlayerState, Position};
 
 use super::audio::{AudioEngine, CpalDevice};
 use super::playback::Playback;
+use super::position_store;
 use super::scroll;
 use super::session::ReaderSession;
 use crate::gui::theme::{self, Tokens};
@@ -110,17 +115,33 @@ pub(crate) struct ReaderView {
 impl ReaderView {
     /// A fresh view over an opened session, starting at the first
     /// chapter. Narrated sessions spawn the audio engine here; the
-    /// device itself stays untouched until the first play.
-    pub(crate) fn new(session: ReaderSession) -> Self {
-        let playback = session.book.audio_present.then(|| {
+    /// device itself stays untouched until the first play. Task 007:
+    /// a restored [`Position`] (the store's answer for this book)
+    /// seeds the machine paused at it and opens its chapter — the
+    /// first paint's follow decision scrolls it into view.
+    pub(crate) fn new(session: ReaderSession, restore: Option<Position>) -> Self {
+        let mut playback = session.book.audio_present.then(|| {
             Playback::new(Box::new(AudioEngine::new(
                 session.path.clone(),
                 Arc::new(CpalDevice),
             )))
         });
+        let mut chapter = 0;
+        if let (Some(pb), Some(pos)) = (&mut playback, restore) {
+            if pb.seed(pos, &session.book) {
+                if let Ok(c) = usize::try_from(pos.chapter) {
+                    chapter = c;
+                }
+            }
+        }
+        if !session.book.chapters.is_empty() {
+            chapter = chapter.min(session.book.chapters.len() - 1);
+        } else {
+            chapter = 0;
+        }
         Self {
             session,
-            chapter: 0,
+            chapter,
             playback,
             following: true,
             last_active: None,
@@ -128,6 +149,31 @@ impl ReaderView {
             scrub: 0.0,
             #[cfg(test)]
             probe: PaintProbe::default(),
+        }
+    }
+
+    /// The chapter the text pane shows (the restore-wiring probe for
+    /// tests outside this module).
+    #[cfg(test)]
+    pub(crate) fn shown_chapter(&self) -> usize {
+        self.chapter
+    }
+
+    /// The session's current position as durable data (`None` at idle
+    /// or on a text-only book) — what [`Self::save_position`] writes.
+    pub(crate) fn position(&self) -> Option<Position> {
+        self.playback
+            .as_ref()
+            .and_then(|pb| Position::capture(pb.state()))
+    }
+
+    /// The reader-exit save (task 007's cadence): persist the current
+    /// position under the book's storage key. Leaving the reader and
+    /// closing the app both flush through here or through the
+    /// advance-time save in the pane — never per-frame.
+    pub(crate) fn save_position(&self, ctx: &egui::Context) {
+        if let Some(pos) = self.position() {
+            position_store::save(ctx, &self.session.book.book_id, pos);
         }
     }
 
@@ -430,6 +476,19 @@ impl ReaderView {
                             );
                         }
                     }
+                    // Task 007's advance-time save: when the active
+                    // paragraph moved, the store moves with it. The
+                    // gate is the paragraph, not the frame — ticks and
+                    // repaints (offset churn, highlight paints) never
+                    // write, so there is no save storm.
+                    if effective.is_some() && effective != *last_active {
+                        if let Some(pos) = playback
+                            .as_ref()
+                            .and_then(|pb| Position::capture(pb.state()))
+                        {
+                            position_store::save(ui.ctx(), &session.book.book_id, pos);
+                        }
+                    }
                     *last_active = effective;
 
                     #[cfg(test)]
@@ -730,7 +789,7 @@ mod tests {
         index: u32,
         duration: f64,
     ) -> (ReaderView, Arc<ScriptedTransport>) {
-        let mut view = ReaderView::new(session);
+        let mut view = ReaderView::new(session, None);
         let scripted = Arc::new(ScriptedTransport::new());
         let mut live = crate::gui::reader::playback::controller(scripted.clone());
         live.send(PlayerEvent::Play, &view.session.book);
@@ -830,7 +889,7 @@ mod tests {
 
     #[test]
     fn select_chapter_clamps_to_the_book() {
-        let mut view = ReaderView::new(fixture(true));
+        let mut view = ReaderView::new(fixture(true), None);
         assert_eq!(view.chapter, 0);
 
         view.select_chapter(2);
@@ -845,11 +904,14 @@ mod tests {
     fn select_chapter_on_an_empty_book_stays_at_zero() {
         let manifest = manifest(false);
         let book = BookIndex::new(&manifest, &[]);
-        let view = ReaderView::new(ReaderSession {
-            path: "/books/empty.taletrek".into(),
-            book,
-            meta: String::new(),
-        });
+        let view = ReaderView::new(
+            ReaderSession {
+                path: "/books/empty.taletrek".into(),
+                book,
+                meta: String::new(),
+            },
+            None,
+        );
         let mut view = view;
         view.select_chapter(3);
         assert_eq!(view.chapter, 0);
@@ -857,13 +919,13 @@ mod tests {
 
     #[test]
     fn narrated_sessions_spawn_a_playback_controller_text_only_do_not() {
-        let narrated = ReaderView::new(fixture(true));
+        let narrated = ReaderView::new(fixture(true), None);
         assert!(
             narrated.playback.is_some(),
             "narrated bundles get the controller (engine thread + channels)"
         );
 
-        let text_only = ReaderView::new(fixture(false));
+        let text_only = ReaderView::new(fixture(false), None);
         assert!(
             text_only.playback.is_none(),
             "text-only bundles spawn no audio thread at all"
@@ -911,7 +973,7 @@ mod tests {
             // Populated, mid-book (chapter 2 selected), narrated — with
             // a scripted controller so the paint covers the live
             // transport: playing, positioned, one skipped paragraph.
-            let mut view = ReaderView::new(fixture(true));
+            let mut view = ReaderView::new(fixture(true), None);
             view.select_chapter(2);
             let scripted = Arc::new(ScriptedTransport::new());
             let mut live = crate::gui::reader::playback::controller(scripted.clone());
@@ -929,7 +991,7 @@ mod tests {
             });
 
             // The same book as text-only: hint path.
-            let mut view = ReaderView::new(fixture(false));
+            let mut view = ReaderView::new(fixture(false), None);
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
                 view.render(ui, theme.tokens());
             });
@@ -947,7 +1009,7 @@ mod tests {
             theme::apply(&ctx, theme);
 
             // Idle: no highlight, nothing follows, no scrub.
-            let mut view = ReaderView::new(fixture(true));
+            let mut view = ReaderView::new(fixture(true), None);
             let scripted = Arc::new(ScriptedTransport::new());
             view.playback = Some(crate::gui::reader::playback::controller(scripted));
             view = paint(view, &ctx, vec![]);
@@ -983,11 +1045,14 @@ mod tests {
             theme::apply(&ctx, theme);
             let manifest = manifest(true);
             let book = BookIndex::new(&manifest, &[]);
-            let mut view = ReaderView::new(ReaderSession {
-                path: "/books/empty.taletrek".into(),
-                book,
-                meta: "0 chapters · v · narrated".into(),
-            });
+            let mut view = ReaderView::new(
+                ReaderSession {
+                    path: "/books/empty.taletrek".into(),
+                    book,
+                    meta: "0 chapters · v · narrated".into(),
+                },
+                None,
+            );
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
                 view.render(ui, theme.tokens());
             });
@@ -1217,6 +1282,164 @@ mod tests {
         assert!(
             active.intersects(view_rect),
             "following keeps the active paragraph in view"
+        );
+    }
+
+    // ---- position persistence (task 007) ------------------------------
+
+    /// The fixture's book id — the storage slot the save hooks address.
+    const BOOK_ID: &str = "bk_test";
+
+    #[test]
+    fn a_restored_position_opens_paused_at_its_chapter_and_paragraph() {
+        let view = ReaderView::new(fixture(true), Some(Position::new(2, 0, 4.5)));
+        assert_eq!(view.chapter, 2, "the pane opens on the saved chapter");
+        assert_eq!(
+            view.position(),
+            Some(Position::new(2, 0, 4.5)),
+            "the machine seeds paused at the saved paragraph"
+        );
+
+        // A stray position (corrupt storage, another edition) is
+        // refused: idle machine, first chapter — start of book.
+        let view = ReaderView::new(fixture(true), Some(Position::new(9, 9, 1.0)));
+        assert_eq!(view.position(), None);
+        assert_eq!(view.chapter, 0);
+
+        // A text-only session never seeds (no machine to hold it).
+        let view = ReaderView::new(fixture(false), Some(Position::new(0, 1, 2.0)));
+        assert_eq!(view.position(), None);
+        assert_eq!(view.chapter, 0);
+    }
+
+    #[test]
+    fn the_first_paint_after_a_restore_scrolls_to_the_paragraph() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, Theme::Dark);
+
+        // A tall chapter with the restore point well below the fold.
+        let view = ReaderView::new(tall_fixture(), Some(Position::new(0, 20, 3.0)));
+        let view = paint(view, &ctx, vec![]);
+
+        // The very first paint highlights the restored paragraph...
+        assert_eq!(
+            view.probe.active_rect,
+            Some(view.probe.rects[20]),
+            "the restored paragraph paints highlighted"
+        );
+
+        // ...and the follow scroll brings it into view. Headless, the
+        // instant scroll applies a few frames late (egui's arrival
+        // clock rides input time, which `run_ui` never advances), so
+        // paint a bounded window and require it to land — in a live
+        // window this is the very next frame.
+        let mut view = view;
+        let mut landed = false;
+        for _ in 0..5 {
+            view = paint(view, &ctx, vec![]);
+            landed = view
+                .probe
+                .active_rect
+                .is_some_and(|r| r.intersects(view.probe.view_rect.unwrap()));
+            if landed {
+                break;
+            }
+        }
+        assert!(landed, "the restore scrolls its paragraph into view");
+    }
+
+    #[test]
+    fn position_saves_on_advance_but_never_on_ticks_or_repaints() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, Theme::Dark);
+
+        let (view, scripted) = playing_view(fixture(true), 0, 30.0);
+        let key0 = view.session.book.chapters[0].paragraphs[0]
+            .segment_key
+            .clone();
+        let key1 = view.session.book.chapters[0].paragraphs[1]
+            .segment_key
+            .clone();
+
+        // First paint: the start position lands in the store.
+        let view = paint(view, &ctx, vec![]);
+        assert_eq!(
+            super::super::position_store::load(&ctx, BOOK_ID),
+            Some(Position::new(0, 0, 0.0))
+        );
+
+        // Ticks move audio time, not paragraphs — repaints ride along:
+        // neither may write, or playback becomes a save storm.
+        scripted.push(crate::gui::reader::audio::AudioEvent::Tick {
+            key: key0,
+            offset: 17.3,
+        });
+        let mut view = paint(view, &ctx, vec![]);
+        view = paint(view, &ctx, vec![]);
+        assert_eq!(
+            super::super::position_store::load(&ctx, BOOK_ID),
+            Some(Position::new(0, 0, 0.0)),
+            "ticks and repaints must not save"
+        );
+
+        // An advance moves the paragraph: the store moves with it.
+        view.playback
+            .as_mut()
+            .unwrap()
+            .send(PlayerEvent::NextParagraph, &view.session.book);
+        let view = paint(view, &ctx, vec![]);
+        assert_eq!(
+            super::super::position_store::load(&ctx, BOOK_ID),
+            Some(Position::new(0, 1, 0.0)),
+            "the advance saves at the new paragraph"
+        );
+
+        // Offset churn on the new paragraph stays out of the store too.
+        scripted.push(crate::gui::reader::audio::AudioEvent::Tick {
+            key: key1,
+            offset: 8.0,
+        });
+        let _view = paint(view, &ctx, vec![]);
+        assert_eq!(
+            super::super::position_store::load(&ctx, BOOK_ID),
+            Some(Position::new(0, 1, 0.0))
+        );
+    }
+
+    #[test]
+    fn save_position_writes_the_machine_where_it_stands() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, Theme::Dark);
+
+        // Paused mid-paragraph (the reader-exit moment): the exit save
+        // captures paragraph and offset together.
+        let (mut view, _scripted) = playing_view(fixture(true), 1, 30.0);
+        view.playback
+            .as_mut()
+            .unwrap()
+            .send(PlayerEvent::Pause, &view.session.book);
+        view.save_position(&ctx);
+        assert_eq!(
+            super::super::position_store::load(&ctx, BOOK_ID),
+            Some(Position::new(0, 1, 0.0))
+        );
+
+        // An idle machine (finished or never played) writes nothing —
+        // a prior position must survive untouched.
+        let idle_view = ReaderView::new(fixture(true), None);
+        idle_view.save_position(&ctx);
+        assert_eq!(
+            super::super::position_store::load(&ctx, BOOK_ID),
+            Some(Position::new(0, 1, 0.0)),
+            "an idle exit does not clobber the saved place"
+        );
+
+        // A text-only session has nothing to persist either.
+        let quiet = ReaderView::new(fixture(false), None);
+        quiet.save_position(&ctx);
+        assert_eq!(
+            super::super::position_store::load(&ctx, BOOK_ID),
+            Some(Position::new(0, 1, 0.0))
         );
     }
 }

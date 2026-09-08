@@ -419,8 +419,10 @@ fn is_current(book: &BookIndex, para: ParagraphPos, key: &str) -> bool {
 
 /// Scrub offsets clamp at zero and non-finite values land on zero; there
 /// is no upper clamp because the kernel doesn't know segment durations —
-/// audio time is the platform's (the contract).
-fn sanitize(offset: f64) -> f64 {
+/// audio time is the platform's (the contract). Shared by scrubs and
+/// [`crate::Position`] restores: a hostile stored offset only ever
+/// lands on zero.
+pub(crate) fn sanitize(offset: f64) -> f64 {
     if offset.is_finite() && offset > 0.0 {
         offset
     } else {

@@ -333,12 +333,16 @@ impl TaleTrekApp {
     /// Open `path` in the reader screen (the shared tail of both entry
     /// points — Read on a Done row and Open bundle…). A healthy bundle
     /// switches screens and clears any stale error; a failure stays on
-    /// the current screen and surfaces the human sentence.
-    fn open_reader(&mut self, path: PathBuf) {
+    /// the current screen and surfaces the human sentence. Task 007:
+    /// the store's saved position for this book rides along — the view
+    /// seeds its machine there (keyed by book id, so a moved file or a
+    /// re-voiced bundle resumes where it left off).
+    fn open_reader(&mut self, ctx: &egui::Context, path: PathBuf) {
         match reader::session::open(&path) {
             Ok(session) => {
                 self.open_error = None;
-                self.screen = Screen::Reader(Box::new(ReaderView::new(session)));
+                let restore = reader::position_store::load(ctx, &session.book.book_id);
+                self.screen = Screen::Reader(Box::new(ReaderView::new(session, restore)));
             }
             Err(err) => {
                 self.open_error = Some(format!(
@@ -352,12 +356,12 @@ impl TaleTrekApp {
 
     /// Open the reader's `.taletrek` picker ("Open bundle…" in the top
     /// bar) and open whatever comes back for reading.
-    fn pick_open_bundle(&mut self) {
+    fn pick_open_bundle(&mut self, ctx: &egui::Context) {
         let picked = rfd::FileDialog::new()
             .add_filter("TaleTrek bundles", &["taletrek"])
             .pick_file();
         if let Some(path) = picked {
-            self.open_reader(path);
+            self.open_reader(ctx, path);
         }
     }
 
@@ -400,7 +404,7 @@ impl TaleTrekApp {
                             .on_hover_text("Read a .taletrek file")
                             .clicked()
                         {
-                            self.pick_open_bundle();
+                            self.pick_open_bundle(ui.ctx());
                         }
                     });
                 });
@@ -734,7 +738,7 @@ impl TaleTrekApp {
                                 .on_hover_text("Open this bundle in the reader")
                                 .clicked()
                             {
-                                self.open_reader(out.clone());
+                                self.open_reader(ui.ctx(), out.clone());
                             }
                         });
                     });
@@ -771,6 +775,15 @@ impl TaleTrekApp {
             }
         });
         ui.add_space(6.0);
+    }
+
+    /// Leave the reader (the view's Back): the reader-exit save (task
+    /// 007's cadence — the current position persists under the book's
+    /// storage key), then the pure screen flip. The queue kept running
+    /// underneath by construction.
+    fn leave_reader(&mut self, view: Box<ReaderView>, ctx: &egui::Context) {
+        view.save_position(ctx);
+        self.screen = Screen::Converter;
     }
 
     /// The converter screen's regions below the shared chrome: prompt
@@ -818,7 +831,7 @@ impl eframe::App for TaleTrekApp {
                 }
                 let action = view.render(ui, self.settings.theme.tokens());
                 match action {
-                    Some(ReaderAction::Back) => self.screen = Screen::Converter,
+                    Some(ReaderAction::Back) => self.leave_reader(view, ui.ctx()),
                     None => self.screen = Screen::Reader(view),
                 }
             }
@@ -1174,7 +1187,14 @@ mod tests {
 
     /// A healthy two-chapter bundle on disk; returns (kept-alive dir, path).
     fn readable_bundle() -> (tempfile::TempDir, PathBuf) {
-        let bundle = BookBundle {
+        bundle_on_disk(&gui_bundle(false, "en_US-amy-medium"))
+    }
+
+    /// The fixture bundle as data: book id `bk_gui`, two chapters,
+    /// audio presence and voice parameterized (the re-voice shape is
+    /// the same id under a different voice).
+    fn gui_bundle(audio: bool, voice: &str) -> BookBundle {
+        BookBundle {
             manifest: Manifest {
                 schema_version: SCHEMA_VERSION,
                 kind: ManifestKind::Book,
@@ -1184,13 +1204,13 @@ mod tests {
                     author: None,
                     source_format: "txt".into(),
                     chapter_count: 2,
-                    voice_id: "en_US-amy-medium".into(),
+                    voice_id: voice.into(),
                     created_at: 0,
                     updated_at: 0,
                     progress_fraction: None,
                 },
                 audio: AudioMeta {
-                    present: false,
+                    present: audio,
                     codec: AudioCodec::Opus,
                     norm_version: NORM_VERSION.parse().unwrap(),
                     segment_count: 0,
@@ -1205,11 +1225,15 @@ mod tests {
                 ChapterText::new("bk_gui", 1, "Two", vec!["Second.".into()]),
             ],
             audio: std::collections::HashMap::new(),
-        };
+        }
+    }
+
+    /// Write `bundle` to a fresh temp file; returns (kept-alive dir, path).
+    fn bundle_on_disk(bundle: &BookBundle) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fixture.taletrek");
         let mut buf = std::io::Cursor::new(Vec::new());
-        write_book_bundle(&bundle, &mut buf).unwrap();
+        write_book_bundle(bundle, &mut buf).unwrap();
         std::fs::write(&path, buf.into_inner()).unwrap();
         (dir, path)
     }
@@ -1221,7 +1245,7 @@ mod tests {
         let mut app = app_on_converter(&ctx);
         app.open_error = Some("stale failure".to_owned());
 
-        app.open_reader(path.clone());
+        app.open_reader(&ctx, path.clone());
 
         assert!(
             matches!(app.screen, Screen::Reader(_)),
@@ -1235,7 +1259,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = app_on_converter(&ctx);
 
-        app.open_reader(PathBuf::from("/nonexistent-taletrek-test/none.taletrek"));
+        app.open_reader(
+            &ctx,
+            PathBuf::from("/nonexistent-taletrek-test/none.taletrek"),
+        );
 
         assert!(matches!(app.screen, Screen::Converter));
         let message = app.open_error.as_deref().expect("failure surfaces");
@@ -1268,7 +1295,7 @@ mod tests {
 
             // The full reader path — the same calls `ui` dispatches: open,
             // then shared chrome + panels around the view.
-            app.open_reader(path.clone());
+            app.open_reader(&ctx, path.clone());
             app.panel_open = true;
             if let Screen::Reader(mut view) = std::mem::replace(&mut app.screen, Screen::Converter)
             {
@@ -1294,7 +1321,7 @@ mod tests {
         let queued = app.executor.queue().jobs().count();
         assert_eq!(queued, 1);
 
-        app.open_reader(path);
+        app.open_reader(&ctx, path);
         assert!(matches!(app.screen, Screen::Reader(_)));
 
         // The Back the view reports flips the screen and nothing else.
@@ -1321,5 +1348,74 @@ mod tests {
             .iter()
             .all(|ch| !ch.paragraphs.is_empty()));
         assert_eq!(session.book.title, "GUI Fixture");
+    }
+
+    // ---- position persistence (task 007) ------------------------------
+
+    use taletrek_reader::Position;
+
+    #[test]
+    fn open_reader_restores_the_saved_position_from_the_store() {
+        let (_dir, path) = bundle_on_disk(&gui_bundle(true, "en_US-amy-medium"));
+        let ctx = egui::Context::default();
+        reader::position_store::save(&ctx, "bk_gui", Position::new(1, 0, 4.5));
+        let mut app = app_on_converter(&ctx);
+
+        app.open_reader(&ctx, path);
+
+        let Screen::Reader(view) = &app.screen else {
+            panic!("a healthy narrated bundle opens");
+        };
+        assert_eq!(view.shown_chapter(), 1, "the pane opens on the saved chapter");
+        assert_eq!(
+            view.position(),
+            Some(Position::new(1, 0, 4.5)),
+            "the machine seeds paused at the saved paragraph"
+        );
+    }
+
+    #[test]
+    fn a_revoiced_copy_keeps_its_position_via_the_book_id() {
+        // The re-voice shape: same book id, different voice, a different
+        // file — progress keys by the book, not the file or the voice.
+        let (_dir2, revoiced) = bundle_on_disk(&gui_bundle(true, "en_GB-cori-medium"));
+        let ctx = egui::Context::default();
+        reader::position_store::save(&ctx, "bk_gui", Position::new(1, 0, 4.5));
+        let mut app = app_on_converter(&ctx);
+
+        app.open_reader(&ctx, revoiced);
+
+        let Screen::Reader(view) = &app.screen else {
+            panic!("the re-voiced copy opens");
+        };
+        assert_eq!(view.shown_chapter(), 1);
+        assert_eq!(
+            view.position(),
+            Some(Position::new(1, 0, 4.5)),
+            "same book id → the saved place survives the re-voice"
+        );
+    }
+
+    #[test]
+    fn leaving_the_reader_persists_the_current_position() {
+        let (_dir, path) = bundle_on_disk(&gui_bundle(true, "en_US-amy-medium"));
+        let ctx = egui::Context::default();
+        reader::position_store::save(&ctx, "bk_gui", Position::new(1, 0, 4.5));
+        let mut app = app_on_converter(&ctx);
+        app.open_reader(&ctx, path);
+
+        // The user jumps back to chapter One (a paused seek — records
+        // the move without commanding audio), then leaves the reader:
+        // the exit save writes where the session actually stood.
+        if let Screen::Reader(mut view) = std::mem::replace(&mut app.screen, Screen::Converter) {
+            view.open_chapter(0);
+            app.leave_reader(view, &ctx);
+        }
+        assert!(matches!(app.screen, Screen::Converter));
+        assert_eq!(
+            reader::position_store::load(&ctx, "bk_gui"),
+            Some(Position::new(0, 0, 0.0)),
+            "Back persists the position it leaves at"
+        );
     }
 }

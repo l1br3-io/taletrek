@@ -23,7 +23,7 @@
 //! queue-clear; the ack is the airtight form of it (a bare clear can
 //! still race a callback-side emission).
 
-use taletrek_reader::{BookIndex, PlayerAction, PlayerEvent, PlayerState};
+use taletrek_reader::{BookIndex, PlayerAction, PlayerEvent, PlayerState, Position};
 
 use super::audio::AudioEvent;
 
@@ -73,6 +73,20 @@ impl Playback {
     /// highlight).
     pub(crate) fn state(&self) -> &PlayerState {
         &self.state
+    }
+
+    /// Seed the machine at a restored position (task 007): paused at
+    /// the saved paragraph, offset sanitized, failure log fresh — a
+    /// resume is a new session, never an auto-play. A position naming
+    /// no real paragraph in `book` (corrupt, or another edition) is
+    /// refused — the machine rests and the caller starts at the top.
+    /// Returns whether the seed took.
+    pub(crate) fn seed(&mut self, pos: Position, book: &BookIndex) -> bool {
+        if book.paragraph(pos.paragraph()).is_none() {
+            return false;
+        }
+        self.state = pos.restore_state();
+        true
     }
 
     /// The current segment's decoded length, once its load ack arrived
@@ -572,6 +586,52 @@ mod tests {
 
         assert_eq!(pb.state(), &playing_at(1, 0.0), "no skip happened");
         assert_eq!(pb.state().failures().skipped, 0);
+    }
+
+    #[test]
+    fn seed_restores_paused_at_a_real_paragraph_and_refuses_stray_ones() {
+        let book = book(&["One.", "Two."]);
+        let scripted = Arc::new(ScriptedTransport::new());
+        let mut pb = controller(scripted.clone());
+
+        // A real paragraph: paused at it, sanitized offset, fresh log —
+        // and the engine untouched until the user plays.
+        assert!(pb.seed(Position::new(0, 1, 4.5), &book));
+        assert_eq!(
+            pb.state(),
+            &PlayerState::Paused {
+                para: ParagraphPos::new(0, 1),
+                offset: 4.5,
+                failures: Default::default(),
+            }
+        );
+        assert!(
+            scripted.loads().is_empty(),
+            "a restore never commands audio"
+        );
+
+        // A hostile offset lands on zero, never mid-air.
+        assert!(pb.seed(Position::new(0, 0, f64::NAN), &book));
+        assert_eq!(
+            pb.state(),
+            &PlayerState::Paused {
+                para: ParagraphPos::new(0, 0),
+                offset: 0.0,
+                failures: Default::default(),
+            }
+        );
+
+        // A stray position (corrupt or another edition) changes
+        // nothing — the machine keeps resting at the top.
+        assert!(!pb.seed(Position::new(9, 9, 1.0), &book));
+        assert_eq!(
+            pb.state(),
+            &PlayerState::Paused {
+                para: ParagraphPos::new(0, 0),
+                offset: 0.0,
+                failures: Default::default(),
+            }
+        );
     }
 
     #[test]

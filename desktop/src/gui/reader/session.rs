@@ -16,8 +16,9 @@ use taletrek_synth::{BundleError, Manifest};
 
 /// An opened reader session: everything the reader screen renders, frozen
 /// at open time. The book itself lives in the kernel's [`BookIndex`];
-/// `path` stays for position keying (task 007) and `meta` is the
-/// pre-joined header line.
+/// `path` stays for the audio engine (the bundle it loads segments from)
+/// and `meta` is the pre-joined header line. Position restore (task 007)
+/// keys by the book id, not this path — moving the file keeps progress.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ReaderSession {
     /// The bundle this session was opened from.
