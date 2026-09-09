@@ -78,6 +78,7 @@ dependencies {
     // Media3 pre-added for the playback service (task 003).
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
+    implementation(libs.coroutines.android)
     // UniFFI's generated Kotlin is JNA-based.
     implementation(libs.jna) {
         artifact {
@@ -85,6 +86,9 @@ dependencies {
         }
     }
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)
