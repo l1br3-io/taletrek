@@ -13,16 +13,20 @@ object SessionCommands {
     const val ACTION_OPEN_BOOK = "dev.l1br3.taletrek.action.OPEN_BOOK"
     const val ACTION_NEXT_PARAGRAPH = "dev.l1br3.taletrek.action.NEXT_PARAGRAPH"
     const val ACTION_PREV_PARAGRAPH = "dev.l1br3.taletrek.action.PREV_PARAGRAPH"
+    const val ACTION_SEEK_PARAGRAPH = "dev.l1br3.taletrek.action.SEEK_PARAGRAPH"
     const val ACTION_GET_STATE = "dev.l1br3.taletrek.action.GET_STATE"
 
     val OPEN_BOOK = SessionCommand(ACTION_OPEN_BOOK, Bundle.EMPTY)
     val NEXT_PARAGRAPH = SessionCommand(ACTION_NEXT_PARAGRAPH, Bundle.EMPTY)
     val PREV_PARAGRAPH = SessionCommand(ACTION_PREV_PARAGRAPH, Bundle.EMPTY)
+    val SEEK_PARAGRAPH = SessionCommand(ACTION_SEEK_PARAGRAPH, Bundle.EMPTY)
     val GET_STATE = SessionCommand(ACTION_GET_STATE, Bundle.EMPTY)
 
-    val ALL = listOf(OPEN_BOOK, NEXT_PARAGRAPH, PREV_PARAGRAPH, GET_STATE)
+    val ALL = listOf(OPEN_BOOK, NEXT_PARAGRAPH, PREV_PARAGRAPH, SEEK_PARAGRAPH, GET_STATE)
 
     const val EXTRA_PATH = "path"
+    const val EXTRA_CHAPTER = "chapter"
+    const val EXTRA_INDEX = "index"
 
     // GET_STATE reply keys.
     const val STATE_STATUS = "status"

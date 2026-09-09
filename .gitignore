@@ -37,7 +37,9 @@ pnpm-debug.log*
 target/
 
 # personal-server local dev state (SQLite index + WAL; TALETREK_DATA_DIR=./data default)
-data/
+# Root-anchored: a bare `data/` also swallowed android/.../taletrek/data (the app's
+# package) — T4/T5's data-layer files silently never landed in the repo.
+/data/
 
 # generated bundle dev artifacts (canonical fixtures are committed under crates/synth/tests/fixtures)
 *.taletrek

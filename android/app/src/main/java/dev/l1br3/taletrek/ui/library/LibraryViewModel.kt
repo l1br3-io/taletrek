@@ -11,6 +11,7 @@ import dev.l1br3.taletrek.data.ImportOutcome
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -57,6 +58,13 @@ class LibraryViewModel(
     fun dismissImportError() {
         _ui.update { it.copy(importError = null) }
     }
+
+    /**
+     * A book by id, waiting for the first scan to land — the reader
+     * route's opener suspends on this so a slow scan (or process
+     * death) doesn't read as "missing".
+     */
+    suspend fun book(bookId: String): BookShelf? = ui.first { !it.loading }.books.find { it.bookId == bookId }
 
     fun requestDelete(book: BookShelf) {
         _ui.update { it.copy(pendingDelete = book) }

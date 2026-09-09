@@ -168,6 +168,13 @@ class PlaybackService : MediaSessionService() {
                     bridge?.userPrevParagraph()
                     immediateResult
                 }
+                SessionCommands.ACTION_SEEK_PARAGRAPH -> {
+                    bridge?.userSeekToParagraph(
+                        args.getLong(SessionCommands.EXTRA_CHAPTER).toUInt(),
+                        args.getLong(SessionCommands.EXTRA_INDEX).toUInt(),
+                    )
+                    immediateResult
+                }
                 SessionCommands.ACTION_GET_STATE -> Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS, stateBundle()))
                 else -> Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
