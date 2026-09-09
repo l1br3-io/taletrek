@@ -130,7 +130,11 @@ just android-bindings     # regen the checked-in UniFFI Kotlin
 
 JVM unit tests are pure-Kotlin only (the `.so` does not load on the JVM —
 kernel-touching tests are instrumented by design); ktlint excludes the
-generated `ffi/` package.
+generated `ffi/` package. Instrumented suites (`just android-instrumented`)
+need a real device or emulator via adb — ffi round-trips, the playback walk,
+the corrupt-segment walk, and the Compose reader/UI suites all run there;
+with no device attached, the headless gates (`just android-test`,
+`assembleDebug`) are the local loop, exactly like CI.
 
 ## Ports at a glance
 

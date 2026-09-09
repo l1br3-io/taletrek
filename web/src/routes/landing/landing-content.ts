@@ -56,7 +56,15 @@ export const moments = [
   { icon: Moon, label: 'Falling asleep' },
 ]
 
-export const apps = [
+export const apps: {
+  icon: typeof Monitor
+  name: string
+  role: string
+  status: string
+  desc: string
+  badge: string
+  href?: string
+}[] = [
   {
     icon: Monitor,
     name: 'Desktop',
@@ -69,9 +77,10 @@ export const apps = [
     icon: Smartphone,
     name: 'Android',
     role: 'The player',
-    status: 'Coming soon',
+    status: 'First ship — in development',
     desc: 'Lock-screen controls, background audio, your whole library in your pocket.',
-    badge: 'Google Play',
+    badge: 'Download APK — at release',
+    href: 'https://github.com/l1br3-io/taletrek/releases/latest',
   },
   {
     icon: Apple,

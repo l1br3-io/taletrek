@@ -152,3 +152,89 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/taletrek-*-${{ matrix.target }}.${{ matrix.archive }}
+
+  # Android player app — signed AAB (store-ready later) + signed universal
+  # APK (side-load friendly) on tag pushes. Dry runs (workflow_dispatch)
+  # build UNSIGNED artifacts and attach them to the run only, never a
+  # release (the existing convention). The keystore never lives in the
+  # repo — creation + the four secret names are documented in
+  # docs/releasing.md § Android (ask-first before wiring secrets).
+  android:
+    name: android (aab + universal apk)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Install pinned Android SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platform-tools" "platforms;android-37" "build-tools;36.0.0" "ndk;28.2.13676358" > /dev/null
+
+      - name: Install cargo-ndk (pinned)
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Cross-build the kernel (.so for both ABIs → jniLibs)
+        run: just android-kernel
+
+      - name: Decode the release keystore (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: printf '%s' "${{ secrets.TALETREK_ANDROID_KEYSTORE }}" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      - name: Resolve version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = 'tag' ]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+            echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          fi
+
+      # The signing env is present only on tag pushes; without it Gradle
+      # builds unsigned outputs (the dry-run path — same commands).
+      - name: Bundle + assemble (release)
+        run: |
+          if [ -f "$RUNNER_TEMP/release.jks" ]; then
+            export TALETREK_ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+            export TALETREK_ANDROID_KEYSTORE_PASSWORD="${{ secrets.TALETREK_ANDROID_KEYSTORE_PASSWORD }}"
+            export TALETREK_ANDROID_KEY_ALIAS="${{ secrets.TALETREK_ANDROID_KEY_ALIAS }}"
+            export TALETREK_ANDROID_KEY_PASSWORD="${{ secrets.TALETREK_ANDROID_KEY_PASSWORD }}"
+          fi
+          android/gradlew --project-dir android bundleRelease assembleRelease
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          apk="$(ls android/app/build/outputs/apk/release/*.apk)"
+          aab="$(ls android/app/build/outputs/bundle/release/*.aab)"
+          cp "$apk" "dist/taletrek-${VERSION}-android-universal.apk"
+          cp "$aab" "dist/taletrek-${VERSION}-android.aab"
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taletrek-${{ env.VERSION }}-android
+          path: |
+            dist/taletrek-${{ env.VERSION }}-android-universal.apk
+            dist/taletrek-${{ env.VERSION }}-android.aab
+          if-no-files-found: error
+
+      - name: Attach to the GitHub release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/taletrek-${{ env.VERSION }}-android-universal.apk
+            dist/taletrek-${{ env.VERSION }}-android.aab

@@ -191,9 +191,20 @@ export function Landing() {
               </div>
               <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">{a.role}</p>
               <p className="text-sm leading-relaxed text-muted">{a.desc}</p>
-              <span className="mt-auto inline-flex w-fit items-center border border-dashed border-line px-3 py-1.5 font-mono text-xs text-muted">
-                {a.badge}
-              </span>
+              {a.href ? (
+                <a
+                  href={a.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-auto inline-flex w-fit items-center border border-dashed border-line px-3 py-1.5 font-mono text-xs text-muted transition-colors hover:border-accent hover:text-accent"
+                >
+                  {a.badge}
+                </a>
+              ) : (
+                <span className="mt-auto inline-flex w-fit items-center border border-dashed border-line px-3 py-1.5 font-mono text-xs text-muted">
+                  {a.badge}
+                </span>
+              )}
             </li>
           ))}
         </ul>

@@ -26,10 +26,28 @@ android {
         }
     }
 
+    // Release signing is env-driven and opt-in: the CI tag build decodes
+    // the secret keystore and exports the four TALETREK_ANDROID_* vars
+    // (docs/releasing.md § Android); dry runs and local builds leave them
+    // unset and get unsigned outputs.
+    signingConfigs {
+        create("release") {
+            System.getenv("TALETREK_ANDROID_KEYSTORE_PATH")?.let { keystorePath ->
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("TALETREK_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("TALETREK_ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("TALETREK_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (System.getenv("TALETREK_ANDROID_KEYSTORE_PATH") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

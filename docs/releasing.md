@@ -49,3 +49,46 @@ crate's bundled libopus (T2), **`libasound2-dev`** for cpal's alsa-sys
 dir (CI does the `dpkg --add-architecture arm64` dance). sherpa-onnx
 statically links its own prebuilt archive; no
 cmake/libclang/onnxruntime system deps (T1).
+
+## Android artifacts (`taletrek-<version>-android*`)
+
+The `android` job (effort `android-app` T10) mirrors the CI android job:
+kernel `.so` cross-build via cargo-ndk, then `gradlew bundleRelease
+assembleRelease`. On a **tag push** it attaches two artifacts to the
+release:
+
+- `taletrek-<version>-android.aab` — the signed bundle (store-ready for
+  a later Play submission; submission itself is out of scope)
+- `taletrek-<version>-android-universal.apk` — the signed universal APK
+  (both ABIs, side-load friendly; this is what the landing page links to)
+
+Dry runs (`workflow_dispatch`) build the same artifacts **unsigned** and
+attach them to the run only — never a release (the workflow's existing
+convention).
+
+### Signing
+
+The keystore never lives in the repo. One-time, ask-first setup
+(create it yourself; keep a backup — a lost keystore means a new app
+identity on any future store listing):
+
+```
+keytool -genkeypair -v \
+  -keystore taletrek-release.jks -alias taletrek \
+  -keyalg RSA -keysize 2048 -validity 10000
+base64 -w0 taletrek-release.jks   # → the TALETREK_ANDROID_KEYSTORE secret
+```
+
+GitHub secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+| --- | --- |
+| `TALETREK_ANDROID_KEYSTORE` | base64 of the `.jks` (no newlines stripped) |
+| `TALETREK_ANDROID_KEYSTORE_PASSWORD` | the keystore password |
+| `TALETREK_ANDROID_KEY_ALIAS` | `taletrek` (per the command above) |
+| `TALETREK_ANDROID_KEY_PASSWORD` | the key password |
+
+The tag build decodes the keystore into `$RUNNER_TEMP` and exports the
+four as env vars — Gradle's signing config is env-driven and opt-in
+(`android/app/build.gradle.kts`); without them the same commands produce
+the unsigned dry-run artifacts.

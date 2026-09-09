@@ -4,7 +4,7 @@
 
 ## Current effort
 
-**Efforts 1–3 shipped — the desktop processor is real.** `native-pivot` re-founded the repo on the Rust-kernel direction (decision: [ADR-0015](docs/adrs/0015-native-pivot-rust-kernel-and-native-apps.md); the why + locked stack: [`docs/ideas/native-pivot.md`](docs/ideas/native-pivot.md)). `kernel-parse` built the ingest front door: `crates/parse` + `taletrek-desktop parse --input <doc>` → text-only `.taletrek`, chained `synth --input <doc>` → full audio bundle. `desktop-synth-gui` gave the kernel a face and removed its external binaries: in-process sherpa-onnx TTS (`SherpaRunner`, feature `sherpa`) + native Opus encode (`NativeOpusEncoder`, feature `native-encode`) are the defaults (subprocess `--piper`/`--ffmpeg` stay as overrides), an egui GUI (`gui` subcommand; bare run opens it) turns documents into bundles via a job queue with voice picker/catalog download, and a tag push builds release artifacts. Specs: [`native-pivot`](docs/specs/native-pivot/spec.md) · [`kernel-parse`](docs/specs/kernel-parse/spec.md) · [`desktop-synth-gui`](docs/specs/desktop-synth-gui/spec.md). Next effort: `android-app` → then `ios-app` — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**Efforts 1–4 shipped — the kernel lives on a phone too.** `native-pivot` re-founded the repo on the Rust-kernel direction (decision: [ADR-0015](docs/adrs/0015-native-pivot-rust-kernel-and-native-apps.md); the why + locked stack: [`docs/ideas/native-pivot.md`](docs/ideas/native-pivot.md)). `kernel-parse` built the ingest front door: `crates/parse` + `taletrek-desktop parse --input <doc>` → text-only `.taletrek`, chained `synth --input <doc>` → full audio bundle. `desktop-synth-gui` gave the kernel a face and removed its external binaries: in-process sherpa-onnx TTS (`SherpaRunner`, feature `sherpa`) + native Opus encode (`NativeOpusEncoder`, feature `native-encode`) are the defaults (subprocess `--piper`/`--ffmpeg` stay as overrides), an egui GUI (`gui` subcommand; bare run opens it) turns documents into bundles via a job queue with voice picker/catalog download, and a tag push builds release artifacts. Then `desktop-reader-page` taught it to read back; `android-app` crossed the kernel to a phone: `crates/ffi` (UniFFI → checked-in Kotlin) + `android/` (Compose library ⇄ reader, Media3 `MediaSessionService` — the Jog bar: lock-screen audio, notification chapter controls, corrupt-segment skip tolerance, DataStore positions; release job builds a signed AAB + universal APK). Specs: [`native-pivot`](docs/specs/native-pivot/spec.md) · [`kernel-parse`](docs/specs/kernel-parse/spec.md) · [`desktop-synth-gui`](docs/specs/desktop-synth-gui/spec.md) · [`desktop-reader-page`](docs/specs/desktop-reader-page/spec.md) · [`android-app`](docs/specs/android-app/spec.md). Next effort: `ios-app` (the same `crates/ffi` surface via UniFFI's Swift target) — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Live status always lives in the current effort's `spec.md` frontmatter (`status:`) + `todo.md` — **not here**.
 
@@ -35,9 +35,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo test --workspace -- --ignored    # real piper+ffmpeg+sherpa; needs TALETREK_VOICE_PATH — see docs/testing.md
 just gui                               # run the desktop GUI (egui)
+# Android (SDK/NDK prereqs — docs/developing.md § Android)
+just android                           # kernel .so + gradle assembleDebug → APK
+just android-test                      # Kotlin JVM unit tests + ktlint (headless)
+just android-instrumented              # on-device suites (needs adb hardware)
 ```
 
-Workspace: pnpm + cargo. `web/` (landing + reader) + `spike/{piper,web-audio}/` (throwaway de-risking apps) on Node 24 / pnpm 10.31.0; `desktop/` + `crates/{parse,synth,worker}/` on Rust 1.97.0 (see [`docs/testing.md`](docs/testing.md) for the full test matrix).
+Workspace: pnpm + cargo + gradle. `web/` (landing + reader) + `spike/{piper,web-audio}/` (throwaway de-risking apps) on Node 24 / pnpm 10.31.0; `desktop/` + `crates/{parse,reader,synth,worker,ffi}/` on Rust 1.97.0; `android/` on Gradle 9.7/AGP 9.4/Kotlin 2.4 (see [`docs/testing.md`](docs/testing.md) + [`docs/developing.md`](docs/developing.md) § Android for the full test matrix).
 
 ## Layout
 
@@ -71,6 +75,12 @@ desktop/           the kernel app — Rust + clap + egui (binary taletrek-deskto
   src/gui/reader/  the read-back half: session open flow, egui screen, sync UX,
                     playback controller, cpal+symphonia engine, position store
                     (sequencing itself lives in crates/reader — never here)
+android/           the Android player — hand-rolled Gradle + Compose + Media3
+                    (single activity; library ⇄ reader; MediaSessionService for
+                    background playback; UniFFI Kotlin checked in under app/…/ffi/)
+crates/ffi/        the kernel's foreign surface (taletrek-ffi): UniFFI wrappers over
+                    reader+synth default features — openBook/readSegment/TrekPlayer;
+                    zero logic; Kotlin now, Swift in effort 5
 .github/workflows/ ci.yml (gates) + release.yml (tag v* → per-target release
                     artifacts — see docs/releasing.md)
 crates/parse/      the ingest core: format detect + per-format parsers + M4 clean
@@ -116,7 +126,7 @@ Full detail lives in [`docs/gotchas.md`](docs/gotchas.md) — **read the relevan
 
 Open opencode in this repo and say, e.g.:
 
-> "Current effort is `android-app` — read `docs/specs/android-app/spec.md` + `todo.md`, then run `/build` for the next pending task. Direction: `docs/ROADMAP.md` (native track, ADR-0015)."
+> "Current effort is `ios-app` — read `docs/specs/ios-app/spec.md` + `todo.md`, then run `/build` for the next pending task. Direction: `docs/ROADMAP.md` (native track, ADR-0015)."
 
 ## Non-goals (product)
 
