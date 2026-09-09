@@ -3,6 +3,7 @@ package dev.l1br3.taletrek.playback
 import dev.l1br3.taletrek.ffi.FfiPlayerAction
 import dev.l1br3.taletrek.ffi.FfiPlayerEvent
 import dev.l1br3.taletrek.ffi.FfiPosition
+import dev.l1br3.taletrek.ffi.FfiStateSnapshot
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +38,7 @@ class PlayerBridge(
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val onPositionChanged: ((FfiPosition?) -> Unit)? = null,
+    private val onSnapshotChanged: ((FfiStateSnapshot) -> Unit)? = null,
 ) {
     /** The key of the outstanding load, until its ready/failure report. */
     private var pendingKey: String? = null
@@ -77,6 +79,7 @@ class PlayerBridge(
     private fun dispatch(event: FfiPlayerEvent) {
         execute(kernel.tick(event))
         reportPosition()
+        onSnapshotChanged?.invoke(kernel.snapshot())
     }
 
     /**

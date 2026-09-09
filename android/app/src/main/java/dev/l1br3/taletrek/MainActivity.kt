@@ -1,6 +1,5 @@
 package dev.l1br3.taletrek
 
-import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -16,34 +15,31 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.session.MediaController
-import androidx.media3.session.SessionToken
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import dev.l1br3.taletrek.data.BooksRepository
 import dev.l1br3.taletrek.data.PositionStore
-import dev.l1br3.taletrek.playback.PlaybackService
 import dev.l1br3.taletrek.ui.library.LibraryScreen
 import dev.l1br3.taletrek.ui.library.LibraryViewModel
+import dev.l1br3.taletrek.ui.reader.MediaControllerTransport
 import dev.l1br3.taletrek.ui.reader.ReaderScreen
 import dev.l1br3.taletrek.ui.reader.ReaderViewModel
-import dev.l1br3.taletrek.ui.reader.ServiceChapterSeeker
 import dev.l1br3.taletrek.ui.reader.openBookForReading
 import dev.l1br3.taletrek.ui.theme.TaletrekTheme
 
 class MainActivity : ComponentActivity() {
-    private var controllerFuture: java.util.concurrent.Future<MediaController>? = null
     private var navController: NavHostController? = null
     private var pendingImportUri by mutableStateOf<String?>(null)
 
     private lateinit var libraryViewModel: LibraryViewModel
     private lateinit var positionStore: PositionStore
+    private lateinit var transport: MediaControllerTransport
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        controllerFuture = mediaControllerFuture()
+        transport = MediaControllerTransport(this)
         // One store instance for the process — DataStore allows exactly
         // one active handle per file (see PositionStore).
         positionStore = PositionStore.fromContext(this)
@@ -57,9 +53,9 @@ class MainActivity : ComponentActivity() {
             TaletrekTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     AppNav(
-                        controller = controllerFuture!!.get(),
                         libraryViewModel = libraryViewModel,
                         positionStore = positionStore,
+                        transport = transport,
                         pendingImportUri = pendingImportUri,
                         onImportConsumed = { pendingImportUri = null },
                         onNavControllerReady = { navController = it },
@@ -88,16 +84,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        controllerFuture?.let { MediaController.releaseFuture(it) }
+        transport.release()
         super.onDestroy()
     }
-
-    private fun mediaControllerFuture() =
-        MediaController
-            .Builder(
-                this,
-                SessionToken(this, ComponentName(this, PlaybackService::class.java)),
-            ).buildAsync()
 
     private companion object {
         const val ROUTE_LIBRARY = "library"
@@ -107,9 +96,9 @@ class MainActivity : ComponentActivity() {
 @Suppress("FunctionName") // Compose factory convention — PascalCase composables
 @Composable
 fun AppNav(
-    controller: MediaController,
     libraryViewModel: LibraryViewModel,
     positionStore: PositionStore,
+    transport: MediaControllerTransport,
     pendingImportUri: String?,
     onImportConsumed: () -> Unit,
     onNavControllerReady: (NavHostController) -> Unit,
@@ -136,12 +125,11 @@ fun AppNav(
                                 val shelf = libraryViewModel.book(bookId ?: "")
                                 if (shelf != null) openBookForReading(context, shelf.path, positionStore) else null
                             },
-                            seeker = ServiceChapterSeeker(controller),
+                            transport = transport,
                         ),
                 )
             ReaderScreen(
                 viewModel = readerViewModel,
-                controller = controller,
                 onBack = { nav.popBackStack() },
             )
         }

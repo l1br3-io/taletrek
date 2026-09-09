@@ -57,6 +57,46 @@ class PlayerBridgeTest {
     }
 
     @Test
+    fun everyDispatchReportsThePostTickSnapshot() {
+        // The reader's highlight rides this channel — one push per
+        // kernel transition, carrying the state AFTER the tick.
+        val snaps = mutableListOf<FfiStateSnapshot>()
+        val reportingBridge =
+            PlayerBridge(
+                kernel = kernel,
+                segments = segments,
+                cache = cache,
+                port = port,
+                scope = CoroutineScope(UnconfinedTestDispatcher()),
+                ioDispatcher = UnconfinedTestDispatcher(),
+                onSnapshotChanged = { snaps += it },
+            )
+        kernel.script(load("k0", 0.0))
+        kernel.snap =
+            FfiStateSnapshot(
+                status = FfiPlayerStatus.PLAYING,
+                para =
+                    dev.l1br3.taletrek.ffi
+                        .FfiParagraphPos(1u, 2u),
+                offset = 0.0,
+                failures =
+                    dev.l1br3.taletrek.ffi
+                        .FfiFailureLog(0u, null),
+            )
+
+        reportingBridge.userPlay()
+
+        assertEquals(1, snaps.size)
+        assertEquals(FfiPlayerStatus.PLAYING, snaps.single().status)
+        assertEquals(
+            dev.l1br3.taletrek.ffi
+                .FfiParagraphPos(1u, 2u),
+            snaps.single().para,
+        )
+        runBlocking { reportingBridge.release() }
+    }
+
+    @Test
     fun playLoadsTheFirstSegmentAsAFileAtTheOrderedOffset() {
         kernel.script(load("k0", 0.0))
         bridge.userPlay()
@@ -217,12 +257,8 @@ class PlayerBridgeTest {
             next.forEach { actions.add(it) }
         }
 
-        override fun tick(event: FfiPlayerEvent): FfiPlayerAction {
-            events.add(event)
-            return actions.removeFirstOrNull() ?: FfiPlayerAction.None
-        }
-
-        override fun snapshot(): FfiStateSnapshot =
+        /** What the next snapshot() reads (tests script the spoken state). */
+        var snap: FfiStateSnapshot =
             FfiStateSnapshot(
                 status = FfiPlayerStatus.IDLE,
                 para = null,
@@ -231,6 +267,13 @@ class PlayerBridgeTest {
                     dev.l1br3.taletrek.ffi
                         .FfiFailureLog(0u, null),
             )
+
+        override fun tick(event: FfiPlayerEvent): FfiPlayerAction {
+            events.add(event)
+            return actions.removeFirstOrNull() ?: FfiPlayerAction.None
+        }
+
+        override fun snapshot(): FfiStateSnapshot = snap
 
         override fun position() = positionValue
 

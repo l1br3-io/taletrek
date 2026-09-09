@@ -1,16 +1,16 @@
 package dev.l1br3.taletrek.ui.reader
 
 import android.content.Context
-import android.os.Bundle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import androidx.media3.session.MediaController
 import dev.l1br3.taletrek.data.BookSession
 import dev.l1br3.taletrek.data.PositionStore
-import dev.l1br3.taletrek.playback.SessionCommands
+import dev.l1br3.taletrek.ffi.FfiParagraphPos
+import dev.l1br3.taletrek.ffi.FfiPlayerStatus
+import dev.l1br3.taletrek.playback.SessionState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +29,7 @@ data class ReaderChapter(
 /** What opening a book for reading yields (text data + where to start). */
 data class OpenedBook(
     val title: String,
+    val bookId: String,
     val audioPresent: Boolean,
     val path: String,
     val chapters: List<ReaderChapter>,
@@ -36,73 +37,179 @@ data class OpenedBook(
 )
 
 /**
- * A chapter jump forwarded to the session (the service's kernel, via
- * its SEEK command). Chapter starts are chapter facts, not paragraph
- * arithmetic — no next/prev logic ever lives on this side.
+ * The transport bar's enabled state, derived from the snapshot —
+ * bounds facts about *where playback is*, never next/prev decisions.
  */
-fun interface ChapterSeeker {
-    fun seekToChapterStart(chapter: UInt)
-}
+data class TransportUiState(
+    val canPlayPause: Boolean,
+    val playing: Boolean,
+    val canPrevParagraph: Boolean,
+    val canNextParagraph: Boolean,
+    val canPrevChapter: Boolean,
+    val canNextChapter: Boolean,
+)
 
 /** The reader screen's render state — Compose renders this, nothing else. */
 data class ReaderUiState(
     val loading: Boolean = true,
     val missing: Boolean = false,
     val bookTitle: String = "",
+    val bookId: String? = null,
     val path: String? = null,
     val audioPresent: Boolean = true,
     val chapters: List<ReaderChapter> = emptyList(),
     val renderedChapter: Int = 0,
+    val follow: Boolean = true,
+    val status: FfiPlayerStatus = FfiPlayerStatus.IDLE,
+    val active: FfiParagraphPos? = null,
+    val skipped: UInt = 0u,
+    val transport: TransportUiState =
+        TransportUiState(
+            canPlayPause = false,
+            playing = false,
+            canPrevParagraph = false,
+            canNextParagraph = false,
+            canPrevChapter = false,
+            canNextChapter = false,
+        ),
 )
 
 /**
- * The reading surface's state owner: opens the book (through 004's
- * session flow, so a saved position picks the starting chapter),
- * renders **per-chapter** (the desktop pattern — the whole book is
- * never one scroll), and forwards outline jumps. Static by design;
- * transport + highlight are 007.
+ * The reading surface's state owner. Opens the book (004's session
+ * flow picks the starting chapter from the saved position), renders
+ * per-chapter, and runs the sync loop: session snapshots in, transport
+ * forwards out. Sequencing never lives here — the kernel decides
+ * everything; the ViewModel maps, filters (this book's snapshots
+ * only), and applies the follow/defer scroll policy.
  */
 class ReaderViewModel(
     private val opener: suspend () -> OpenedBook?,
-    private val seeker: ChapterSeeker,
+    private val transport: ReaderTransport,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(ReaderUiState())
     val ui: StateFlow<ReaderUiState> = _ui.asStateFlow()
 
+    private var lastPara: FfiParagraphPos? = null
+
     init {
         viewModelScope.launch {
             val opened = opener()
-            _ui.update {
+            _ui.update { current ->
                 if (opened == null) {
-                    it.copy(loading = false, missing = true)
+                    current.copy(loading = false, missing = true)
                 } else {
-                    it.copy(
-                        loading = false,
-                        bookTitle = opened.title,
-                        path = opened.path,
-                        audioPresent = opened.audioPresent,
-                        chapters = opened.chapters,
-                        renderedChapter = opened.initialChapter,
-                    )
+                    current
+                        .copy(
+                            loading = false,
+                            bookTitle = opened.title,
+                            bookId = opened.bookId,
+                            path = opened.path,
+                            audioPresent = opened.audioPresent,
+                            chapters = opened.chapters,
+                            renderedChapter = opened.initialChapter,
+                        ).withDerivedTransport()
                 }
             }
+            if (opened != null) transport.openBook(opened.path)
         }
+        viewModelScope.launch {
+            transport.states.collect { state ->
+                if (state.bookId != null && state.bookId != _ui.value.bookId) return@collect
+                _ui.update { current -> apply(current, state).withDerivedTransport() }
+            }
+        }
+    }
+
+    /** A snapshot for this book, mapped into render state. */
+    private fun apply(
+        current: ReaderUiState,
+        state: SessionState,
+    ): ReaderUiState {
+        var next =
+            current.copy(
+                status = state.status,
+                active = state.para,
+                skipped = state.skipped,
+            )
+        // The follow policy (the task's locked rule, simpler than the
+        // desktop's re-entry rule): a user scroll defers auto-scroll;
+        // the NEXT paragraph re-arms it and the pane tracks the spoken
+        // chapter again.
+        if (state.para != null && state.para != lastPara) {
+            lastPara = state.para
+            next = next.copy(follow = true)
+            val chapter = state.para.chapter.toInt()
+            if (chapter in next.chapters.indices) {
+                next = next.copy(renderedChapter = chapter)
+            }
+        }
+        return next
+    }
+
+    /** Enabled-state derivation — bounds facts of the snapshot, nothing more. */
+    private fun ReaderUiState.withDerivedTransport(): ReaderUiState {
+        val para = active
+        val audio = audioPresent
+        val lastChapter = chapters.size - 1
+        val atBookStart = para != null && para.chapter == 0u && para.index == 0u
+        val atBookEnd =
+            para != null &&
+                para.chapter.toInt() == lastChapter &&
+                para.index.toInt() == chapters[lastChapter].paragraphs.size - 1
+        return copy(
+            transport =
+                TransportUiState(
+                    canPlayPause = audio,
+                    playing = status == FfiPlayerStatus.PLAYING,
+                    canPrevParagraph = audio && para != null && !atBookStart,
+                    canNextParagraph = audio && para != null && !atBookEnd,
+                    canPrevChapter = audio && para != null && para.chapter > 0u,
+                    canNextChapter = audio && para != null && para.chapter.toInt() < lastChapter,
+                ),
+        )
+    }
+
+    /** The user scrolled by hand — defer auto-scroll until the next paragraph. */
+    fun onUserScrolled() {
+        _ui.update { it.copy(follow = false) }
+    }
+
+    /**
+     * Click-to-seek: one SeekToParagraph forward — the kernel's own
+     * semantics do the rest (idle starts playing there, paused
+     * re-anchors paused, playing jumps).
+     */
+    fun onParagraphTapped(index: Int) {
+        transport.seekToParagraph(_ui.value.renderedChapter.toUInt(), index.toUInt())
+        _ui.update { it.copy(follow = true) }
     }
 
     /** Outline selection: seek the session, switch the rendered chapter. */
     fun jumpToChapter(ordinal: Int) {
         if (ordinal !in _ui.value.chapters.indices) return
-        seeker.seekToChapterStart(ordinal.toUInt())
-        _ui.update { it.copy(renderedChapter = ordinal) }
+        transport.seekToParagraph(ordinal.toUInt(), 0u)
+        _ui.update { it.copy(renderedChapter = ordinal, follow = true) }
     }
+
+    fun play() = transport.play()
+
+    fun pause() = transport.pause()
+
+    fun nextParagraph() = transport.nextParagraph()
+
+    fun prevParagraph() = transport.prevParagraph()
+
+    fun nextChapter() = transport.nextChapter()
+
+    fun prevChapter() = transport.prevChapter()
 
     companion object {
         fun factory(
             opener: suspend () -> OpenedBook?,
-            seeker: ChapterSeeker,
+            transport: ReaderTransport,
         ): ViewModelProvider.Factory =
             viewModelFactory {
-                initializer { ReaderViewModel(opener, seeker) }
+                initializer { ReaderViewModel(opener, transport) }
             }
     }
 }
@@ -131,6 +238,7 @@ suspend fun openBookForReading(
             val opened =
                 OpenedBook(
                     title = session.book.title,
+                    bookId = session.book.bookId,
                     audioPresent = session.book.audioPresent,
                     path = path,
                     chapters =
@@ -146,18 +254,3 @@ suspend fun openBookForReading(
             opened
         }.getOrNull()
     }
-
-/** Production [ChapterSeeker]: the service's SEEK command over the controller. */
-class ServiceChapterSeeker(
-    private val controller: MediaController,
-) : ChapterSeeker {
-    override fun seekToChapterStart(chapter: UInt) {
-        controller.sendCustomCommand(
-            SessionCommands.SEEK_PARAGRAPH,
-            Bundle().apply {
-                putLong(SessionCommands.EXTRA_CHAPTER, chapter.toLong())
-                putLong(SessionCommands.EXTRA_INDEX, 0L)
-            },
-        )
-    }
-}

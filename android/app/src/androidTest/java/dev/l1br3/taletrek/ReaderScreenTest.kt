@@ -1,6 +1,7 @@
 package dev.l1br3.taletrek
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -53,6 +54,17 @@ class ReaderScreenTest {
         rule.waitUntil(TIMEOUT_MS) {
             rule.onAllNodesWithText("Hello world.", substring = true).fetchSemanticsNodes().isNotEmpty()
         }
+    }
+
+    @Test
+    fun aTextOnlyBundleRendersADisabledTransportWithTheHint() {
+        openSampleBook()
+
+        rule
+            .onNodeWithText("Text-only bundle — no audio to play. Convert it on the desktop to listen.", substring = true)
+            .assertIsDisplayed()
+        rule.onNodeWithContentDescription("Play").assertIsNotEnabled()
+        rule.onNodeWithContentDescription("Next paragraph").assertIsNotEnabled()
     }
 
     @Test

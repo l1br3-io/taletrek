@@ -199,6 +199,9 @@ class PlaybackService : MediaSessionService() {
                             port = exoPort,
                             scope = serviceScope,
                             onPositionChanged = { pos -> persist(session.book.bookId, pos) },
+                            onSnapshotChanged = { snap ->
+                                broadcastSnapshot(session.book.bookId, session.book.audioPresent, snap)
+                            },
                         ).also { exoPort.attach(it) }
                     openBookId = session.book.bookId
                     openAudioPresent = session.book.audioPresent
@@ -208,6 +211,24 @@ class PlaybackService : MediaSessionService() {
                 }
         }
         return immediateResult
+    }
+
+    /**
+     * One kernel transition, pushed to every connected controller —
+     * the reader's highlight + transport ride this (the T3 poll's
+     * replacement).
+     */
+    private fun broadcastSnapshot(
+        bookId: String,
+        audioPresent: Boolean,
+        snap: dev.l1br3.taletrek.ffi.FfiStateSnapshot,
+    ) {
+        runCatching {
+            mediaSession.broadcastCustomCommand(
+                SessionCommands.STATE_BROADCAST,
+                snapshotBundle(bookId, audioPresent, snap),
+            )
+        }
     }
 
     /** Persist a position change (fire-and-forget on the store's IO scope). */
@@ -232,8 +253,15 @@ class PlaybackService : MediaSessionService() {
         val current = bridge
         val bookId = openBookId
         if (current == null || bookId == null) return SessionCommands.emptyStateBundle()
-        val snap = current.snapshot()
-        return Bundle().apply {
+        return snapshotBundle(bookId, openAudioPresent, current.snapshot())
+    }
+
+    private fun snapshotBundle(
+        bookId: String,
+        audioPresent: Boolean,
+        snap: dev.l1br3.taletrek.ffi.FfiStateSnapshot,
+    ): Bundle =
+        Bundle().apply {
             putString(
                 SessionCommands.STATE_STATUS,
                 when (snap.status) {
@@ -251,8 +279,8 @@ class PlaybackService : MediaSessionService() {
             }
             putDouble(SessionCommands.STATE_OFFSET, snap.offset)
             putLong(SessionCommands.STATE_SKIPPED, snap.failures.skipped.toLong())
+            snap.failures.lastError?.let { putString(SessionCommands.STATE_LAST_ERROR, it) }
             putString(SessionCommands.STATE_BOOK_ID, bookId)
-            putBoolean(SessionCommands.STATE_AUDIO_PRESENT, openAudioPresent)
+            putBoolean(SessionCommands.STATE_AUDIO_PRESENT, audioPresent)
         }
-    }
 }
