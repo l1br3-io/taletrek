@@ -95,3 +95,56 @@ jobs:
 
       - name: Run #[ignore]d integration tests
         run: cargo test --workspace -- --ignored --nocapture
+
+  # Android player app: kernel cross-build (.so via cargo-ndk) + Gradle
+  # assemble + JVM unit tests + ktlint. NO EMULATOR by design — the
+  # instrumented suites need real devices (`just android-instrumented`
+  # runs locally on hardware; see docs/developing.md § Android).
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.0"
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      # Runner images ship an SDK, but the packages are pinned explicitly
+      # for reproducibility (docs/developing.md § Android pins; NDK r28c is
+      # also AGP 9's default). ANDROID_HOME is preset on the runner image.
+      - name: Install pinned Android SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platform-tools" "platforms;android-37" "build-tools;36.0.0" "ndk;28.2.13676358" > /dev/null
+
+      # `just` ships on the ubuntu runner image; cargo-ndk is pinned via
+      # --locked at the version the dev machines use (recorded in the
+      # task-009 Outcome).
+      - name: Install cargo-ndk (pinned)
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Cross-build the kernel (.so for both ABIs → jniLibs)
+        run: just android-kernel
+
+      - name: Assemble debug APK
+        run: android/gradlew --project-dir android assembleDebug
+
+      - name: JVM unit tests + ktlint
+        run: android/gradlew --project-dir android testDebugUnitTest ktlintCheck
+
+      # Bindings drift guard: regenerate the checked-in UniFFI Kotlin and
+      # fail if it differs — cheap insurance for the checked-in-bindings
+      # decision (the uniffi CLI version MUST match the crate dep exactly;
+      # API checksums are verified at library load).
+      - name: Bindings drift guard
+        run: |
+          cargo install uniffi --features cli --version 0.32.0 --locked
+          just android-bindings
+          git diff --exit-code -- android/app/src/main/java/dev/l1br3/taletrek/ffi/
