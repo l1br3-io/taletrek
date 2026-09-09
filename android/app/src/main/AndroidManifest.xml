@@ -14,10 +14,24 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Import-from-open: a file manager's "Open with" for bundles.
+                 GOTCHA: pathPattern only matches the URI's path — many
+                 content providers hand out display-name-less tree URIs,
+                 so this filter catches the well-behaved case; the picker
+                 remains the always-works path. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:pathPattern=".*\\.taletrek" />
             </intent-filter>
         </activity>
 
