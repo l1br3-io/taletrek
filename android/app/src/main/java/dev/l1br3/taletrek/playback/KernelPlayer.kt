@@ -29,6 +29,12 @@ class TrekKernelPlayer(
 ) : KernelPlayer {
     constructor(book: FfiBook) : this(TrekPlayer(book))
 
+    /** A restored session: paused at a validated position, fresh at a stray one. */
+    constructor(
+        book: FfiBook,
+        position: FfiPosition,
+    ) : this(TrekPlayer.restore(book, position))
+
     override fun tick(event: FfiPlayerEvent): FfiPlayerAction = player.tick(event)
 
     override fun snapshot(): FfiStateSnapshot = player.stateSnapshot()

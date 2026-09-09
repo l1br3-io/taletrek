@@ -165,6 +165,37 @@ class PlayerBridgeTest {
         assertTrue(kernel.closed)
     }
 
+    @Test
+    fun positionChangesAreReportedOnceEach() {
+        val reported = mutableListOf<dev.l1br3.taletrek.ffi.FfiPosition?>()
+        val persisting =
+            PlayerBridge(
+                kernel = kernel,
+                segments = segments,
+                cache = cache,
+                port = port,
+                scope = CoroutineScope(UnconfinedTestDispatcher()),
+                ioDispatcher = UnconfinedTestDispatcher(),
+                onPositionChanged = { reported.add(it) },
+            )
+        kernel.script(load("k0", 0.0), FfiPlayerAction.Stop)
+
+        persisting.userPlay() // dispatch: position still null — no report
+        kernel.positionValue =
+            dev.l1br3.taletrek.ffi
+                .FfiPosition(0u, 1u, 0.0)
+        persisting.userPause() // position changed — reported once
+        persisting.userPause() // unchanged — deduped
+
+        assertEquals(
+            listOf(
+                dev.l1br3.taletrek.ffi
+                    .FfiPosition(0u, 1u, 0.0),
+            ),
+            reported,
+        )
+    }
+
     // --- fakes -------------------------------------------------------------
 
     private companion object {
@@ -180,6 +211,7 @@ class PlayerBridgeTest {
         private val actions = ArrayDeque<FfiPlayerAction>()
         val events = mutableListOf<FfiPlayerEvent>()
         var closed = false
+        var positionValue: dev.l1br3.taletrek.ffi.FfiPosition? = null
 
         fun script(vararg next: FfiPlayerAction) {
             next.forEach { actions.add(it) }
@@ -200,7 +232,7 @@ class PlayerBridgeTest {
                         .FfiFailureLog(0u, null),
             )
 
-        override fun position() = null
+        override fun position() = positionValue
 
         override fun close() {
             closed = true

@@ -2,6 +2,7 @@ package dev.l1br3.taletrek.playback
 
 import dev.l1br3.taletrek.ffi.FfiPlayerAction
 import dev.l1br3.taletrek.ffi.FfiPlayerEvent
+import dev.l1br3.taletrek.ffi.FfiPosition
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,12 +36,16 @@ class PlayerBridge(
     private val port: AudioPort,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val onPositionChanged: ((FfiPosition?) -> Unit)? = null,
 ) {
     /** The key of the outstanding load, until its ready/failure report. */
     private var pendingKey: String? = null
 
     /** The key the platform was last told to load (drains are tagged with it). */
     private var lastLoadedKey: String? = null
+
+    /** The last position reported to [onPositionChanged] (write dedup). */
+    private var lastReportedPosition: FfiPosition? = null
 
     private var loadJob: Job? = null
 
@@ -71,6 +76,22 @@ class PlayerBridge(
     /** One transition through the machine, then execute its order. */
     private fun dispatch(event: FfiPlayerEvent) {
         execute(kernel.tick(event))
+        reportPosition()
+    }
+
+    /**
+     * The save cadence (the desktop's paragraph-gate, mobile-shaped):
+     * report whenever the kernel's durable position *changes* — which
+     * happens only on transport events (the kernel's offset moves on
+     * scrubs and seeks, not audio time), so writes ride paragraph
+     * advances, pauses, and the restore, never a frame loop.
+     */
+    private fun reportPosition() {
+        val listener = onPositionChanged ?: return
+        val pos = kernel.position()
+        if (pos == lastReportedPosition) return
+        lastReportedPosition = pos
+        listener(pos)
     }
 
     // --- platform callbacks (the exo adapter calls these) ---------------

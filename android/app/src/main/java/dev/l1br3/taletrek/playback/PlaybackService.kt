@@ -15,8 +15,10 @@ import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import dev.l1br3.taletrek.data.BookSession
+import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.ffi.FfiPlayerStatus
-import dev.l1br3.taletrek.ffi.openBook
+import dev.l1br3.taletrek.ffi.FfiPosition
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -45,8 +47,11 @@ class PlaybackService : MediaSessionService() {
     private var openBookId: String? = null
     private var openAudioPresent = false
 
+    private lateinit var positionStore: PositionStore
+
     override fun onCreate() {
         super.onCreate()
+        positionStore = PositionStore.fromContext(this)
         exo =
             ExoPlayer
                 .Builder(this)
@@ -78,6 +83,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         mediaSession.release()
+        persistOnce() // best-effort final write (transport events did the rest)
         bridge?.release()
         bridge = null
         exo.release()
@@ -175,25 +181,44 @@ class PlaybackService : MediaSessionService() {
         // onCustomCommand runs on the main thread; kernel reads are IO.
         check(Looper.myLooper() == Looper.getMainLooper())
         serviceScope.launch {
-            runCatching { withContext(Dispatchers.IO) { openBook(path) } }
-                .onSuccess { book ->
+            runCatching { withContext(Dispatchers.IO) { BookSession.open(this@PlaybackService, path, positionStore) } }
+                .onSuccess { session ->
                     bridge?.release()
                     bridge =
                         PlayerBridge(
-                            kernel = TrekKernelPlayer(book),
+                            kernel = session.kernel,
                             segments = FileSegmentSource(path),
                             cache = SegmentCache(File(cacheDir, "segments")),
                             port = exoPort,
                             scope = serviceScope,
+                            onPositionChanged = { pos -> persist(session.book.bookId, pos) },
                         ).also { exoPort.attach(it) }
-                    openBookId = book.bookId
-                    openAudioPresent = book.audioPresent
+                    openBookId = session.book.bookId
+                    openAudioPresent = session.book.audioPresent
                 }.onFailure {
                     openBookId = null
                     openAudioPresent = false
                 }
         }
         return immediateResult
+    }
+
+    /** Persist a position change (fire-and-forget on the store's IO scope). */
+    private fun persist(
+        bookId: String,
+        position: FfiPosition?,
+    ) {
+        if (position == null) return // resting/finished books keep their last save
+        serviceScope.launch { positionStore.save(bookId, position) }
+    }
+
+    /** The onDestroy best-effort write — synchronous, bounded, last word. */
+    private fun persistOnce() {
+        val bookId = openBookId ?: return
+        val position = bridge?.position() ?: return
+        runCatching {
+            kotlinx.coroutines.runBlocking { positionStore.save(bookId, position) }
+        }
     }
 
     private fun stateBundle(): Bundle {

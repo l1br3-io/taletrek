@@ -79,6 +79,7 @@ dependencies {
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
     implementation(libs.coroutines.android)
+    implementation(libs.datastore.preferences)
     // UniFFI's generated Kotlin is JNA-based.
     implementation(libs.jna) {
         artifact {
