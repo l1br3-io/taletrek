@@ -8,6 +8,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -115,12 +117,23 @@ fun LibraryScreen(
                 }
             }
             ui.books.isEmpty() -> {
-                Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     Text(
-                        "No books yet.\nImport a .taletrek bundle to start listening.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        "No books yet.",
+                        style = MaterialTheme.typography.titleLarge,
                     )
+                    Text(
+                        "Import a .taletrek bundle to start listening.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(onClick = { pickDocument.launch(arrayOf("*/*")) }) {
+                        Text("Import a bundle")
+                    }
                 }
             }
             else -> {

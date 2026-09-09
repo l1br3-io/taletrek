@@ -1,6 +1,7 @@
 package dev.l1br3.taletrek.playback
 
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Looper
 import androidx.media3.common.AudioAttributes
@@ -8,6 +9,7 @@ import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -15,6 +17,7 @@ import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import dev.l1br3.taletrek.R
 import dev.l1br3.taletrek.data.BookSession
 import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.ffi.FfiPlayerStatus
@@ -39,6 +42,7 @@ class PlaybackService : MediaSessionService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private lateinit var exo: ExoPlayer
+    private val audioManager: AudioManager by lazy { getSystemService(AudioManager::class.java) }
     private lateinit var exoPort: ExoPlayerPort
     private lateinit var mediaSession: MediaSession
 
@@ -69,7 +73,27 @@ class PlaybackService : MediaSessionService() {
             MediaSession
                 .Builder(this, KernelForwardingPlayer(exo))
                 .setCallback(SessionCallback())
-                .build()
+                // The notification's chapter actions (spec: chapter
+                // granularity, no seekbar) — the default provider also
+                // keeps its own play/pause. The player commands cross the
+                // forwarding player into the kernel like every other
+                // transport surface.
+                .setCustomLayout(
+                    listOf(
+                        CommandButton
+                            .Builder()
+                            .setDisplayName("Previous chapter")
+                            .setIconResId(R.drawable.ic_chapter_previous)
+                            .setPlayerCommand(Player.COMMAND_SEEK_TO_PREVIOUS)
+                            .build(),
+                        CommandButton
+                            .Builder()
+                            .setDisplayName("Next chapter")
+                            .setIconResId(R.drawable.ic_chapter_next)
+                            .setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT)
+                            .build(),
+                    ),
+                ).build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
@@ -82,6 +106,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        if (focusHeld) abandonFocus()
         mediaSession.release()
         persistOnce() // best-effort final write (transport events did the rest)
         bridge?.release()
@@ -216,7 +241,8 @@ class PlaybackService : MediaSessionService() {
     /**
      * One kernel transition, pushed to every connected controller —
      * the reader's highlight + transport ride this (the T3 poll's
-     * replacement).
+     * replacement). Also the single point where audio focus tracks
+     * playback state (playing holds it; anything else releases it).
      */
     private fun broadcastSnapshot(
         bookId: String,
@@ -229,6 +255,42 @@ class PlaybackService : MediaSessionService() {
                 snapshotBundle(bookId, audioPresent, snap),
             )
         }
+        syncAudioFocus(snap.status)
+    }
+
+    // --- audio focus (the T3 GOTCHA's promised hardening) ----------------
+
+    private val focusListener =
+        AudioManager.OnAudioFocusChangeListener { change ->
+            when (AudioFocusPolicy.onFocusChange(change)) {
+                AudioFocusPolicy.Response.Pause -> bridge?.userPause()
+                AudioFocusPolicy.Response.Duck -> exo.volume = DUCK_VOLUME
+                AudioFocusPolicy.Response.RestoreVolume -> exo.volume = FULL_VOLUME
+                null -> Unit
+            }
+        }
+
+    private var focusHeld = false
+
+    private fun syncAudioFocus(status: FfiPlayerStatus) {
+        if (status == FfiPlayerStatus.PLAYING && !focusHeld) {
+            focusHeld =
+                audioManager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN) ==
+                AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        } else if (status != FfiPlayerStatus.PLAYING && focusHeld) {
+            abandonFocus()
+        }
+    }
+
+    private fun abandonFocus() {
+        audioManager.abandonAudioFocus(focusListener)
+        focusHeld = false
+        exo.volume = FULL_VOLUME
+    }
+
+    private companion object {
+        const val FULL_VOLUME = 1f
+        const val DUCK_VOLUME = 0.2f
     }
 
     /** Persist a position change (fire-and-forget on the store's IO scope). */

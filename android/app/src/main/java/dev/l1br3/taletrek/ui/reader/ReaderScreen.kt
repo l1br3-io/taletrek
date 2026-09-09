@@ -128,7 +128,7 @@ fun ReaderScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text("This book isn't in the library anymore.", style = MaterialTheme.typography.bodyLarge)
+                    Text("This book couldn't be opened — it may be damaged or removed.", style = MaterialTheme.typography.bodyLarge)
                     OutlinedButton(onClick = onBack) { Text("Back to library") }
                 }
             }
@@ -142,6 +142,17 @@ fun ReaderScreen(
                         listState = listState,
                         modifier = Modifier.weight(1f),
                     )
+                    // The persistent skip surface (the snackbar is the
+                    // moment; this is the state): playback tolerates
+                    // unreadable audio and says so.
+                    if (ui.skipped > 0u) {
+                        Text(
+                            "${ui.skipped} segment${if (ui.skipped == 1u) "" else "s"} skipped — continuing",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 4.dp),
+                        )
+                    }
                     TransportBar(
                         state = ui.transport,
                         onPlayPause = if (ui.transport.playing) viewModel::pause else viewModel::play,
