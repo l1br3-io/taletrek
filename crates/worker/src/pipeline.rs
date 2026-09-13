@@ -66,6 +66,7 @@ pub enum PipelineVariant {
 /// Everything a job needs, supplied by the host. Paths are explicit — the
 /// job never calls `default_cache_dir()` (Android's `dirs` resolves nothing
 /// over JNI; the host always knows its dirs).
+#[derive(Clone)]
 pub struct PipelineSpec {
     /// Raw source-document bytes (the host has already copied its content
     /// URI / file into memory or a cache file it reads itself).
@@ -310,6 +311,27 @@ impl PipelineJob {
         reporter: Option<&dyn PipelineReporter>,
     ) -> Result<PipelineOutcome, PipelineError> {
         let Self { spec, flag } = self;
+        Self::run_parts(spec, flag, source, reporter)
+    }
+
+    /// [`PipelineJob::run`] for hosts that hold the job in an `Arc` (the
+    /// FFI handle pattern: the worker thread runs a spec clone while the
+    /// host keeps cancel access). The cancel flag is shared, so
+    /// [`PipelineJob::cancel`] on the original cancels this run.
+    pub fn run_shared(
+        &self,
+        source: &dyn VoiceSource,
+        reporter: Option<&dyn PipelineReporter>,
+    ) -> Result<PipelineOutcome, PipelineError> {
+        Self::run_parts(self.spec.clone(), Arc::clone(&self.flag), source, reporter)
+    }
+
+    fn run_parts(
+        spec: PipelineSpec,
+        flag: CancelFlag,
+        source: &dyn VoiceSource,
+        reporter: Option<&dyn PipelineReporter>,
+    ) -> Result<PipelineOutcome, PipelineError> {
         let sink = reporter.map(ReporterAsSink);
         let sink_ref: Option<&dyn ProgressSink> = sink.as_ref().map(|s| s as &dyn ProgressSink);
         let emit = |event: PipelineEvent| {

@@ -71,6 +71,7 @@ pub use stamp::{
 };
 pub use synth_job::{synth_all_paragraphs, SynthJobError};
 pub use voices::{
-    default_cache_dir, find_curated, resolve_voice, ResolveError, ResolveOpts, UreqVoiceSource,
-    Voice, VoiceQuality, VoiceSource, CURATED_VOICES, DEFAULT_VOICE_ID, HF_BASE,
+    default_cache_dir, ensure_espeak_data, find_curated, resolve_voice, EspeakError, ResolveError,
+    ResolveOpts, UreqVoiceSource, Voice, VoiceQuality, VoiceSource, CURATED_VOICES,
+    DEFAULT_VOICE_ID, ESPEAK_ZIP_URL, HF_BASE,
 };

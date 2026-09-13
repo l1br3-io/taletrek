@@ -21,6 +21,7 @@ ureq = "3"
 dirs = "6"
 thiserror = "2"
 rayon = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 taletrek-synth = { path = "../synth" }
 taletrek-parse = { path = "../parse" }
 

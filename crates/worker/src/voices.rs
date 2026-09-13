@@ -25,6 +25,18 @@ use thiserror::Error;
 
 use crate::ProgressSink;
 
+/// The standalone espeak-ng-data zip (see [`ensure_espeak_data`]): k2-fsa's
+/// `tts-models` release ships the phonemizer data sherpa's piper voices
+/// need, without the platform-specific piper tarball the desktop seeds from
+/// (~9 MB, 355 entries, flat `<lang>_dict` + `lang/**`).
+pub const ESPEAK_ZIP_URL: &str =
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/espeak-ng-data.zip";
+
+/// Approximate decompressed-ish size of the espeak zip (bytes on the wire
+/// ~9.0 MB); the download sanity band accepts [25%, 400%] of this so a
+/// redirect page or truncation fails loudly without breaking on drift.
+const ESPEAK_ZIP_SIZE: u64 = 9_037_020;
+
 /// The HuggingFace base the SPA downloads Piper voices from. Verbatim copy of
 /// `web/src/lib/tts/vendor/piper/models.ts`'s `HF_BASE` so URLs match exactly.
 pub const HF_BASE: &str = "https://huggingface.co/diffusionstudio/piper-voices/resolve/main";
@@ -202,6 +214,116 @@ impl ResolveOpts {
             cache_dir,
         }
     }
+}
+
+/// The platform voice cache dir: `$XDG_CACHE_HOME/taletrek/voices/` on Linux
+/// (`~/.cache/taletrek/voices/`), platform equivalent elsewhere. `None` when
+/// the platform exposes no discoverable cache home (no `$HOME`).
+/// All the ways acquiring espeak-ng-data can fail.
+#[derive(Debug, Error)]
+pub enum EspeakError {
+    /// The zip download failed (network, TLS, status).
+    #[error("downloading {url}: {message}")]
+    Download {
+        /// The archive URL that failed.
+        url: String,
+        /// The underlying failure, stringified.
+        message: String,
+    },
+    /// The downloaded body failed the size sanity band — almost certainly
+    /// an error page or truncated transfer, not the data.
+    #[error("espeak zip size {got} outside the expected band around {expected}")]
+    SizeBand {
+        /// The band's center (approximate catalog size).
+        expected: u64,
+        /// What actually arrived.
+        got: u64,
+    },
+    /// The zip is corrupt or missing the expected layout.
+    #[error("espeak archive invalid: {detail}")]
+    Corrupt {
+        /// What failed — unzip error or missing marker file.
+        detail: String,
+    },
+    /// A filesystem failure (staging dir, rename, marker write).
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Ensure the espeak-ng-data phonemizer data exists at
+/// `<data_root>/espeak-ng-data` and return that dir — the dir sherpa's
+/// piper voices need at runner construction (`with_espeak_data`).
+///
+/// Idempotent: an existing `en_dict` marker file short-circuits before any
+/// network. Otherwise fetch [`ESPEAK_ZIP_URL`] through `source` (injectable
+/// — production `UreqVoiceSource`, tests stubs), verify the size band, and
+/// extract into a uniquely-named **staging dir** then rename it into place —
+/// a cancelled/interrupted extraction never poisons the marker. The desktop
+/// seeds this data by copying it out of the piper tarball; hosts without a
+/// piper (Android, iOS) call this instead.
+///
+/// GOTCHA: the release tag is rolling — content can drift under the same
+/// URL. The size band catches gross breakage; a content-addressed pin is
+/// the escalation if it ever bites.
+pub fn ensure_espeak_data(
+    data_root: &Path,
+    source: &dyn VoiceSource,
+    progress: Option<&dyn ProgressSink>,
+) -> Result<PathBuf, EspeakError> {
+    let dest = data_root.join("espeak-ng-data");
+    if dest.join("en_dict").is_file() {
+        return Ok(dest);
+    }
+    fs::create_dir_all(data_root)?;
+    let zip_bytes = source
+        .fetch_with_progress(ESPEAK_ZIP_URL, &mut |done, total| {
+            if let Some(p) = progress {
+                p.download_step(done, total);
+            }
+        })
+        .map_err(|e| EspeakError::Download {
+            url: ESPEAK_ZIP_URL.to_string(),
+            message: e.to_string(),
+        })?;
+    let got = zip_bytes.len() as u64;
+    if got * 4 < ESPEAK_ZIP_SIZE || got > ESPEAK_ZIP_SIZE.saturating_mul(4) {
+        return Err(EspeakError::SizeBand {
+            expected: ESPEAK_ZIP_SIZE,
+            got,
+        });
+    }
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let staging = data_root.join(format!(
+        "espeak-ng-data.staging.{}.{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed),
+    ));
+    let result = extract_espeak_zip(&zip_bytes, &staging, &dest);
+    let _ = fs::remove_dir_all(&staging);
+    result.map_err(|detail| EspeakError::Corrupt { detail })?;
+    if !dest.join("en_dict").is_file() {
+        return Err(EspeakError::Corrupt {
+            detail: "archive extracted without espeak-ng-data/en_dict".to_string(),
+        });
+    }
+    Ok(dest)
+}
+
+/// Unzip `bytes` into `staging`, then move `staging/espeak-ng-data` to
+/// `dest`. Errors stringify — zip internals don't cross the API.
+fn extract_espeak_zip(bytes: &[u8], staging: &Path, dest: &Path) -> Result<(), String> {
+    let inner = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(inner).map_err(|e| e.to_string())?;
+    archive.extract(staging).map_err(|e| e.to_string())?;
+    let extracted = staging.join("espeak-ng-data");
+    if !extracted.is_dir() {
+        return Err("archive has no top-level espeak-ng-data/ dir".to_string());
+    }
+    if dest.exists() {
+        // A prior partial attempt without the marker — replace wholesale.
+        fs::remove_dir_all(dest).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&extracted, dest).map_err(|e| e.to_string())
 }
 
 /// The platform voice cache dir: `$XDG_CACHE_HOME/taletrek/voices/` on Linux
@@ -505,6 +627,112 @@ fn write_atomically(dest: &Path, bytes: &[u8]) -> Result<(), ResolveError> {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// Build a minimal in-memory espeak-ng-data zip: top-level
+    /// `espeak-ng-data/` with the `en_dict` marker + padding entries so the
+    /// body passes the download size band. Padding is LCG-random (zeros
+    /// compress ~1000:1 — the band checks the wire size).
+    fn espeak_zip_body() -> Vec<u8> {
+        use std::io::Write as _;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+            zip.start_file("espeak-ng-data/en_dict", opts).unwrap();
+            zip.write_all(b"marker").unwrap();
+            let mut state = 0x2545_F491_4F6C_DD1Du64;
+            for i in 0..96 {
+                zip.start_file(format!("espeak-ng-data/lang/x/{i}"), opts)
+                    .unwrap();
+                let mut chunk = vec![0u8; 32 * 1024];
+                for b in &mut chunk {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    *b = (state >> 33) as u8;
+                }
+                zip.write_all(&chunk).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// Stub source serving the espeak zip body, recording calls.
+    #[derive(Default)]
+    struct ZipSource {
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl VoiceSource for ZipSource {
+        fn fetch_with_progress(
+            &self,
+            url: &str,
+            _progress: &mut dyn FnMut(u64, u64),
+        ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+            self.calls.lock().unwrap().push(url.to_string());
+            Ok(espeak_zip_body())
+        }
+    }
+
+    #[test]
+    fn ensure_espeak_data_extracts_marks_and_skips_refetch() {
+        let root = tempfile::tempdir().unwrap();
+        let source = ZipSource::default();
+        let first = ensure_espeak_data(root.path(), &source, None).expect("first fetch");
+        assert!(first.join("en_dict").is_file());
+        assert_eq!(first, root.path().join("espeak-ng-data"));
+        assert_eq!(source.calls.lock().unwrap().len(), 1);
+
+        let second = ensure_espeak_data(root.path(), &source, None).expect("cache hit");
+        assert_eq!(first, second);
+        assert_eq!(
+            source.calls.lock().unwrap().len(),
+            1,
+            "marker short-circuits before network"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(leftovers, ["espeak-ng-data"], "staging dirs cleaned");
+    }
+
+    #[test]
+    fn ensure_espeak_data_rejects_out_of_band_bodies() {
+        let root = tempfile::tempdir().unwrap();
+        #[derive(Default)]
+        struct Tiny;
+        impl VoiceSource for Tiny {
+            fn fetch_with_progress(
+                &self,
+                _url: &str,
+                _progress: &mut dyn FnMut(u64, u64),
+            ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+                Ok(b"<html>Error</html>".to_vec())
+            }
+        }
+        let err = ensure_espeak_data(root.path(), &Tiny, None).unwrap_err();
+        assert!(matches!(err, EspeakError::SizeBand { .. }));
+        assert!(
+            !root.path().join("espeak-ng-data").exists(),
+            "rejected body must not create the cache"
+        );
+    }
+
+    #[test]
+    fn ensure_espeak_data_replaces_a_markerless_partial() {
+        let root = tempfile::tempdir().unwrap();
+        // A stale extraction without the marker (e.g. killed mid-rename long
+        // ago) must not wedge the cache forever.
+        let stale = root.path().join("espeak-ng-data");
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("hy_dict"), b"partial").unwrap();
+        let first = ensure_espeak_data(root.path(), &ZipSource::default(), None)
+            .expect("replaces stale partial");
+        assert!(first.join("en_dict").is_file());
+        assert!(!first.join("hy_dict").exists());
+    }
 
     /// A [`VoiceSource`] stub that records every URL it was asked to fetch and
     /// returns the URL itself as the body, so tests can assert call order and

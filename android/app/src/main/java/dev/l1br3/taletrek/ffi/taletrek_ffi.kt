@@ -650,25 +650,47 @@ internal open class UniffiForeignFutureResultVoid(
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultVoid.UniffiByValue,)
 }
-internal interface UniffiCallbackInterfaceSpikeObserverMethod0 : com.sun.jna.Callback {
+internal interface UniffiCallbackInterfacePipelineObserverMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`event`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
-@Structure.FieldOrder("uniffiFree", "uniffiClone", "onEvent")
-internal open class UniffiVTableCallbackInterfaceSpikeObserver(
+internal interface UniffiCallbackInterfaceFfiVoiceObserverMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`bytesDone`: Long,`bytesTotal`: Long,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "onPipelineEvent")
+internal open class UniffiVTableCallbackInterfacePipelineObserver(
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
     @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
-    @JvmField internal var `onEvent`: UniffiCallbackInterfaceSpikeObserverMethod0? = null,
+    @JvmField internal var `onPipelineEvent`: UniffiCallbackInterfacePipelineObserverMethod0? = null,
 ) : Structure() {
     class UniffiByValue(
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
         `uniffiClone`: UniffiCallbackInterfaceClone? = null,
-        `onEvent`: UniffiCallbackInterfaceSpikeObserverMethod0? = null,
-    ): UniffiVTableCallbackInterfaceSpikeObserver(`uniffiFree`,`uniffiClone`,`onEvent`,), Structure.ByValue
+        `onPipelineEvent`: UniffiCallbackInterfacePipelineObserverMethod0? = null,
+    ): UniffiVTableCallbackInterfacePipelineObserver(`uniffiFree`,`uniffiClone`,`onPipelineEvent`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceSpikeObserver) {
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfacePipelineObserver) {
         `uniffiFree` = other.`uniffiFree`
         `uniffiClone` = other.`uniffiClone`
-        `onEvent` = other.`onEvent`
+        `onPipelineEvent` = other.`onPipelineEvent`
+    }
+
+}
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "onDownloadStep")
+internal open class UniffiVTableCallbackInterfaceFfiVoiceObserver(
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `onDownloadStep`: UniffiCallbackInterfaceFfiVoiceObserverMethod0? = null,
+) : Structure() {
+    class UniffiByValue(
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `onDownloadStep`: UniffiCallbackInterfaceFfiVoiceObserverMethod0? = null,
+    ): UniffiVTableCallbackInterfaceFfiVoiceObserver(`uniffiFree`,`uniffiClone`,`onDownloadStep`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFfiVoiceObserver) {
+        `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `onDownloadStep` = other.`onDownloadStep`
     }
 
 }
@@ -701,11 +723,21 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_position_storage_key(
     ): Int
-    external fun uniffi_taletrek_ffi_checksum_func_spike_download_voice(
+    external fun uniffi_taletrek_ffi_checksum_func_cached_voice_ids(
     ): Int
-    external fun uniffi_taletrek_ffi_checksum_func_spike_fetch_espeak(
+    external fun uniffi_taletrek_ffi_checksum_func_delete_cached_voice(
     ): Int
-    external fun uniffi_taletrek_ffi_checksum_func_spike_synth_paragraph(
+    external fun uniffi_taletrek_ffi_checksum_func_ffi_ensure_espeak(
+    ): Int
+    external fun uniffi_taletrek_ffi_checksum_func_ffi_resolve_voice(
+    ): Int
+    external fun uniffi_taletrek_ffi_checksum_func_voice_catalog(
+    ): Int
+    external fun uniffi_taletrek_ffi_checksum_method_pipelinehandle_cancel(
+    ): Int
+    external fun uniffi_taletrek_ffi_checksum_method_pipelinehandle_start(
+    ): Int
+    external fun uniffi_taletrek_ffi_checksum_method_pipelinehandle_state(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_method_trekplayer_position(
     ): Int
@@ -713,11 +745,15 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_taletrek_ffi_checksum_method_trekplayer_tick(
     ): Int
+    external fun uniffi_taletrek_ffi_checksum_constructor_pipelinehandle_new(
+    ): Int
     external fun uniffi_taletrek_ffi_checksum_constructor_trekplayer_new(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_constructor_trekplayer_restore(
     ): Int
-    external fun uniffi_taletrek_ffi_checksum_method_spikeobserver_on_event(
+    external fun uniffi_taletrek_ffi_checksum_method_pipelineobserver_on_pipeline_event(
+    ): Int
+    external fun uniffi_taletrek_ffi_checksum_method_ffivoiceobserver_on_download_step(
     ): Int
     external fun ffi_taletrek_ffi_uniffi_contract_version(
     ): Int
@@ -735,9 +771,22 @@ internal object UniffiLib {
 
     init {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "taletrek_ffi"))
-        uniffiCallbackInterfaceSpikeObserver.register(this)
+        uniffiCallbackInterfaceFfiVoiceObserver.register(this)
+        uniffiCallbackInterfacePipelineObserver.register(this)
         
     }
+    external fun uniffi_taletrek_ffi_fn_clone_pipelinehandle(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    external fun uniffi_taletrek_ffi_fn_free_pipelinehandle(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_taletrek_ffi_fn_constructor_pipelinehandle_new(`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    external fun uniffi_taletrek_ffi_fn_method_pipelinehandle_cancel(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_taletrek_ffi_fn_method_pipelinehandle_start(`ptr`: Long,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_taletrek_ffi_fn_method_pipelinehandle_state(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_clone_trekplayer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_taletrek_ffi_fn_free_trekplayer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -752,7 +801,9 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_method_trekplayer_tick(`ptr`: Long,`event`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_taletrek_ffi_fn_init_callback_vtable_spikeobserver(`vtable`: UniffiVTableCallbackInterfaceSpikeObserver,
+    external fun uniffi_taletrek_ffi_fn_init_callback_vtable_pipelineobserver(`vtable`: UniffiVTableCallbackInterfacePipelineObserver,
+    ): Unit
+    external fun uniffi_taletrek_ffi_fn_init_callback_vtable_ffivoiceobserver(`vtable`: UniffiVTableCallbackInterfaceFfiVoiceObserver,
     ): Unit
     external fun uniffi_taletrek_ffi_fn_func_open_book(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -760,11 +811,15 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_position_storage_key(`bookId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_taletrek_ffi_fn_func_spike_download_voice(`cacheDir`: RustBuffer.ByValue,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_taletrek_ffi_fn_func_cached_voice_ids(`cacheDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_taletrek_ffi_fn_func_spike_fetch_espeak(`dataRoot`: RustBuffer.ByValue,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_taletrek_ffi_fn_func_delete_cached_voice(`cacheDir`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_taletrek_ffi_fn_func_ffi_ensure_espeak(`dataRoot`: RustBuffer.ByValue,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_taletrek_ffi_fn_func_spike_synth_paragraph(`voiceModel`: RustBuffer.ByValue,`espeakDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_taletrek_ffi_fn_func_ffi_resolve_voice(`id`: RustBuffer.ByValue,`cacheDir`: RustBuffer.ByValue,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_taletrek_ffi_fn_func_voice_catalog(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_taletrek_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -894,13 +949,28 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_taletrek_ffi_checksum_func_position_storage_key() != 1146) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_taletrek_ffi_checksum_func_spike_download_voice() != 39293) {
+    if (lib.uniffi_taletrek_ffi_checksum_func_cached_voice_ids() != 41068) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_taletrek_ffi_checksum_func_spike_fetch_espeak() != 22025) {
+    if (lib.uniffi_taletrek_ffi_checksum_func_delete_cached_voice() != 5681) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_taletrek_ffi_checksum_func_spike_synth_paragraph() != 28930) {
+    if (lib.uniffi_taletrek_ffi_checksum_func_ffi_ensure_espeak() != 59522) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_func_ffi_resolve_voice() != 51584) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_func_voice_catalog() != 47724) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_method_pipelinehandle_cancel() != 47501) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_method_pipelinehandle_start() != 60633) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_method_pipelinehandle_state() != 147) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_method_trekplayer_position() != 36936) {
@@ -912,13 +982,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_taletrek_ffi_checksum_method_trekplayer_tick() != 56638) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_taletrek_ffi_checksum_constructor_pipelinehandle_new() != 28451) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_taletrek_ffi_checksum_constructor_trekplayer_new() != 5926) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_constructor_trekplayer_restore() != 40300) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_taletrek_ffi_checksum_method_spikeobserver_on_event() != 50312) {
+    if (lib.uniffi_taletrek_ffi_checksum_method_pipelineobserver_on_pipeline_event() != 1710) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_method_ffivoiceobserver_on_download_step() != 25368) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1274,6 +1350,339 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
     override fun write(value: ByteArray, buf: ByteBuffer) {
         buf.putInt(value.size)
         buf.put(value)
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * The convert job as an object: `new(config)` → `start(observer)` →
+ * events → terminal `state()`. `cancel()` is safe at any point; jobs are
+ * one-shot per handle.
+ */
+public interface PipelineHandleInterface {
+    
+    /**
+     * Request cancellation; the terminal state becomes `Cancelled` (unless
+     * the job already finished). Safe at any time.
+     */
+    fun `cancel`()
+    
+    /**
+     * Start the job on a worker thread; events stream to `observer` and
+     * the terminal state lands in [`state`](Self::state). Errors if
+     * already started (one-shot handle) or the source is unreadable.
+     */
+    fun `start`(`observer`: PipelineObserver)
+    
+    /**
+     * Snapshot state (poll-friendly; the terminal state mirrors the run's
+     * end).
+     */
+    fun `state`(): FfiPipelineState
+    
+    companion object
+}
+
+/**
+ * The convert job as an object: `new(config)` → `start(observer)` →
+ * events → terminal `state()`. `cancel()` is safe at any point; jobs are
+ * one-shot per handle.
+ */
+open class PipelineHandle: Disposable, AutoCloseable, PipelineHandleInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+    /**
+     * Create a handle for `config`. Nothing runs until [`start`](Self::start).
+     */
+    constructor(`config`: FfiPipelineConfig) :
+        this(UniffiWithHandle, 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_constructor_pipelinehandle_new(
+    
+        
+        FfiConverterTypeFfiPipelineConfig.lower(`config`),_status)
+}
+    )
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_taletrek_ffi_fn_free_pipelinehandle(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_taletrek_ffi_fn_clone_pipelinehandle(handle, status)
+        }
+    }
+
+    
+    /**
+     * Request cancellation; the terminal state becomes `Cancelled` (unless
+     * the job already finished). Safe at any time.
+     */override fun `cancel`()
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_method_pipelinehandle_cancel(
+        it,
+        _status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Start the job on a worker thread; events stream to `observer` and
+     * the terminal state lands in [`state`](Self::state). Errors if
+     * already started (one-shot handle) or the source is unreadable.
+     */
+    @Throws(FfiPipelineSetupException::class)override fun `start`(`observer`: PipelineObserver)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FfiPipelineSetupException) { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_method_pipelinehandle_start(
+        it,
+        
+        FfiConverterTypePipelineObserver.lower(`observer`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Snapshot state (poll-friendly; the terminal state mirrors the run's
+     * end).
+     */override fun `state`(): FfiPipelineState {
+            return FfiConverterTypeFfiPipelineState.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_method_pipelinehandle_state(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+
+    
+
+
+    
+    
+    /**
+     * @suppress
+     */
+    companion object
+    
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePipelineHandle: FfiConverter<PipelineHandle, Long> {
+    override fun lower(value: PipelineHandle): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): PipelineHandle {
+        return PipelineHandle(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): PipelineHandle {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: PipelineHandle) = 8UL
+
+    override fun write(value: PipelineHandle, buf: ByteBuffer) {
+        buf.putLong(lower(value))
     }
 }
 
@@ -1900,6 +2309,191 @@ public object FfiConverterTypeFfiParagraphPos: FfiConverterRustBuffer<FfiParagra
 
 
 /**
+ * One convert job's configuration. Paths are absolute host dirs — the
+ * kernel never resolves platform defaults.
+ */
+data class FfiPipelineConfig (
+    /**
+     * Path to the source document (the host has already copied its content
+     * URI into a cache file it owns; parse wants bytes anyway).
+     */
+    var `sourcePath`: kotlin.String
+    , 
+    /**
+     * Source filename when known — title fallback + format hint.
+     */
+    var `hint`: kotlin.String?
+    , 
+    /**
+     * `true` = text-only bundle (no voice needed); `false` = full synth.
+     */
+    var `textOnly`: kotlin.Boolean
+    , 
+    /**
+     * Curated voice id; `None` = the curated default.
+     */
+    var `voiceId`: kotlin.String?
+    , 
+    /**
+     * Voice cache dir (e.g. `<filesDir>/voices`).
+     */
+    var `voiceCacheDir`: kotlin.String
+    , 
+    /**
+     * The espeak-ng-data dir (e.g. `<filesDir>/espeak-ng-data` — see
+     * `ensure_espeak_data`); only read when actually synthesizing.
+     */
+    var `espeakDir`: kotlin.String
+    , 
+    /**
+     * Output dir (the library scan root, e.g. `<filesDir>/books`).
+     */
+    var `booksDir`: kotlin.String
+    , 
+    /**
+     * Synth pool size (2 on mobile).
+     */
+    var `jobs`: kotlin.UInt
+    , 
+    /**
+     * `generator.app` identity (e.g. `taletrek-android`).
+     */
+    var `generatorApp`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPipelineConfig: FfiConverterRustBuffer<FfiPipelineConfig> {
+    override fun read(buf: ByteBuffer): FfiPipelineConfig {
+        return FfiPipelineConfig(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiPipelineConfig) = (
+            FfiConverterString.allocationSize(value.`sourcePath`) +
+            FfiConverterOptionalString.allocationSize(value.`hint`) +
+            FfiConverterBoolean.allocationSize(value.`textOnly`) +
+            FfiConverterOptionalString.allocationSize(value.`voiceId`) +
+            FfiConverterString.allocationSize(value.`voiceCacheDir`) +
+            FfiConverterString.allocationSize(value.`espeakDir`) +
+            FfiConverterString.allocationSize(value.`booksDir`) +
+            FfiConverterUInt.allocationSize(value.`jobs`) +
+            FfiConverterString.allocationSize(value.`generatorApp`)
+    )
+
+    override fun write(value: FfiPipelineConfig, buf: ByteBuffer) {
+            FfiConverterString.write(value.`sourcePath`, buf)
+            FfiConverterOptionalString.write(value.`hint`, buf)
+            FfiConverterBoolean.write(value.`textOnly`, buf)
+            FfiConverterOptionalString.write(value.`voiceId`, buf)
+            FfiConverterString.write(value.`voiceCacheDir`, buf)
+            FfiConverterString.write(value.`espeakDir`, buf)
+            FfiConverterString.write(value.`booksDir`, buf)
+            FfiConverterUInt.write(value.`jobs`, buf)
+            FfiConverterString.write(value.`generatorApp`, buf)
+    }
+}
+
+
+
+/**
+ * What a successful run produced.
+ */
+data class FfiPipelineOutcome (
+    /**
+     * The deterministic content-derived book id.
+     */
+    var `bookId`: kotlin.String
+    , 
+    /**
+     * Absolute path of the written bundle.
+     */
+    var `bundlePath`: kotlin.String
+    , 
+    /**
+     * `true` when the text-only variant ran.
+     */
+    var `textOnly`: kotlin.Boolean
+    , 
+    /**
+     * Chapter count.
+     */
+    var `chapters`: kotlin.UInt
+    , 
+    /**
+     * Paragraph count across chapters.
+     */
+    var `paragraphs`: kotlin.UInt
+    , 
+    /**
+     * Distinct audio segments (0 for text-only).
+     */
+    var `segments`: kotlin.UInt
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPipelineOutcome: FfiConverterRustBuffer<FfiPipelineOutcome> {
+    override fun read(buf: ByteBuffer): FfiPipelineOutcome {
+        return FfiPipelineOutcome(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiPipelineOutcome) = (
+            FfiConverterString.allocationSize(value.`bookId`) +
+            FfiConverterString.allocationSize(value.`bundlePath`) +
+            FfiConverterBoolean.allocationSize(value.`textOnly`) +
+            FfiConverterUInt.allocationSize(value.`chapters`) +
+            FfiConverterUInt.allocationSize(value.`paragraphs`) +
+            FfiConverterUInt.allocationSize(value.`segments`)
+    )
+
+    override fun write(value: FfiPipelineOutcome, buf: ByteBuffer) {
+            FfiConverterString.write(value.`bookId`, buf)
+            FfiConverterString.write(value.`bundlePath`, buf)
+            FfiConverterBoolean.write(value.`textOnly`, buf)
+            FfiConverterUInt.write(value.`chapters`, buf)
+            FfiConverterUInt.write(value.`paragraphs`, buf)
+            FfiConverterUInt.write(value.`segments`, buf)
+    }
+}
+
+
+
+/**
  * A durable reading position — what a platform stores when playback
  * moves and hands back on open to resume.
  */
@@ -2020,28 +2614,33 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
 
 
 /**
- * Numbers the spike returns for the throughput datapoint.
+ * One curated voice entry.
  */
-data class SpikeSynthOutcome (
+data class FfiVoice (
     /**
-     * Synthesized canonical-WAV byte count.
+     * Curated id (`en_US-hfc_female-medium`) — the resolve key.
      */
-    var `wavBytes`: kotlin.ULong
+    var `id`: kotlin.String
     , 
     /**
-     * Audio seconds in that WAV (parsed, not estimated from bytes alone).
+     * Human display name.
      */
-    var `audioSeconds`: kotlin.Double
+    var `name`: kotlin.String
     , 
     /**
-     * Model load wall-time (the once-per-runner cost).
+     * Locale tag (`en_US`).
      */
-    var `loadMs`: kotlin.ULong
+    var `language`: kotlin.String
     , 
     /**
-     * One-paragraph predict wall-time.
+     * Quality tier (`low` | `medium` | `high`).
      */
-    var `synthMs`: kotlin.ULong
+    var `quality`: kotlin.String
+    , 
+    /**
+     * Approximate download size in bytes (progress-UI use).
+     */
+    var `sizeBytes`: kotlin.ULong
     
 ){
     
@@ -2055,28 +2654,31 @@ data class SpikeSynthOutcome (
 /**
  * @suppress
  */
-public object FfiConverterTypeSpikeSynthOutcome: FfiConverterRustBuffer<SpikeSynthOutcome> {
-    override fun read(buf: ByteBuffer): SpikeSynthOutcome {
-        return SpikeSynthOutcome(
-            FfiConverterULong.read(buf),
-            FfiConverterDouble.read(buf),
-            FfiConverterULong.read(buf),
+public object FfiConverterTypeFfiVoice: FfiConverterRustBuffer<FfiVoice> {
+    override fun read(buf: ByteBuffer): FfiVoice {
+        return FfiVoice(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterULong.read(buf),
         )
     }
 
-    override fun allocationSize(value: SpikeSynthOutcome) = (
-            FfiConverterULong.allocationSize(value.`wavBytes`) +
-            FfiConverterDouble.allocationSize(value.`audioSeconds`) +
-            FfiConverterULong.allocationSize(value.`loadMs`) +
-            FfiConverterULong.allocationSize(value.`synthMs`)
+    override fun allocationSize(value: FfiVoice) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`language`) +
+            FfiConverterString.allocationSize(value.`quality`) +
+            FfiConverterULong.allocationSize(value.`sizeBytes`)
     )
 
-    override fun write(value: SpikeSynthOutcome, buf: ByteBuffer) {
-            FfiConverterULong.write(value.`wavBytes`, buf)
-            FfiConverterDouble.write(value.`audioSeconds`, buf)
-            FfiConverterULong.write(value.`loadMs`, buf)
-            FfiConverterULong.write(value.`synthMs`, buf)
+    override fun write(value: FfiVoice, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`language`, buf)
+            FfiConverterString.write(value.`quality`, buf)
+            FfiConverterULong.write(value.`sizeBytes`, buf)
     }
 }
 
@@ -2358,6 +2960,487 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
     }
 
 }
+
+
+
+/**
+ * Events streamed to [`PipelineObserver`].
+ */
+sealed class FfiPipelineEvent {
+    
+    /**
+     * A phase was entered.
+     */
+    data class Phase(
+        val v1: dev.l1br3.taletrek.ffi.FfiPipelinePhase) : FfiPipelineEvent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Parsing finished: the book's shape.
+     */
+    data class Parsed(
+        /**
+         * Chapter count.
+         */
+        val `chapters`: kotlin.UInt, 
+        /**
+         * Paragraph count.
+         */
+        val `paragraphs`: kotlin.UInt) : FfiPipelineEvent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Voice download progress (`bytes_total == 0` = unknown length).
+     */
+    data class DownloadStep(
+        /**
+         * Bytes fetched so far.
+         */
+        val `bytesDone`: kotlin.ULong, 
+        /**
+         * Total bytes, or 0 when unknown.
+         */
+        val `bytesTotal`: kotlin.ULong) : FfiPipelineEvent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Synth progress.
+     */
+    data class SynthStep(
+        /**
+         * Paragraphs completed.
+         */
+        val `done`: kotlin.UInt, 
+        /**
+         * Total paragraphs.
+         */
+        val `total`: kotlin.UInt) : FfiPipelineEvent()
+        
+    {
+        
+
+        companion object
+    }
+    
+
+    
+
+    
+    
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPipelineEvent : FfiConverterRustBuffer<FfiPipelineEvent>{
+    override fun read(buf: ByteBuffer): FfiPipelineEvent {
+        return when(buf.getInt()) {
+            1 -> FfiPipelineEvent.Phase(
+                FfiConverterTypeFfiPipelinePhase.read(buf),
+                )
+            2 -> FfiPipelineEvent.Parsed(
+                FfiConverterUInt.read(buf),
+                FfiConverterUInt.read(buf),
+                )
+            3 -> FfiPipelineEvent.DownloadStep(
+                FfiConverterULong.read(buf),
+                FfiConverterULong.read(buf),
+                )
+            4 -> FfiPipelineEvent.SynthStep(
+                FfiConverterUInt.read(buf),
+                FfiConverterUInt.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiPipelineEvent): ULong = when(value) {
+        is FfiPipelineEvent.Phase -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeFfiPipelinePhase.allocationSize(value.v1)
+            )
+        }
+        is FfiPipelineEvent.Parsed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterUInt.allocationSize(value.`chapters`)
+                + FfiConverterUInt.allocationSize(value.`paragraphs`)
+            )
+        }
+        is FfiPipelineEvent.DownloadStep -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterULong.allocationSize(value.`bytesDone`)
+                + FfiConverterULong.allocationSize(value.`bytesTotal`)
+            )
+        }
+        is FfiPipelineEvent.SynthStep -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterUInt.allocationSize(value.`done`)
+                + FfiConverterUInt.allocationSize(value.`total`)
+            )
+        }
+    }
+
+    override fun write(value: FfiPipelineEvent, buf: ByteBuffer) {
+        when(value) {
+            is FfiPipelineEvent.Phase -> {
+                buf.putInt(1)
+                FfiConverterTypeFfiPipelinePhase.write(value.v1, buf)
+                Unit
+            }
+            is FfiPipelineEvent.Parsed -> {
+                buf.putInt(2)
+                FfiConverterUInt.write(value.`chapters`, buf)
+                FfiConverterUInt.write(value.`paragraphs`, buf)
+                Unit
+            }
+            is FfiPipelineEvent.DownloadStep -> {
+                buf.putInt(3)
+                FfiConverterULong.write(value.`bytesDone`, buf)
+                FfiConverterULong.write(value.`bytesTotal`, buf)
+                Unit
+            }
+            is FfiPipelineEvent.SynthStep -> {
+                buf.putInt(4)
+                FfiConverterUInt.write(value.`done`, buf)
+                FfiConverterUInt.write(value.`total`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+/**
+ * Pipeline lifecycle phases, mirrored for the foreign side.
+ */
+
+enum class FfiPipelinePhase {
+    
+    /**
+     * Detecting format + parsing.
+     */
+    PARSING,
+    /**
+     * Resolving/downloading the voice.
+     */
+    RESOLVING_VOICE,
+    /**
+     * Synthesizing.
+     */
+    SYNTHESIZING,
+    /**
+     * Writing the bundle.
+     */
+    WRITING;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPipelinePhase: FfiConverterRustBuffer<FfiPipelinePhase> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiPipelinePhase.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiPipelinePhase) = 4UL
+
+    override fun write(value: FfiPipelinePhase, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+
+/**
+ * Setup failures before the job can start (bad config paths, double
+ * start).
+ */
+sealed class FfiPipelineSetupException: kotlin.Exception() {
+    
+    /**
+     * The source document couldn't be read (missing, unreadable).
+     */
+    class ReadSource(
+        
+        /**
+         * The path that failed.
+         */
+        val `path`: kotlin.String, 
+        
+        /**
+         * The underlying failure.
+         */
+        val `detail`: kotlin.String
+        ) : FfiPipelineSetupException() {
+        override val message
+            get() = "path=${ `path` }, detail=${ `detail` }"
+    }
+    
+    /**
+     * `start` was called twice on one handle (jobs are one-shot).
+     */
+    class AlreadyStarted(
+        ) : FfiPipelineSetupException() {
+        override val message
+            get() = ""
+    }
+    
+
+    
+
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<FfiPipelineSetupException> {
+        override fun lift(error_buf: RustBuffer.ByValue): FfiPipelineSetupException = FfiConverterTypeFfiPipelineSetupError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPipelineSetupError : FfiConverterRustBuffer<FfiPipelineSetupException> {
+    override fun read(buf: ByteBuffer): FfiPipelineSetupException {
+        
+
+        return when(buf.getInt()) {
+            1 -> FfiPipelineSetupException.ReadSource(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            2 -> FfiPipelineSetupException.AlreadyStarted()
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiPipelineSetupException): ULong {
+        return when(value) {
+            is FfiPipelineSetupException.ReadSource -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`path`)
+                + FfiConverterString.allocationSize(value.`detail`)
+            )
+            is FfiPipelineSetupException.AlreadyStarted -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
+        }
+    }
+
+    override fun write(value: FfiPipelineSetupException, buf: ByteBuffer) {
+        when(value) {
+            is FfiPipelineSetupException.ReadSource -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`path`, buf)
+                FfiConverterString.write(value.`detail`, buf)
+                Unit
+            }
+            is FfiPipelineSetupException.AlreadyStarted -> {
+                buf.putInt(2)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
+/**
+ * The handle's snapshot state — poll-friendly mirror of the run. The same
+ * information arrives as the run's end; hosts pick whichever mechanism
+ * suits (events are the primary channel per task 002's verdict).
+ */
+sealed class FfiPipelineState {
+    
+    /**
+     * Constructed, not started.
+     */
+    object Idle : FfiPipelineState()
+    
+    
+    /**
+     * Running (no error, no outcome yet).
+     */
+    object Running : FfiPipelineState()
+    
+    
+    /**
+     * Finished: the outcome of a successful run.
+     */
+    data class Finished(
+        val v1: dev.l1br3.taletrek.ffi.FfiPipelineOutcome) : FfiPipelineState()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Failed: a stable error kind + human message.
+     */
+    data class Failed(
+        /**
+         * Stable kind string (`parse`, `unknown_format`, `resolve`,
+         * `stamp`, `write`) for UI branching.
+         */
+        val `kind`: kotlin.String, 
+        /**
+         * Human-readable message (the kernel error's Display).
+         */
+        val `message`: kotlin.String) : FfiPipelineState()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Cancelled by the host. No partial bundle exists.
+     */
+    object Cancelled : FfiPipelineState()
+    
+    
+
+    
+
+    
+    
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPipelineState : FfiConverterRustBuffer<FfiPipelineState>{
+    override fun read(buf: ByteBuffer): FfiPipelineState {
+        return when(buf.getInt()) {
+            1 -> FfiPipelineState.Idle
+            2 -> FfiPipelineState.Running
+            3 -> FfiPipelineState.Finished(
+                FfiConverterTypeFfiPipelineOutcome.read(buf),
+                )
+            4 -> FfiPipelineState.Failed(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            5 -> FfiPipelineState.Cancelled
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiPipelineState): ULong = when(value) {
+        is FfiPipelineState.Idle -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is FfiPipelineState.Running -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is FfiPipelineState.Finished -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeFfiPipelineOutcome.allocationSize(value.v1)
+            )
+        }
+        is FfiPipelineState.Failed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`kind`)
+                + FfiConverterString.allocationSize(value.`message`)
+            )
+        }
+        is FfiPipelineState.Cancelled -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+    }
+
+    override fun write(value: FfiPipelineState, buf: ByteBuffer) {
+        when(value) {
+            is FfiPipelineState.Idle -> {
+                buf.putInt(1)
+                Unit
+            }
+            is FfiPipelineState.Running -> {
+                buf.putInt(2)
+                Unit
+            }
+            is FfiPipelineState.Finished -> {
+                buf.putInt(3)
+                FfiConverterTypeFfiPipelineOutcome.write(value.v1, buf)
+                Unit
+            }
+            is FfiPipelineState.Failed -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`kind`, buf)
+                FfiConverterString.write(value.`message`, buf)
+                Unit
+            }
+            is FfiPipelineState.Cancelled -> {
+                buf.putInt(5)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
 
 
 
@@ -2793,43 +3876,92 @@ public object FfiConverterTypeFfiPlayerStatus: FfiConverterRustBuffer<FfiPlayerS
 
 
 /**
- * Everything a spike call can fail with — deliberately stringly; the real
- * task-004 surface gets typed variants.
+ * All voice-surface failures, flattened for the foreign side.
  */
-sealed class SpikeException(message: String): kotlin.Exception(message) {
-        
+sealed class FfiVoiceException: kotlin.Exception() {
+    
     /**
-     * Download, unzip, or synth failure, stringified.
+     * Catalog resolution failed (unknown id, download, override).
      */
-        class Failed(message: String) : SpikeException(message)
+    class Resolve(
         
-
-    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<SpikeException> {
-        override fun lift(error_buf: RustBuffer.ByValue): SpikeException = FfiConverterTypeSpikeError.lift(error_buf)
+        /**
+         * The kernel `ResolveError`'s Display.
+         */
+        val `detail`: kotlin.String
+        ) : FfiVoiceException() {
+        override val message
+            get() = "detail=${ `detail` }"
     }
+    
+    /**
+     * espeak-ng-data acquisition failed.
+     */
+    class Espeak(
+        
+        /**
+         * The kernel `EspeakError`'s Display.
+         */
+        val `detail`: kotlin.String
+        ) : FfiVoiceException() {
+        override val message
+            get() = "detail=${ `detail` }"
+    }
+    
+
+    
+
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<FfiVoiceException> {
+        override fun lift(error_buf: RustBuffer.ByValue): FfiVoiceException = FfiConverterTypeFfiVoiceError.lift(error_buf)
+    }
+
+    
 }
 
 /**
  * @suppress
  */
-public object FfiConverterTypeSpikeError : FfiConverterRustBuffer<SpikeException> {
-    override fun read(buf: ByteBuffer): SpikeException {
+public object FfiConverterTypeFfiVoiceError : FfiConverterRustBuffer<FfiVoiceException> {
+    override fun read(buf: ByteBuffer): FfiVoiceException {
         
-            return when(buf.getInt()) {
-            1 -> SpikeException.Failed(FfiConverterString.read(buf))
+
+        return when(buf.getInt()) {
+            1 -> FfiVoiceException.Resolve(
+                FfiConverterString.read(buf),
+                )
+            2 -> FfiVoiceException.Espeak(
+                FfiConverterString.read(buf),
+                )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
-        
     }
 
-    override fun allocationSize(value: SpikeException): ULong {
-        return 4UL
+    override fun allocationSize(value: FfiVoiceException): ULong {
+        return when(value) {
+            is FfiVoiceException.Resolve -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`detail`)
+            )
+            is FfiVoiceException.Espeak -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`detail`)
+            )
+        }
     }
 
-    override fun write(value: SpikeException, buf: ByteBuffer) {
+    override fun write(value: FfiVoiceException, buf: ByteBuffer) {
         when(value) {
-            is SpikeException.Failed -> {
+            is FfiVoiceException.Resolve -> {
                 buf.putInt(1)
+                FfiConverterString.write(value.`detail`, buf)
+                Unit
+            }
+            is FfiVoiceException.Espeak -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`detail`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -2842,16 +3974,16 @@ public object FfiConverterTypeSpikeError : FfiConverterRustBuffer<SpikeException
 
 
 /**
- * Observer fed engine events (download progress, synth start/end) — the
- * callback-vs-poll probe. Kotlin records the receiving thread to settle the
- * spec's open question empirically.
+ * Progress observer for voice/espeak downloads. **Threading:** events
+ * arrive on the calling thread (these calls are synchronous) — but see
+ * [`crate::PipelineObserver`] for the async pipeline's contract.
  */
-public interface SpikeObserver {
+public interface FfiVoiceObserver {
     
     /**
-     * One event line, `"<kind> <detail>"` shaped.
+     * Download progress: `bytes_done` of `bytes_total` (`0` = unknown).
      */
-    fun `onEvent`(`event`: kotlin.String)
+    fun `onDownloadStep`(`bytesDone`: kotlin.ULong, `bytesTotal`: kotlin.ULong)
     
     companion object
 }
@@ -2859,13 +3991,14 @@ public interface SpikeObserver {
 
 
 // Put the implementation in an object so we don't pollute the top-level namespace
-internal object uniffiCallbackInterfaceSpikeObserver {
-    internal object `onEvent`: UniffiCallbackInterfaceSpikeObserverMethod0 {
-        override fun callback(`uniffiHandle`: Long,`event`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
-            val uniffiObj = FfiConverterTypeSpikeObserver.handleMap.get(uniffiHandle)
+internal object uniffiCallbackInterfaceFfiVoiceObserver {
+    internal object `onDownloadStep`: UniffiCallbackInterfaceFfiVoiceObserverMethod0 {
+        override fun callback(`uniffiHandle`: Long,`bytesDone`: Long,`bytesTotal`: Long,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiVoiceObserver.handleMap.get(uniffiHandle)
             val makeCall = { ->
-                uniffiObj.`onEvent`(
-                    FfiConverterString.lift(`event`),
+                uniffiObj.`onDownloadStep`(
+                    FfiConverterULong.lift(`bytesDone`),
+                    FfiConverterULong.lift(`bytesTotal`),
                 )
             }
             val writeReturn = { _: Unit -> Unit }
@@ -2875,26 +4008,26 @@ internal object uniffiCallbackInterfaceSpikeObserver {
 
     internal object uniffiFree: UniffiCallbackInterfaceFree {
         override fun callback(handle: Long) {
-            FfiConverterTypeSpikeObserver.handleMap.remove(handle)
+            FfiConverterTypeFfiVoiceObserver.handleMap.remove(handle)
         }
     }
 
     internal object uniffiClone: UniffiCallbackInterfaceClone {
         override fun callback(handle: Long): Long {
-            return FfiConverterTypeSpikeObserver.handleMap.clone(handle)
+            return FfiConverterTypeFfiVoiceObserver.handleMap.clone(handle)
         }
     }
 
-    internal var vtable = UniffiVTableCallbackInterfaceSpikeObserver.UniffiByValue(
+    internal var vtable = UniffiVTableCallbackInterfaceFfiVoiceObserver.UniffiByValue(
         uniffiFree,
         uniffiClone,
-        `onEvent`,
+        `onDownloadStep`,
     )
 
     // Registers the foreign callback with the Rust side.
     // This method is generated for each callback interface.
     internal fun register(lib: UniffiLib) {
-        lib.uniffi_taletrek_ffi_fn_init_callback_vtable_spikeobserver(vtable)
+        lib.uniffi_taletrek_ffi_fn_init_callback_vtable_ffivoiceobserver(vtable)
     }
 }
 
@@ -2903,7 +4036,81 @@ internal object uniffiCallbackInterfaceSpikeObserver {
  *
  * @suppress
  */
-public object FfiConverterTypeSpikeObserver: FfiConverterCallbackInterface<SpikeObserver>()
+public object FfiConverterTypeFfiVoiceObserver: FfiConverterCallbackInterface<FfiVoiceObserver>()
+
+
+
+
+
+/**
+ * Consumer of pipeline events.
+ *
+ * **Threading contract (task 002 verdict — callbacks, not polling):**
+ * events arrive on the worker thread running the job, including rayon
+ * pool threads during synthesis. Kotlin implementations must dispatch to
+ * the main thread themselves (e.g. `Handler(Looper.getMainLooper()).post`);
+ * Swift runtimes hop via `DispatchQueue.main`. Polling
+ * [`PipelineHandle::state`] is the sanctioned fallback for hosts that
+ * can't take background callbacks.
+ */
+public interface PipelineObserver {
+    
+    /**
+     * One pipeline event.
+     */
+    fun `onPipelineEvent`(`event`: FfiPipelineEvent)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfacePipelineObserver {
+    internal object `onPipelineEvent`: UniffiCallbackInterfacePipelineObserverMethod0 {
+        override fun callback(`uniffiHandle`: Long,`event`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypePipelineObserver.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onPipelineEvent`(
+                    FfiConverterTypeFfiPipelineEvent.lift(`event`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypePipelineObserver.handleMap.remove(handle)
+        }
+    }
+
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
+        override fun callback(handle: Long): Long {
+            return FfiConverterTypePipelineObserver.handleMap.clone(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfacePipelineObserver.UniffiByValue(
+        uniffiFree,
+        uniffiClone,
+        `onPipelineEvent`,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_taletrek_ffi_fn_init_callback_vtable_pipelineobserver(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypePipelineObserver: FfiConverterCallbackInterface<PipelineObserver>()
 
 
 
@@ -3039,6 +4246,34 @@ public object FfiConverterOptionalTypeFfiPosition: FfiConverterRustBuffer<FfiPos
 /**
  * @suppress
  */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeFfiChapter: FfiConverterRustBuffer<List<FfiChapter>> {
     override fun read(buf: ByteBuffer): List<FfiChapter> {
         val len = buf.getInt()
@@ -3085,6 +4320,34 @@ public object FfiConverterSequenceTypeFfiParagraph: FfiConverterRustBuffer<List<
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeFfiParagraph.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiVoice: FfiConverterRustBuffer<List<FfiVoice>> {
+    override fun read(buf: ByteBuffer): List<FfiVoice> {
+        val len = buf.getInt()
+        return List<FfiVoice>(len) {
+            FfiConverterTypeFfiVoice.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiVoice>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiVoice.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiVoice>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiVoice.write(it, buf)
         }
     }
 }
@@ -3141,56 +4404,81 @@ public object FfiConverterSequenceTypeFfiParagraph: FfiConverterRustBuffer<List<
     
 
         /**
-         * Resolve (and on first call download) the default curated voice from the
-         * real HuggingFace CDN into `cache_dir` — returns the `.onnx` model path. A
-         * warm cache short-circuits before any network (the observer sees no
-         * `download-step` events — the test's cache-hit oracle).
-         */
-    @Throws(SpikeException::class) fun `spikeDownloadVoice`(`cacheDir`: kotlin.String, `observer`: SpikeObserver): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(SpikeException) { _status ->
-    UniffiLib.uniffi_taletrek_ffi_fn_func_spike_download_voice(
+         * Which curated voice ids have both cache files present in `cache_dir`.
+         */ fun `cachedVoiceIds`(`cacheDir`: kotlin.String): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_cached_voice_ids(
+    
+        
+        FfiConverterString.lower(`cacheDir`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Delete one cached voice (both files). Returns `true` when anything was
+         * removed. Never touches voices that aren't in the catalog.
+         */ fun `deleteCachedVoice`(`cacheDir`: kotlin.String, `id`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_delete_cached_voice(
     
         
         FfiConverterString.lower(`cacheDir`),
-        FfiConverterTypeSpikeObserver.lower(`observer`),_status)
+        FfiConverterString.lower(`id`),_status)
 }
     )
     }
     
 
         /**
-         * Fetch + unzip espeak-ng-data (9 MB zip) into `data_root/espeak-ng-data`;
-         * returns that dir. Idempotent: an existing `lang_dict` marks the cache.
+         * Ensure the espeak-ng-data phonemizer data exists at
+         * `<data_root>/espeak-ng-data` and return that dir. Downloads (with
+         * progress) on first call; idempotent afterwards. Required before the
+         * first on-device synthesis.
          */
-    @Throws(SpikeException::class) fun `spikeFetchEspeak`(`dataRoot`: kotlin.String, `observer`: SpikeObserver): kotlin.String {
+    @Throws(FfiVoiceException::class) fun `ffiEnsureEspeak`(`dataRoot`: kotlin.String, `observer`: FfiVoiceObserver): kotlin.String {
             return FfiConverterString.lift(
-    uniffiRustCallWithError(SpikeException) { _status ->
-    UniffiLib.uniffi_taletrek_ffi_fn_func_spike_fetch_espeak(
+    uniffiRustCallWithError(FfiVoiceException) { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_ffi_ensure_espeak(
     
         
         FfiConverterString.lower(`dataRoot`),
-        FfiConverterTypeSpikeObserver.lower(`observer`),_status)
+        FfiConverterTypeFfiVoiceObserver.lower(`observer`),_status)
 }
     )
     }
     
 
         /**
-         * Load the sherpa model and synthesize one paragraph **on a rayon worker
-         * thread** (the production pool shape), firing observer events from inside
-         * that thread. Returns sizes + timings for the throughput datapoint.
+         * Resolve (and on first call download) a curated voice into
+         * `cache_dir` — returns the `.onnx` model path. `None` = the curated
+         * default. A warm cache short-circuits before any network.
          */
-    @Throws(SpikeException::class) fun `spikeSynthParagraph`(`voiceModel`: kotlin.String, `espeakDir`: kotlin.String, `text`: kotlin.String, `observer`: SpikeObserver): SpikeSynthOutcome {
-            return FfiConverterTypeSpikeSynthOutcome.lift(
-    uniffiRustCallWithError(SpikeException) { _status ->
-    UniffiLib.uniffi_taletrek_ffi_fn_func_spike_synth_paragraph(
+    @Throws(FfiVoiceException::class) fun `ffiResolveVoice`(`id`: kotlin.String?, `cacheDir`: kotlin.String, `observer`: FfiVoiceObserver): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(FfiVoiceException) { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_ffi_resolve_voice(
     
         
-        FfiConverterString.lower(`voiceModel`),
-        FfiConverterString.lower(`espeakDir`),
-        FfiConverterString.lower(`text`),
-        FfiConverterTypeSpikeObserver.lower(`observer`),_status)
+        FfiConverterOptionalString.lower(`id`),
+        FfiConverterString.lower(`cacheDir`),
+        FfiConverterTypeFfiVoiceObserver.lower(`observer`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The curated catalog (8 voices), in catalog order.
+         */ fun `voiceCatalog`(): List<FfiVoice> {
+            return FfiConverterSequenceTypeFfiVoice.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_voice_catalog(
+    
+        _status)
 }
     )
     }

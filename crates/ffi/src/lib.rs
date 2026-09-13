@@ -1,13 +1,15 @@
 //! TaleTrek FFI surface — the kernel's foreign-language API.
 //!
-//! Thin, no-logic wrappers that carry the read-side kernel
-//! ([`taletrek_reader`]'s sequencing + [`taletrek_synth`]'s bundle I/O)
-//! across UniFFI to Kotlin (Android, this effort) and later Swift (iOS —
-//! same crate, no Android-isms). The discipline: every decision stays in
-//! Rust; the wrappers only flatten types and forward calls. The one
-//! sanctioned branch is restore-validation — a position whose paragraph
-//! no longer exists seeds a fresh idle machine rather than a phantom
-//! resume.
+//! Thin, no-logic wrappers that carry the kernel across UniFFI to Kotlin
+//! (Android, this effort) and later Swift (iOS — same crate, no
+//! Android-isms). Two halves: the **read side** ([`taletrek_reader`]'s
+//! sequencing + [`taletrek_synth`]'s bundle I/O — `open_book`,
+//! `read_segment`, `TrekPlayer`) and the **convert side**
+//! ([`taletrek_worker`]'s pipeline + voices — `PipelineHandle`,
+//! `voice_catalog`). The discipline: every decision stays in Rust; the
+//! wrappers only flatten types and forward calls. The one sanctioned
+//! branch is restore-validation — a position whose paragraph no longer
+//! exists seeds a fresh idle machine rather than a phantom resume.
 //!
 //! Bindings are generated in proc-macro mode (no UDL file), checked in
 //! under `android/app/src/main/java/dev/l1br3/taletrek/ffi/`, and
@@ -15,21 +17,23 @@
 
 mod book;
 mod error;
+mod pipeline;
 mod player;
-// THROWAWAY (android-pipeline task 002): device de-risk shims — CDN voice
-// download, espeak-ng-data fetch, one-paragraph sherpa synth, rayon-thread
-// UniFFI callback probe. Deleted wholesale in task 004.
-mod spike;
+mod voices;
 
 pub use book::{open_book, read_segment, FfiBook, FfiChapter, FfiParagraph};
 pub use error::FfiError;
+pub use pipeline::{
+    FfiPipelineConfig, FfiPipelineEvent, FfiPipelineOutcome, FfiPipelinePhase,
+    FfiPipelineSetupError, FfiPipelineState, PipelineHandle, PipelineObserver,
+};
 pub use player::{
     position_storage_key, FfiFailureLog, FfiParagraphPos, FfiPlayerAction, FfiPlayerEvent,
     FfiPlayerStatus, FfiPosition, FfiStateSnapshot, TrekPlayer,
 };
-pub use spike::{
-    spike_download_voice, spike_fetch_espeak, spike_synth_paragraph, SpikeError, SpikeObserver,
-    SpikeSynthOutcome,
+pub use voices::{
+    cached_voice_ids, delete_cached_voice, ffi_ensure_espeak, ffi_resolve_voice, voice_catalog,
+    FfiVoice, FfiVoiceError, FfiVoiceObserver,
 };
 
 // GOTCHA: proc-macro mode — the scaffolding macro expands to the extern "C"
@@ -40,25 +44,11 @@ pub use spike::{
 // traps hit while wiring: the CLI ships via `cargo install uniffi
 // --features cli` (the standalone `uniffi-bindgen-cli` crate is gone), and
 // the bindgen config's crate key is the underscore name (`taletrek_ffi`).
+// Two more, hit in android-pipeline T4: (1) impl-fn attributes take the
+// PATH form `#[uniffi::constructor]`, never the list form
+// `#[uniffi(constructor)]` — the list form parses as ExportFnArgs and dies
+// with "attribute `constructor` is not supported here" (traits are the
+// opposite: `#[uniffi::export(callback_interface)]` IS the list form); (2)
+// a field named `message` on an `uniffi::Error` variant collides with
+// `Throwable.message` in the generated Kotlin exception — name it `detail`.
 uniffi::setup_scaffolding!();
-
-// GOTCHA (android-pipeline T1): with no wrapper touching them yet, rustc
-// + lld dead-strip the pipeline crates out of the cdylib — the "fat" .so
-// stayed lean with no DT_NEEDED on libsherpa-onnx-c-api.so /
-// libonnxruntime.so, proving nothing. This #[used] static is a link check,
-// never executed: its closures are codegen'd (llvm.used roots survive
-// --gc-sections), dragging parse, the sherpa runner and the native Opus
-// encoder — and their native deps — into the artifact. Task 004's real
-// pipeline wrappers make it redundant.
-#[used]
-static LINK_PIPELINE: [fn(); 2] = [
-    || {
-        let _ = taletrek_parse::detect_format(&[]);
-        let _ = taletrek_worker::voices::CURATED_VOICES.len();
-    },
-    || {
-        let encoder = taletrek_synth::opus_native::NativeOpusEncoder::new();
-        let _ = taletrek_synth::encode::Encoder::encode(&encoder, &[]);
-        let _ = taletrek_synth::sherpa_runner::SherpaRunner::new(std::path::Path::new(""));
-    },
-];
