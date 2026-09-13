@@ -16,12 +16,20 @@
 mod book;
 mod error;
 mod player;
+// THROWAWAY (android-pipeline task 002): device de-risk shims — CDN voice
+// download, espeak-ng-data fetch, one-paragraph sherpa synth, rayon-thread
+// UniFFI callback probe. Deleted wholesale in task 004.
+mod spike;
 
 pub use book::{open_book, read_segment, FfiBook, FfiChapter, FfiParagraph};
 pub use error::FfiError;
 pub use player::{
     position_storage_key, FfiFailureLog, FfiParagraphPos, FfiPlayerAction, FfiPlayerEvent,
     FfiPlayerStatus, FfiPosition, FfiStateSnapshot, TrekPlayer,
+};
+pub use spike::{
+    spike_download_voice, spike_fetch_espeak, spike_synth_paragraph, SpikeError, SpikeObserver,
+    SpikeSynthOutcome,
 };
 
 // GOTCHA: proc-macro mode — the scaffolding macro expands to the extern "C"

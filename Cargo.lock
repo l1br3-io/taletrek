@@ -4493,9 +4493,14 @@ dependencies = [
 name = "taletrek-ffi"
 version = "0.1.0"
 dependencies = [
+ "rayon",
+ "taletrek-parse",
  "taletrek-reader",
  "taletrek-synth",
+ "taletrek-worker",
+ "thiserror 2.0.19",
  "uniffi",
+ "zip",
 ]
 
 [[package]]

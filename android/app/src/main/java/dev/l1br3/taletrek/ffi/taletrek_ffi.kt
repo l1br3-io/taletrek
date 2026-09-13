@@ -650,6 +650,28 @@ internal open class UniffiForeignFutureResultVoid(
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultVoid.UniffiByValue,)
 }
+internal interface UniffiCallbackInterfaceSpikeObserverMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`event`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "onEvent")
+internal open class UniffiVTableCallbackInterfaceSpikeObserver(
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `onEvent`: UniffiCallbackInterfaceSpikeObserverMethod0? = null,
+) : Structure() {
+    class UniffiByValue(
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `onEvent`: UniffiCallbackInterfaceSpikeObserverMethod0? = null,
+    ): UniffiVTableCallbackInterfaceSpikeObserver(`uniffiFree`,`uniffiClone`,`onEvent`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceSpikeObserver) {
+        `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `onEvent` = other.`onEvent`
+    }
+
+}
 
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
@@ -679,6 +701,12 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_position_storage_key(
     ): Int
+    external fun uniffi_taletrek_ffi_checksum_func_spike_download_voice(
+    ): Int
+    external fun uniffi_taletrek_ffi_checksum_func_spike_fetch_espeak(
+    ): Int
+    external fun uniffi_taletrek_ffi_checksum_func_spike_synth_paragraph(
+    ): Int
     external fun uniffi_taletrek_ffi_checksum_method_trekplayer_position(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_method_trekplayer_state_snapshot(
@@ -688,6 +716,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_taletrek_ffi_checksum_constructor_trekplayer_new(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_constructor_trekplayer_restore(
+    ): Int
+    external fun uniffi_taletrek_ffi_checksum_method_spikeobserver_on_event(
     ): Int
     external fun ffi_taletrek_ffi_uniffi_contract_version(
     ): Int
@@ -705,6 +735,7 @@ internal object UniffiLib {
 
     init {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "taletrek_ffi"))
+        uniffiCallbackInterfaceSpikeObserver.register(this)
         
     }
     external fun uniffi_taletrek_ffi_fn_clone_trekplayer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -721,11 +752,19 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_method_trekplayer_tick(`ptr`: Long,`event`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_taletrek_ffi_fn_init_callback_vtable_spikeobserver(`vtable`: UniffiVTableCallbackInterfaceSpikeObserver,
+    ): Unit
     external fun uniffi_taletrek_ffi_fn_func_open_book(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_read_segment(`path`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_position_storage_key(`bookId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_taletrek_ffi_fn_func_spike_download_voice(`cacheDir`: RustBuffer.ByValue,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_taletrek_ffi_fn_func_spike_fetch_espeak(`dataRoot`: RustBuffer.ByValue,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_taletrek_ffi_fn_func_spike_synth_paragraph(`voiceModel`: RustBuffer.ByValue,`espeakDir`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_taletrek_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -855,6 +894,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_taletrek_ffi_checksum_func_position_storage_key() != 1146) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_taletrek_ffi_checksum_func_spike_download_voice() != 39293) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_func_spike_fetch_espeak() != 22025) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_func_spike_synth_paragraph() != 28930) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_taletrek_ffi_checksum_method_trekplayer_position() != 36936) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -868,6 +916,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_constructor_trekplayer_restore() != 40300) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_method_spikeobserver_on_event() != 50312) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -961,7 +1012,38 @@ object UniffiWithHandle
  *
  * @suppress
  * */
-object NoHandle
+object NoHandle// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
+internal const val IDX_CALLBACK_FREE = 0
+// Callback return codes
+internal const val UNIFFI_CALLBACK_SUCCESS = 0
+internal const val UNIFFI_CALLBACK_ERROR = 1
+internal const val UNIFFI_CALLBACK_UNEXPECTED_ERROR = 2
+
+/**
+ * @suppress
+ */
+public abstract class FfiConverterCallbackInterface<CallbackInterface: Any>: FfiConverter<CallbackInterface, Long> {
+    internal val handleMap = UniffiHandleMap<CallbackInterface>()
+
+    internal fun drop(handle: Long) {
+        handleMap.remove(handle)
+    }
+
+    override fun lift(value: Long): CallbackInterface {
+        return handleMap.get(value)
+    }
+
+    override fun read(buf: ByteBuffer) = lift(buf.getLong())
+
+    override fun lower(value: CallbackInterface) = handleMap.insert(value)
+
+    override fun allocationSize(value: CallbackInterface) = 8UL
+
+    override fun write(value: CallbackInterface, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
 /**
  * The cleaner interface for Object finalization code to run.
  * This is the entry point to any implementation that we're using.
@@ -1937,6 +2019,69 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
 
 
 
+/**
+ * Numbers the spike returns for the throughput datapoint.
+ */
+data class SpikeSynthOutcome (
+    /**
+     * Synthesized canonical-WAV byte count.
+     */
+    var `wavBytes`: kotlin.ULong
+    , 
+    /**
+     * Audio seconds in that WAV (parsed, not estimated from bytes alone).
+     */
+    var `audioSeconds`: kotlin.Double
+    , 
+    /**
+     * Model load wall-time (the once-per-runner cost).
+     */
+    var `loadMs`: kotlin.ULong
+    , 
+    /**
+     * One-paragraph predict wall-time.
+     */
+    var `synthMs`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSpikeSynthOutcome: FfiConverterRustBuffer<SpikeSynthOutcome> {
+    override fun read(buf: ByteBuffer): SpikeSynthOutcome {
+        return SpikeSynthOutcome(
+            FfiConverterULong.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SpikeSynthOutcome) = (
+            FfiConverterULong.allocationSize(value.`wavBytes`) +
+            FfiConverterDouble.allocationSize(value.`audioSeconds`) +
+            FfiConverterULong.allocationSize(value.`loadMs`) +
+            FfiConverterULong.allocationSize(value.`synthMs`)
+    )
+
+    override fun write(value: SpikeSynthOutcome, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`wavBytes`, buf)
+            FfiConverterDouble.write(value.`audioSeconds`, buf)
+            FfiConverterULong.write(value.`loadMs`, buf)
+            FfiConverterULong.write(value.`synthMs`, buf)
+    }
+}
+
+
+
 
 
 /**
@@ -2646,6 +2791,123 @@ public object FfiConverterTypeFfiPlayerStatus: FfiConverterRustBuffer<FfiPlayerS
 
 
 
+
+/**
+ * Everything a spike call can fail with — deliberately stringly; the real
+ * task-004 surface gets typed variants.
+ */
+sealed class SpikeException(message: String): kotlin.Exception(message) {
+        
+    /**
+     * Download, unzip, or synth failure, stringified.
+     */
+        class Failed(message: String) : SpikeException(message)
+        
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<SpikeException> {
+        override fun lift(error_buf: RustBuffer.ByValue): SpikeException = FfiConverterTypeSpikeError.lift(error_buf)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSpikeError : FfiConverterRustBuffer<SpikeException> {
+    override fun read(buf: ByteBuffer): SpikeException {
+        
+            return when(buf.getInt()) {
+            1 -> SpikeException.Failed(FfiConverterString.read(buf))
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+        
+    }
+
+    override fun allocationSize(value: SpikeException): ULong {
+        return 4UL
+    }
+
+    override fun write(value: SpikeException, buf: ByteBuffer) {
+        when(value) {
+            is SpikeException.Failed -> {
+                buf.putInt(1)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
+
+
+/**
+ * Observer fed engine events (download progress, synth start/end) — the
+ * callback-vs-poll probe. Kotlin records the receiving thread to settle the
+ * spec's open question empirically.
+ */
+public interface SpikeObserver {
+    
+    /**
+     * One event line, `"<kind> <detail>"` shaped.
+     */
+    fun `onEvent`(`event`: kotlin.String)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceSpikeObserver {
+    internal object `onEvent`: UniffiCallbackInterfaceSpikeObserverMethod0 {
+        override fun callback(`uniffiHandle`: Long,`event`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeSpikeObserver.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onEvent`(
+                    FfiConverterString.lift(`event`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeSpikeObserver.handleMap.remove(handle)
+        }
+    }
+
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
+        override fun callback(handle: Long): Long {
+            return FfiConverterTypeSpikeObserver.handleMap.clone(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceSpikeObserver.UniffiByValue(
+        uniffiFree,
+        uniffiClone,
+        `onEvent`,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_taletrek_ffi_fn_init_callback_vtable_spikeobserver(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeSpikeObserver: FfiConverterCallbackInterface<SpikeObserver>()
+
+
+
+
 /**
  * @suppress
  */
@@ -2873,6 +3135,62 @@ public object FfiConverterSequenceTypeFfiParagraph: FfiConverterRustBuffer<List<
     
         
         FfiConverterString.lower(`bookId`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Resolve (and on first call download) the default curated voice from the
+         * real HuggingFace CDN into `cache_dir` — returns the `.onnx` model path. A
+         * warm cache short-circuits before any network (the observer sees no
+         * `download-step` events — the test's cache-hit oracle).
+         */
+    @Throws(SpikeException::class) fun `spikeDownloadVoice`(`cacheDir`: kotlin.String, `observer`: SpikeObserver): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(SpikeException) { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_spike_download_voice(
+    
+        
+        FfiConverterString.lower(`cacheDir`),
+        FfiConverterTypeSpikeObserver.lower(`observer`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Fetch + unzip espeak-ng-data (9 MB zip) into `data_root/espeak-ng-data`;
+         * returns that dir. Idempotent: an existing `lang_dict` marks the cache.
+         */
+    @Throws(SpikeException::class) fun `spikeFetchEspeak`(`dataRoot`: kotlin.String, `observer`: SpikeObserver): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(SpikeException) { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_spike_fetch_espeak(
+    
+        
+        FfiConverterString.lower(`dataRoot`),
+        FfiConverterTypeSpikeObserver.lower(`observer`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Load the sherpa model and synthesize one paragraph **on a rayon worker
+         * thread** (the production pool shape), firing observer events from inside
+         * that thread. Returns sizes + timings for the throughput datapoint.
+         */
+    @Throws(SpikeException::class) fun `spikeSynthParagraph`(`voiceModel`: kotlin.String, `espeakDir`: kotlin.String, `text`: kotlin.String, `observer`: SpikeObserver): SpikeSynthOutcome {
+            return FfiConverterTypeSpikeSynthOutcome.lift(
+    uniffiRustCallWithError(SpikeException) { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_spike_synth_paragraph(
+    
+        
+        FfiConverterString.lower(`voiceModel`),
+        FfiConverterString.lower(`espeakDir`),
+        FfiConverterString.lower(`text`),
+        FfiConverterTypeSpikeObserver.lower(`observer`),_status)
 }
     )
     }
