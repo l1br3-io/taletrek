@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -61,6 +62,7 @@ fun LibraryScreen(
     viewModel: LibraryViewModel,
     importViewModel: ImportViewModel,
     onOpenBook: (BookShelf) -> Unit,
+    onOpenVoices: () -> Unit,
     pendingImportUri: String?,
     pendingSourceUri: String?,
     onImportConsumed: () -> Unit,
@@ -145,6 +147,11 @@ fun LibraryScreen(
                         modifier =
                             Modifier.semantics { contentDescription = "Convert a document to an audio book" },
                     ) { Text("Convert") }
+                    IconButton(
+                        onClick = onOpenVoices,
+                        modifier =
+                            Modifier.semantics { contentDescription = "Manage voices" },
+                    ) { Icon(Icons.Default.Settings, contentDescription = null) }
                     IconButton(
                         onClick = { pickDocument.launch(arrayOf("*/*")) },
                         modifier =
@@ -233,6 +240,9 @@ fun LibraryScreen(
             dismissButton = {
                 Row {
                     TextButton(onClick = importViewModel::chooseTextOnly) { Text("Text only") }
+                    if (!gate.hasVoice) {
+                        TextButton(onClick = onOpenVoices) { Text("Voices…") }
+                    }
                     TextButton(onClick = importViewModel::cancelGate) { Text("Cancel") }
                 }
             },

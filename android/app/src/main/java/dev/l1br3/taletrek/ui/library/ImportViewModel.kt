@@ -45,6 +45,7 @@ class ImportViewModel(
     private val io: CoroutineDispatcher,
     private val copySource: suspend (uri: String) -> Pair<String, String?>,
     private val hasCachedVoice: () -> Boolean,
+    private val selectedVoice: () -> String?,
     private val startJob: (SynthJobRequest) -> Unit,
     private val deleteSource: (path: String) -> Unit,
     private val dirs: ImportDirs,
@@ -98,7 +99,7 @@ class ImportViewModel(
                 sourcePath = gate.sourcePath,
                 hint = gate.hint,
                 textOnly = textOnly,
-                voiceId = null,
+                voiceId = selectedVoice(),
                 voiceCacheDir = dirs.voiceCacheDir,
                 espeakDir = dirs.espeakDir,
                 booksDir = dirs.booksDir,
@@ -141,6 +142,7 @@ class ImportViewModel(
             io: CoroutineDispatcher,
             copySource: suspend (uri: String) -> Pair<String, String?>,
             hasCachedVoice: () -> Boolean,
+            selectedVoice: () -> String?,
             startJob: (SynthJobRequest) -> Unit,
             deleteSource: (path: String) -> Unit,
             dirs: ImportDirs,
@@ -148,8 +150,15 @@ class ImportViewModel(
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    ImportViewModel(io, copySource, hasCachedVoice, startJob, deleteSource, dirs)
-                        as T
+                    ImportViewModel(
+                        io,
+                        copySource,
+                        hasCachedVoice,
+                        selectedVoice,
+                        startJob,
+                        deleteSource,
+                        dirs,
+                    ) as T
             }
     }
 }

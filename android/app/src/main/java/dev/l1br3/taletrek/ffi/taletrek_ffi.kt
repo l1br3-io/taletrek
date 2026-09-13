@@ -2053,6 +2053,12 @@ data class FfiBook (
     var `title`: kotlin.String
     , 
     /**
+     * The voice the manifest advertises (`book.voiceId`) — what a later
+     * re-voice would replace; the pipeline's import flow surfaces it.
+     */
+    var `voiceId`: kotlin.String
+    , 
+    /**
      * Whether the bundle carries audio segments.
      */
     var `audioPresent`: kotlin.Boolean
@@ -2079,6 +2085,7 @@ public object FfiConverterTypeFfiBook: FfiConverterRustBuffer<FfiBook> {
         return FfiBook(
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterSequenceTypeFfiChapter.read(buf),
         )
@@ -2087,6 +2094,7 @@ public object FfiConverterTypeFfiBook: FfiConverterRustBuffer<FfiBook> {
     override fun allocationSize(value: FfiBook) = (
             FfiConverterString.allocationSize(value.`bookId`) +
             FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`voiceId`) +
             FfiConverterBoolean.allocationSize(value.`audioPresent`) +
             FfiConverterSequenceTypeFfiChapter.allocationSize(value.`chapters`)
     )
@@ -2094,6 +2102,7 @@ public object FfiConverterTypeFfiBook: FfiConverterRustBuffer<FfiBook> {
     override fun write(value: FfiBook, buf: ByteBuffer) {
             FfiConverterString.write(value.`bookId`, buf)
             FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`voiceId`, buf)
             FfiConverterBoolean.write(value.`audioPresent`, buf)
             FfiConverterSequenceTypeFfiChapter.write(value.`chapters`, buf)
     }

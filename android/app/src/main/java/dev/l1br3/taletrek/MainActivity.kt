@@ -23,6 +23,7 @@ import androidx.navigation.compose.rememberNavController
 import dev.l1br3.taletrek.data.BooksRepository
 import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.data.SourceImport
+import dev.l1br3.taletrek.data.VoiceStore
 import dev.l1br3.taletrek.service.SynthJobRequest
 import dev.l1br3.taletrek.ui.library.ImportViewModel
 import dev.l1br3.taletrek.ui.library.LibraryScreen
@@ -32,6 +33,8 @@ import dev.l1br3.taletrek.ui.reader.ReaderScreen
 import dev.l1br3.taletrek.ui.reader.ReaderViewModel
 import dev.l1br3.taletrek.ui.reader.openBookForReading
 import dev.l1br3.taletrek.ui.theme.TaletrekTheme
+import dev.l1br3.taletrek.ui.voices.VoiceScreen
+import dev.l1br3.taletrek.ui.voices.VoiceViewModel
 import kotlinx.coroutines.Dispatchers
 import java.io.File
 
@@ -42,6 +45,8 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var libraryViewModel: LibraryViewModel
     private lateinit var importViewModel: ImportViewModel
+    private lateinit var voiceViewModel: VoiceViewModel
+    private lateinit var voiceStore: VoiceStore
     private lateinit var positionStore: PositionStore
     private lateinit var transport: MediaControllerTransport
 
@@ -56,6 +61,7 @@ class MainActivity : ComponentActivity() {
                 this,
                 LibraryViewModel.factory(BooksRepository(this, positionStore)),
             )[LibraryViewModel::class.java]
+        voiceStore = VoiceStore.fromContext(this)
         importViewModel =
             ViewModelProvider(
                 this,
@@ -71,6 +77,7 @@ class MainActivity : ComponentActivity() {
                             .cachedVoiceIds(filesDir.resolve("voices").path)
                             .isNotEmpty()
                     },
+                    selectedVoice = { voiceStore.selectedSnapshot() },
                     startJob = { request: SynthJobRequest ->
                         startForegroundService(request.toIntent(this))
                     },
@@ -83,6 +90,16 @@ class MainActivity : ComponentActivity() {
                         ),
                 ),
             )[ImportViewModel::class.java]
+        voiceViewModel =
+            ViewModelProvider(
+                this,
+                VoiceViewModel.factory(
+                    io = Dispatchers.IO,
+                    voiceStore = voiceStore,
+                    voiceCacheDir = { filesDir.resolve("voices").path },
+                    espeakDir = { filesDir.resolve("espeak-ng-data").path },
+                ),
+            )[VoiceViewModel::class.java]
         handleViewIntent(intent)
         setContent {
             TaletrekTheme {
@@ -90,6 +107,7 @@ class MainActivity : ComponentActivity() {
                     AppNav(
                         libraryViewModel = libraryViewModel,
                         importViewModel = importViewModel,
+                        voiceViewModel = voiceViewModel,
                         positionStore = positionStore,
                         transport = transport,
                         pendingImportUri = pendingImportUri,
@@ -145,6 +163,7 @@ class MainActivity : ComponentActivity() {
 fun AppNav(
     libraryViewModel: LibraryViewModel,
     importViewModel: ImportViewModel,
+    voiceViewModel: VoiceViewModel,
     positionStore: PositionStore,
     transport: MediaControllerTransport,
     pendingImportUri: String?,
@@ -161,10 +180,17 @@ fun AppNav(
                 viewModel = libraryViewModel,
                 importViewModel = importViewModel,
                 onOpenBook = { book -> nav.navigate("reader/${book.bookId}") },
+                onOpenVoices = { nav.navigate("voices") },
                 pendingImportUri = pendingImportUri,
                 pendingSourceUri = pendingSourceUri,
                 onImportConsumed = onImportConsumed,
                 onSourceConsumed = onSourceConsumed,
+            )
+        }
+        composable("voices") {
+            VoiceScreen(
+                viewModel = voiceViewModel,
+                onBack = { nav.popBackStack() },
             )
         }
         composable("reader/{bookId}") { entry ->

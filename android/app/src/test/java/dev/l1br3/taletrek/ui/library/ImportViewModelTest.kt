@@ -41,6 +41,7 @@ class ImportViewModelTest {
                 if (copyFails) error("no stream") else copied.absolutePath to "source.txt"
             },
             hasCachedVoice = { voiceCached },
+            selectedVoice = { null },
             startJob = { started += it },
             deleteSource = { deleted += it },
             dirs =
