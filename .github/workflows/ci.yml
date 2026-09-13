@@ -102,7 +102,10 @@ jobs:
   # runs locally on hardware; see docs/developing.md § Android).
   android:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Fat-.so build (android-pipeline): the full dep graph cross-compiles
+    # for two ABIs + the k2-fsa sherpa archive download (~45 MB) — 20 min
+    # was tight; rust-cache still covers the target/ artifacts.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

@@ -1,7 +1,7 @@
 # Roadmap
 
 > Directional overview — no dates, no calendar. The *what's next*, not the spec.
-> **Next effort:** `android-app` — effort 4 of the native track (below); efforts 1–3.6 (`native-pivot`, `kernel-parse`, `desktop-synth-gui`, `desktop-ux-refresh`, `desktop-reader-page`) are shipped. The decision: [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md). The why + locked stack: [`ideas/native-pivot.md`](./ideas/native-pivot.md).
+> **Next effort:** `ios-app` — effort 5 of the native track (below); efforts 1–4.5 (`native-pivot`, `kernel-parse`, `desktop-synth-gui`, `desktop-ux-refresh`, `desktop-reader-page`, `android-app`, `android-pipeline`) are shipped. The decisions: [ADR-0015](./adrs/0015-native-pivot-rust-kernel-and-native-apps.md) (the pivot), [ADR-0016](./adrs/0016-on-device-pipeline-android.md) (on-device pipeline). The why + locked stack: [`ideas/native-pivot.md`](./ideas/native-pivot.md).
 > Companion: [`VISION.md`](./VISION.md) — the problem and goals.
 
 TaleTrek is a free, open-source **reading companion**: turn any ebook or document into an audiobook using an OSS neural TTS engine (sherpa-onnx — Piper + Kokoro voices) running in-process in a Rust kernel. It strips links, images, and footnotes so only the story flows, then plays it as background audio that survives screen lock, app switching, and phone closure. You go for a run; your book comes with you. Free app-store downloads, no subscription, no cloud — one kernel, three native apps, and a web landing page + `.taletrek` reader.
@@ -65,8 +65,9 @@ Efforts, dependency-aware:
 | 3 | `desktop-synth-gui` — the processor app: in-process sherpa-onnx TTS + native Opus encode behind the existing traits, egui GUI + unchanged CLI, release workflow | ✅ shipped ([spec](./specs/desktop-synth-gui/spec.md)) |
 | 3.5 | `desktop-ux-refresh` — identity pass on the processor: web-pinned two-theme tokens, embedded mono+serif fonts, panel layout, dark/sepia toggle | ✅ shipped ([spec](./specs/desktop-ux-refresh/spec.md)) |
 | 3.6 | `desktop-reader-page` — the read-back loop: `crates/reader` kernel core (BookIndex + PlayerState + Position) + in-app reader screen with paragraph-synced cpal/symphonia playback and position restore | ✅ shipped ([spec](./specs/desktop-reader-page/spec.md)) |
-| 4 | `android-app` — Jetpack Compose + Media3 player; kernel via UniFFI; free Play Store download | planned |
-| 5 | `ios-app` — SwiftUI + AVFoundation player; kernel via UniFFI; free App Store download ($99/yr accepted) | planned |
+| 4 | `android-app` — Jetpack Compose + Media3 player; kernel via UniFFI; free Play Store download | ✅ shipped ([spec](./specs/android-app/spec.md)) |
+| 4.5 | `android-pipeline` — files in, audio out, on the phone: `crates/worker::pipeline` (cancellable PipelineJob, deterministic ids) + FFI pipeline/voices surface + SynthService/import flow/voice catalog ([ADR-0016](./adrs/0016-on-device-pipeline-android.md)) | ✅ shipped ([spec](./specs/android-pipeline/spec.md)) |
+| 5 | `ios-app` — SwiftUI + AVFoundation; consumes the same `crates/ffi` surface (read + pipeline) unchanged; free App Store download ($99/yr accepted) | planned |
 
 **Interim gap — closed by `kernel-parse`:** before effort 2, nothing converted ebooks into bundles (the desktop CLI was bundle→bundle and the web reader only opened existing `.taletrek` files). Since effort 2, `taletrek-desktop parse --input <doc>` (or the chained `synth --input <doc>`) turns EPUB/TXT/HTML/MD/DOCX/PDF sources into bundles.
 

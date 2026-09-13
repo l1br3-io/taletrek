@@ -4,7 +4,7 @@
 
 ## Current effort
 
-**Efforts 1–4 shipped — the kernel lives on a phone too.** `native-pivot` re-founded the repo on the Rust-kernel direction (decision: [ADR-0015](docs/adrs/0015-native-pivot-rust-kernel-and-native-apps.md); the why + locked stack: [`docs/ideas/native-pivot.md`](docs/ideas/native-pivot.md)). `kernel-parse` built the ingest front door: `crates/parse` + `taletrek-desktop parse --input <doc>` → text-only `.taletrek`, chained `synth --input <doc>` → full audio bundle. `desktop-synth-gui` gave the kernel a face and removed its external binaries: in-process sherpa-onnx TTS (`SherpaRunner`, feature `sherpa`) + native Opus encode (`NativeOpusEncoder`, feature `native-encode`) are the defaults (subprocess `--piper`/`--ffmpeg` stay as overrides), an egui GUI (`gui` subcommand; bare run opens it) turns documents into bundles via a job queue with voice picker/catalog download, and a tag push builds release artifacts. Then `desktop-reader-page` taught it to read back; `android-app` crossed the kernel to a phone: `crates/ffi` (UniFFI → checked-in Kotlin) + `android/` (Compose library ⇄ reader, Media3 `MediaSessionService` — the Jog bar: lock-screen audio, notification chapter controls, corrupt-segment skip tolerance, DataStore positions; release job builds a signed AAB + universal APK). Specs: [`native-pivot`](docs/specs/native-pivot/spec.md) · [`kernel-parse`](docs/specs/kernel-parse/spec.md) · [`desktop-synth-gui`](docs/specs/desktop-synth-gui/spec.md) · [`desktop-reader-page`](docs/specs/desktop-reader-page/spec.md) · [`android-app`](docs/specs/android-app/spec.md). Next effort: `ios-app` (the same `crates/ffi` surface via UniFFI's Swift target) — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**Efforts 1–4.5 shipped — the phone is a processor now too.** `native-pivot` re-founded the repo on the Rust-kernel direction (decision: [ADR-0015](docs/adrs/0015-native-pivot-rust-kernel-and-native-apps.md); the why + locked stack: [`docs/ideas/native-pivot.md`](docs/ideas/native-pivot.md)). `kernel-parse` built the ingest front door: `crates/parse` + `taletrek-desktop parse --input <doc>` → text-only `.taletrek`, chained `synth --input <doc>` → full audio bundle. `desktop-synth-gui` gave the kernel a face and removed its external binaries: in-process sherpa-onnx TTS (`SherpaRunner`, feature `sherpa`) + native Opus encode (`NativeOpusEncoder`, feature `native-encode`) are the defaults (subprocess `--piper`/`--ffmpeg` stay as overrides), an egui GUI (`gui` subcommand; bare run opens it) turns documents into bundles via a job queue with voice picker/catalog download, and a tag push builds release artifacts. Then `desktop-reader-page` taught it to read back; `android-app` crossed the kernel to a phone: `crates/ffi` (UniFFI → checked-in Kotlin) + `android/` (Compose library ⇄ reader, Media3 `MediaSessionService` — the Jog bar: lock-screen audio, notification chapter controls, corrupt-segment skip tolerance, DataStore positions; release job builds a signed AAB + universal APK). `android-pipeline` then made the phone a processor (decision: [ADR-0016](docs/adrs/0016-on-device-pipeline-android.md)): `crates/worker::pipeline` (the cancellable PipelineJob — parse → deterministic ids → synth+stamp → atomic write), the additive FFI surface (pipeline + voices + espeak, Swift-ready), and the Android shell (`SynthService` foreground service, source import flow with voice gate, voice catalog UI — on-device conversion of all six formats, ~27 MB/ABI `.so` growth). Specs: [`native-pivot`](docs/specs/native-pivot/spec.md) · [`kernel-parse`](docs/specs/kernel-parse/spec.md) · [`desktop-synth-gui`](docs/specs/desktop-synth-gui/spec.md) · [`desktop-reader-page`](docs/specs/desktop-reader-page/spec.md) · [`android-app`](docs/specs/android-app/spec.md) · [`android-pipeline`](docs/specs/android-pipeline/spec.md). Next effort: `ios-app` (the same `crates/ffi` surface — read + pipeline — via UniFFI's Swift target) — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Live status always lives in the current effort's `spec.md` frontmatter (`status:`) + `todo.md` — **not here**.
 
@@ -75,11 +75,14 @@ desktop/           the kernel app — Rust + clap + egui (binary taletrek-deskto
   src/gui/reader/  the read-back half: session open flow, egui screen, sync UX,
                     playback controller, cpal+symphonia engine, position store
                     (sequencing itself lives in crates/reader — never here)
-android/           the Android player — hand-rolled Gradle + Compose + Media3
-                    (single activity; library ⇄ reader; MediaSessionService for
-                    background playback; UniFFI Kotlin checked in under app/…/ffi/)
+android/           the Android app — hand-rolled Gradle + Compose + Media3
+                    (single activity; library ⇄ reader ⇄ voices; MediaSessionService
+                    for playback + SynthService for on-device conversion —
+                    foreground dataSync, progress notification, cancel;
+                    UniFFI Kotlin checked in under app/…/ffi/)
 crates/ffi/        the kernel's foreign surface (taletrek-ffi): UniFFI wrappers over
-                    reader+synth default features — openBook/readSegment/TrekPlayer;
+                    reader+synth+parse+worker with sherpa+native-encode —
+                    openBook/readSegment/TrekPlayer + PipelineHandle/voices;
                     zero logic; Kotlin now, Swift in effort 5
 .github/workflows/ ci.yml (gates) + release.yml (tag v* → per-target release
                     artifacts — see docs/releasing.md)
@@ -91,7 +94,9 @@ crates/reader/     the read-side core: BookIndex + PlayerState sequencer + Posit
 crates/synth/      shared pure core: bundle I/O, synth, encode, cache_key (the interchange format);
                     engine impls behind features — sherpa_runner.rs (`sherpa`),
                     opus_native.rs (`native-encode`), subprocess piper/ffmpeg stay
-crates/worker/     shared host-level: voice acquire + rayon pool + manifest stamping
+crates/worker/     shared host-level: voice acquire + rayon pool + manifest stamping +
+                    pipeline.rs — the host-agnostic cancellable PipelineJob
+                    (parse → deterministic ids → synth+stamp → atomic write)
 ```
 
 ## Conventions

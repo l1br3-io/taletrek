@@ -62,6 +62,11 @@ release:
 - `taletrek-<version>-android-universal.apk` — the signed universal APK
   (both ABIs, side-load friendly; this is what the landing page links to)
 
+Since `android-pipeline` the kernel `.so` carries the full convert
+pipeline (onnxruntime + sherpa link in): expect the universal APK to be
+roughly **+60 MB** over the player-only builds (+27 MB/ABI — ADR-0016).
+Mention the growth in the release notes when it first ships.
+
 Dry runs (`workflow_dispatch`) build the same artifacts **unsigned** and
 attach them to the run only — never a release (the workflow's existing
 convention).

@@ -50,7 +50,7 @@ The read-aloud core — parse any document, clean the audio stream, speak it on-
 - Online ebook store or library integration — users bring their own files.
 - Real-time speech recognition / voice commands.
 - Multi-user or social features (sharing notes, ratings, reading groups).
-- On-device mobile synthesis and AI transforms — later, as desktop-processor features, once the kernel is proven; transforms require re-synth so they belong where synthesis lives.
+- On-device mobile synthesis — *deferred here to "later, once the kernel is proven"; the deferral is now spent: on-device conversion shipped on Android via [ADR-0016](./adrs/0016-on-device-pipeline-android.md).* AI transforms remain later desktop-processor features — they require re-synth, so they belong where synthesis's UI lives.
 
 **Across all phases — NOT building:**
 
