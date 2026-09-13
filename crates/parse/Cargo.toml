@@ -17,6 +17,8 @@ pulldown-cmark = { version = "0.13", default-features = false }
 quick-xml = "0.42"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+hex = "0.4"
 thiserror = "2"
 taletrek-synth = { path = "../synth" }
 uuid = { version = "1", features = ["v4"] }

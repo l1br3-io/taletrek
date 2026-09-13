@@ -11,12 +11,18 @@ description = "TaleTrek host-level synth worker — voice acquire + (later) para
 name = "taletrek_worker"
 path = "src/lib.rs"
 
+[features]
+# Forwarded to taletrek-synth: enables the real sherpa runner for the
+# `#[ignore]`d full-pipeline e2e fixture (mirrors the desktop's feature).
+sherpa = ["taletrek-synth/sherpa"]
+
 [dependencies]
 ureq = "3"
 dirs = "6"
 thiserror = "2"
 rayon = "1"
 taletrek-synth = { path = "../synth" }
+taletrek-parse = { path = "../parse" }
 
 [dev-dependencies]
 tempfile = "3"

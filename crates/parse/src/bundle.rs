@@ -30,6 +30,21 @@ use crate::{ParsedBook, SourceFormat};
 #[must_use]
 pub fn to_text_only_bundle(book: &ParsedBook, voice_id: &str, generator: Generator) -> BookBundle {
     let book_id = format!("bk_{}", uuid::Uuid::new_v4());
+    to_text_only_bundle_with_id(book, voice_id, generator, &book_id)
+}
+
+/// [`to_text_only_bundle`] with a caller-supplied book id — the seam the
+/// pipeline uses to pin a **deterministic content-derived id** (see
+/// [`deterministic_book_id`]) before chapter stamping: chapter ids
+/// `ch_{book_id}_{idx}` derive from it, so the id must be fixed here, at
+/// bundle-build time, not patched into the manifest afterwards.
+#[must_use]
+pub fn to_text_only_bundle_with_id(
+    book: &ParsedBook,
+    voice_id: &str,
+    generator: Generator,
+    book_id: &str,
+) -> BookBundle {
     let now = now_ms();
     let chapter_count = u32::try_from(book.chapters.len()).unwrap_or(u32::MAX);
     let chapters = book
@@ -40,7 +55,7 @@ pub fn to_text_only_bundle(book: &ParsedBook, voice_id: &str, generator: Generat
             // ChapterText::new stamps the ch_{book_id}_{index} id and leaves
             // headings empty — exactly this module's contract.
             ChapterText::new(
-                &book_id,
+                book_id,
                 u32::try_from(index).unwrap_or(u32::MAX),
                 &chapter.title,
                 chapter.paragraphs.clone(),
@@ -53,7 +68,7 @@ pub fn to_text_only_bundle(book: &ParsedBook, voice_id: &str, generator: Generat
             schema_version: SCHEMA_VERSION,
             kind: ManifestKind::Book,
             book: BookMeta {
-                id: book_id,
+                id: book_id.to_string(),
                 title: book.title.clone(),
                 author: book.author.clone(),
                 source_format: source_format_string(book.source_format).to_string(),
@@ -79,6 +94,48 @@ pub fn to_text_only_bundle(book: &ParsedBook, voice_id: &str, generator: Generat
         chapters,
         audio: std::collections::HashMap::new(),
     }
+}
+
+/// Derive a **deterministic** book id from parsed content: `bk_<16 hex>`
+/// (first 16 hex chars of SHA-256).
+///
+/// Why deterministic: the pipeline's re-import policy is "same document ⇒
+/// same book id ⇒ `books/<id>.taletrek` overwrite, no duplicates" — a fresh
+/// UUID per call ([`to_text_only_bundle`]) would make every re-import a new
+/// book. Ids also feed the library scan, so stability across runs is what
+/// keeps positions and shelves coherent.
+///
+/// Hash domain (versioned so a future domain change mints new ids instead of
+/// silently colliding with v1): the tag `taletrek-book-id/1`, then title,
+/// author, chapter count, and every chapter's title + paragraphs, each field
+/// NUL-separated — separators prevent concatenation ambiguity (title "ab" +
+/// author "c" hashes differently than title "a" + author "bc").
+///
+/// Not included: `source_format` (the same text parsed from a re-exported
+/// EPUB→TXT stays the same book), timestamps, and the generator identity.
+#[must_use]
+pub fn deterministic_book_id(book: &ParsedBook) -> String {
+    use sha2::{Digest, Sha256};
+
+    fn feed(hasher: &mut Sha256, field: &str) {
+        hasher.update(field.as_bytes());
+        hasher.update([0]);
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"taletrek-book-id/1");
+    hasher.update([0]);
+    feed(&mut hasher, &book.title);
+    feed(&mut hasher, book.author.as_deref().unwrap_or(""));
+    hasher.update(book.chapters.len().to_le_bytes());
+    for chapter in &book.chapters {
+        feed(&mut hasher, &chapter.title);
+        for paragraph in &chapter.paragraphs {
+            feed(&mut hasher, paragraph);
+        }
+    }
+    let digest = hasher.finalize();
+    format!("bk_{}", hex::encode(&digest[..8]))
 }
 
 /// Now-ms since the Unix epoch — the one clock read in the parse core.
@@ -112,6 +169,64 @@ mod tests {
     use taletrek_synth::{read_book_bundle, write_book_bundle};
 
     use crate::{ParsedBook, ParsedChapter};
+
+    #[test]
+    fn deterministic_book_id_separator_sensitivity() {
+        let a = ParsedBook {
+            title: "ab".into(),
+            author: Some("c".into()),
+            source_format: SourceFormat::Txt,
+            chapters: vec![ParsedChapter {
+                title: "one".into(),
+                paragraphs: vec!["p".into()],
+            }],
+        };
+        let b = ParsedBook {
+            title: "a".into(),
+            author: Some("bc".into()),
+            source_format: SourceFormat::Md,
+            chapters: vec![ParsedChapter {
+                title: "one".into(),
+                paragraphs: vec!["p".into()],
+            }],
+        };
+        assert_ne!(
+            deterministic_book_id(&a),
+            deterministic_book_id(&b),
+            "field boundaries must hash differently"
+        );
+        assert_eq!(
+            deterministic_book_id(&a),
+            deterministic_book_id(&a),
+            "same content ⇒ same id"
+        );
+        assert!(deterministic_book_id(&a).starts_with("bk_"));
+        assert_eq!(deterministic_book_id(&a).len(), 3 + 16);
+    }
+
+    #[test]
+    fn with_id_variant_stamps_the_given_id_into_chapters() {
+        let book = ParsedBook {
+            title: "T".into(),
+            author: None,
+            source_format: SourceFormat::Txt,
+            chapters: vec![ParsedChapter {
+                title: "c".into(),
+                paragraphs: vec!["p".into()],
+            }],
+        };
+        let bundle = to_text_only_bundle_with_id(
+            &book,
+            "v",
+            Generator {
+                app: "test".into(),
+                version: "0".into(),
+            },
+            "bk_fixed",
+        );
+        assert_eq!(bundle.manifest.book.id, "bk_fixed");
+        assert_eq!(bundle.chapters[0].id, "ch_bk_fixed_0");
+    }
 
     const TEST_VOICE: &str = "en_US-ryan-medium";
 

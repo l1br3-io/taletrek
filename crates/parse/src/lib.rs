@@ -30,7 +30,7 @@ mod md;
 mod pdf;
 mod txt;
 
-pub use bundle::to_text_only_bundle;
+pub use bundle::{deterministic_book_id, to_text_only_bundle, to_text_only_bundle_with_id};
 pub use clean::clean_book;
 pub use detect::detect_format;
 

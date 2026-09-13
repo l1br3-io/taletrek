@@ -24,6 +24,7 @@
 //! concerns (the desktop's `summary` line, its `elapsed()` timer) stay off the
 //! trait as inherent methods on the concrete type.
 
+pub mod pipeline;
 pub mod progress;
 pub mod stamp;
 pub mod synth_job;
@@ -60,6 +61,10 @@ pub trait ProgressSink: Send + Sync {
 }
 
 // Flat type re-exports — the primary public API.
+pub use pipeline::{
+    CancelFlag, CancellableRunner, PipelineError, PipelineEvent, PipelineJob, PipelineOutcome,
+    PipelinePhase, PipelineReporter, PipelineSpec, PipelineVariant, RunnerFactory,
+};
 pub use progress::Progress;
 pub use stamp::{
     refuse_full_input, resynth_and_stamp, synth_and_stamp, FullInputError, StampError,

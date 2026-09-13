@@ -4507,12 +4507,14 @@ dependencies = [
 name = "taletrek-parse"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "pdf-extract",
  "pulldown-cmark",
  "quick-xml 0.42.0",
  "regex",
  "scraper",
  "serde",
+ "sha2",
  "taletrek-synth",
  "thiserror 2.0.19",
  "uuid",
@@ -4551,6 +4553,7 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "rayon",
+ "taletrek-parse",
  "taletrek-synth",
  "tempfile",
  "thiserror 2.0.19",
