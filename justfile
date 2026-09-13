@@ -78,9 +78,49 @@ android_home := env_var_or_default('ANDROID_HOME', home_directory() / '.local' /
 java_home    := env_var_or_default('JAVA_HOME', home_directory() / '.local' / 'share' / 'jdk')
 
 # Kernel → .so for both ABIs, placed into android jniLibs (cargo-ndk; NDK r28c)
+#
+# GOTCHA (three linking traps, all hit in android-pipeline T1 — fat .so):
+# 1. opusic-sys (bundled libopus via cmake) only switches to the NDK toolchain
+#    file when ANDROID_NDK_HOME is exported — cargo-ndk sets just ANDROID_HOME,
+#    and without it system cmake's Android-Determine fails ("Neither the NDK
+#    or a standalone toolchain was found").
+# 2. sherpa-onnx-sys forces SHARED linking on Android and its prebuilt archive
+#    extracts jniLibs/ with NO top-level dir, while its build script expects
+#    <stem>/jniLibs/<abi>/ and panics otherwise ("Downloaded archive did not
+#    contain a lib directory") — pre-arrange that layout here (archive
+#    downloaded once, extracted into the stem dir; its early-return path then
+#    skips its own download). Version derives from Cargo.lock so a sherpa bump
+#    flows through.
+# 3. Shared linking means libtaletrek_ffi.so carries DT_NEEDED on
+#    libsherpa-onnx-c-api.so + libonnxruntime.so — both must be copied into
+#    jniLibs or the APK installs but fails to load (skip -jni/-cxx-api: the
+#    app never loads those two, ~5 MB/ABI saved).
+# GOTCHA: just backticks do not interpolate {{...}} — keep variable-free.
+sherpa_ver := `grep -A1 'name = "sherpa-onnx-sys"' Cargo.lock | grep version | cut -d'"' -f2`
+
 android-kernel:
-    ANDROID_HOME={{android_home}} cargo ndk -t arm64-v8a -t x86_64 \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ANDROID_HOME="${ANDROID_HOME:-$HOME/.local/share/android-sdk}"
+    NDK="$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)"
+    SHERPA=target/sherpa-onnx-prebuilt
+    STEM="sherpa-onnx-v{{sherpa_ver}}-android"
+    if [ ! -d "$SHERPA/$STEM/jniLibs/arm64-v8a" ]; then
+        mkdir -p "$SHERPA/$STEM"
+        if [ ! -f "$SHERPA/$STEM.tar.bz2" ]; then
+            curl -fL -o "$SHERPA/$STEM.tar.bz2" \
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/v{{sherpa_ver}}/$STEM.tar.bz2"
+        fi
+        tar -xjf "$SHERPA/$STEM.tar.bz2" -C "$SHERPA/$STEM"
+    fi
+    ANDROID_HOME="$ANDROID_HOME" ANDROID_NDK_HOME="$NDK" \
+        cargo ndk -t arm64-v8a -t x86_64 \
         -o android/app/src/main/jniLibs build -p taletrek-ffi --lib --release
+    for abi in arm64-v8a x86_64; do
+        cp "$SHERPA/$STEM/jniLibs/$abi/libsherpa-onnx-c-api.so" \
+           "$SHERPA/$STEM/jniLibs/$abi/libonnxruntime.so" \
+           "android/app/src/main/jniLibs/$abi/"
+    done
 
 # Regenerate the checked-in UniFFI Kotlin bindings for crates/ffi into the
 # app's ffi package (task 002 consumes; Gradle never invokes Cargo).

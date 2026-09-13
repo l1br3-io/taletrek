@@ -33,3 +33,24 @@ pub use player::{
 // --features cli` (the standalone `uniffi-bindgen-cli` crate is gone), and
 // the bindgen config's crate key is the underscore name (`taletrek_ffi`).
 uniffi::setup_scaffolding!();
+
+// GOTCHA (android-pipeline T1): with no wrapper touching them yet, rustc
+// + lld dead-strip the pipeline crates out of the cdylib — the "fat" .so
+// stayed lean with no DT_NEEDED on libsherpa-onnx-c-api.so /
+// libonnxruntime.so, proving nothing. This #[used] static is a link check,
+// never executed: its closures are codegen'd (llvm.used roots survive
+// --gc-sections), dragging parse, the sherpa runner and the native Opus
+// encoder — and their native deps — into the artifact. Task 004's real
+// pipeline wrappers make it redundant.
+#[used]
+static LINK_PIPELINE: [fn(); 2] = [
+    || {
+        let _ = taletrek_parse::detect_format(&[]);
+        let _ = taletrek_worker::voices::CURATED_VOICES.len();
+    },
+    || {
+        let encoder = taletrek_synth::opus_native::NativeOpusEncoder::new();
+        let _ = taletrek_synth::encode::Encoder::encode(&encoder, &[]);
+        let _ = taletrek_synth::sherpa_runner::SherpaRunner::new(std::path::Path::new(""));
+    },
+];

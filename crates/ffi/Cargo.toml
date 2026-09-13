@@ -17,7 +17,14 @@ crate-type = ["lib", "cdylib"]
 
 [dependencies]
 taletrek-reader = { path = "../reader" }
-taletrek-synth = { path = "../synth" }
+# Full pipeline surface (android-pipeline task 001): parse + worker + the
+# in-process engines. sherpa links a prebuilt shared libsherpa-onnx-c-api.so
+# + libonnxruntime.so on Android (static on desktop hosts) — the justfile's
+# android-kernel recipe copies them into jniLibs after the build. native-encode
+# vendors libopus via cmake (needs the NDK toolchain env cargo-ndk provides).
+taletrek-synth = { path = "../synth", features = ["sherpa", "native-encode"] }
+taletrek-parse = { path = "../parse" }
+taletrek-worker = { path = "../worker" }
 uniffi = "0.32"
 
 [lints]
