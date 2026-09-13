@@ -100,6 +100,15 @@ class ReaderScreenTest {
         fun seedLibrary() {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val target = instrumentation.targetContext
+            // The library asks for POST_NOTIFICATIONS on first composition —
+            // on the fresh install every connected run starts with, that
+            // system dialog covers the app and no compose hierarchy is ever
+            // visible to the rule. Grant it before the activity launches.
+            instrumentation
+                .uiAutomation
+                .executeShellCommand(
+                    "pm grant ${target.packageName} android.permission.POST_NOTIFICATIONS",
+                ).close()
             // Hermetic start: one known book, no stored positions (the
             // production store instance doesn't exist yet — safe to delete).
             File(target.filesDir, "books").deleteRecursively()

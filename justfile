@@ -91,13 +91,93 @@ android-bindings:
     uniffi-bindgen generate --library target/debug/libtaletrek_ffi.so --language kotlin \
         --config crates/ffi/uniffi.toml --no-format --out-dir android/app/src/main/java
 
+# One-time: emulator + system image + `taletrek` AVD (idempotent; ~1.5 GB download)
+android-emulator-setup:
+    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} bash scripts/setup-android-emulator.sh
+
+# The daily dev command (dev-web's counterpart): build the debug APK, make
+# sure a windowed emulator is up (cold-boot only if none), reinstall, and
+# force-stop + relaunch TaleTrek — app-level restart, no emulator reboot
+android-serve-dev: android
+    just _android-serve fast
+
+# Clean-slate variant: also stops any running emulator and cold-boots fresh
+# (-no-snapshot — no quickboot resume) before reinstall + relaunch
+android-serve-fresh: android
+    just _android-serve fresh
+
+# Workhorse behind the serve recipes; mode = fast | fresh. Boot always uses
+# software GL (swiftshader_indirect) — on hybrid-GPU hosts (Intel+NVIDIA) the
+# default host-GL pipe renders a black window (guest fine, window dead);
+# override via TT_EMULATOR_GPU.
+_android-serve mode:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EMU="{{android_home}}/emulator/emulator"
+    ADB="{{android_home}}/platform-tools/adb"
+    [ -x "$EMU" ] || { echo "emulator not installed — run: just android-emulator-setup"; exit 1; }
+    "$EMU" -list-avds | grep -qx taletrek || { echo "AVD 'taletrek' missing — run: just android-emulator-setup"; exit 1; }
+    [ -e /dev/kvm ] || { echo "/dev/kvm missing — the emulator needs KVM on Linux"; exit 1; }
+    running() { "$ADB" devices | grep -q '^emulator-'; }
+    if running && { [ "{{mode}}" = "fresh" ] || pgrep -f 'qemu-system-.*-headless' >/dev/null; }; then
+        echo "emulator: stopping previous instance"
+        "$ADB" emu kill || true
+        for _ in $(seq 1 30); do running || break; sleep 1; done
+        running && { echo "emulator: did not stop within 30s — run: just android-emulator-stop, then retry"; exit 1; }
+    fi
+    if ! running; then
+        mkdir -p "{{cache_dir}}"
+        nohup "$EMU" -avd taletrek -no-snapshot -gpu "${TT_EMULATOR_GPU:-swiftshader_indirect}" \
+            > "{{cache_dir}}/emulator.log" 2>&1 &
+        echo "emulator: cold-booting (windowed) — takes a minute or two (log: {{cache_dir}}/emulator.log)"
+    fi
+    "$ADB" wait-for-device
+    for _ in $(seq 1 150); do
+        [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '[:space:]')" = "1" ] && break
+        sleep 2
+    done
+    [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '[:space:]')" = "1" ] \
+        || { echo "emulator: boot timed out (5 min) — check the emulator window"; exit 1; }
+    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android installDebug
+    "$ADB" shell am force-stop dev.l1br3.taletrek
+    "$ADB" shell am start -n dev.l1br3.taletrek/.MainActivity
+    echo "taletrek: relaunched (fresh process) — emulator stays up (stop: just android-emulator-stop)"
+
+# Push a file from your machine into the emulator's Download folder — then
+# in TaleTrek tap Import and pick it from the Downloads root in the picker
+android-push file:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADB="{{android_home}}/platform-tools/adb"
+    FILE="{{file}}"
+    "$ADB" devices | grep -q '^emulator-' || { echo "no device — run: just android-serve-dev first"; exit 1; }
+    "$ADB" push "$FILE" /sdcard/Download/
+    "$ADB" shell content call --uri content://media/none/media_scanner \
+        --method scan_volume --arg external_primary >/dev/null 2>&1 || true
+    echo "pushed: $FILE — in the app tap Import, then pick Downloads in the picker"
+
+# Push the test .taletrek bundles into the emulator's Download folder — for
+# manually testing Library import (picker → Downloads root). Idempotent.
+android-fixtures:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADB="{{android_home}}/platform-tools/adb"
+    "$ADB" devices | grep -q '^emulator-' || { echo "no device — run: just android-serve-dev first"; exit 1; }
+    for f in crates/synth/tests/fixtures/*.taletrek; do
+        "$ADB" push "$f" /sdcard/Download/ >/dev/null
+        echo "pushed: $(basename "$f")"
+    done
+    "$ADB" shell content call --uri content://media/none/media_scanner \
+        --method scan_volume --arg external_primary >/dev/null 2>&1 || true
+    echo "fixtures: /sdcard/Download — in the app tap Import, then pick Downloads in the picker"
+
+# Shut the running emulator down cleanly (adb emu kill)
+android-emulator-stop:
+    @"{{android_home}}/platform-tools/adb" emu kill && echo "emulator: stopped" || echo "emulator: not running"
+
 # Build debug APK (kernel + gradle assembleDebug)
 android: android-kernel
     JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android assembleDebug
-
-# Install debug build on connected device/emulator
-android-install: android
-    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android installDebug
 
 # Kotlin JVM unit tests + ktlint (gradlew testDebugUnitTest — pure-Kotlin only;
 # the .so does not load on the JVM — instrumented is where kernel code runs)

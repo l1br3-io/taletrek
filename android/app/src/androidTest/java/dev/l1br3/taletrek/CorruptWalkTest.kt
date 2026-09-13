@@ -25,17 +25,22 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 /**
- * The corrupt-segment walk on device, for real: one `audio/` entry
- * truncated inside an otherwise-valid copy of the playable fixture —
- * the zip reads fine, the OGG doesn't. The whole `SegmentFailed` path
- * exercised end-to-end: the paragraph is skipped, `FailureLog` counts
- * it, the book plays through to its terminal stop, and the temp-file
- * cache stays bounded.
+ * The corrupt-segment walk on device, for real: one `audio/` entry's
+ * OGG page magic zeroed inside an otherwise-valid copy of the playable
+ * fixture — the zip reads fine, the extractor sniffs no stream. The
+ * whole `SegmentFailed` path exercised end-to-end: the paragraph is
+ * skipped, `FailureLog` counts it, the book plays through to its
+ * terminal stop, and the temp-file cache stays bounded.
+ *
+ * GOTCHA: mid-stream truncation is NOT a decode error on Android —
+ * ExoPlayer's OGG extractor treats EOF as end-of-stream and drains the
+ * partial audio cleanly (no onPlayerError, no skip counted). Breaking
+ * the page magic is; keep the byte length so the zip itself stays valid.
  */
 @RunWith(AndroidJUnit4::class)
 class CorruptWalkTest {
     @Test
-    fun aTruncatedSegmentIsSkippedCountedAndTheWalkContinues() {
+    fun aCorruptSegmentIsSkippedCountedAndTheWalkContinues() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val source =
@@ -45,13 +50,15 @@ class CorruptWalkTest {
                 }
             }
         val bundle = File(context.cacheDir, "corrupt-${System.nanoTime()}.taletrek")
-        val corruptKey = truncatedFirstAudioEntry(source, bundle)
+        corruptFirstAudioEntry(source, bundle)
 
         val book = openBook(bundle.absolutePath)
+        // Every paragraph gets a load, in book order — the corrupt entry
+        // fetches fine (a valid zip entry) and fails at decode instead;
+        // the skip itself is asserted via the failure count below.
         val expectedKeys =
             book.chapters
                 .flatMap { ch -> ch.paragraphs.map { p -> p.segmentKey } }
-                .filter { it != corruptKey }
 
         val walk =
             onMain(instrumentation) {
@@ -83,7 +90,7 @@ class CorruptWalkTest {
 
         val loads = onMain(instrumentation) { walk.port.appliedLoads() }
         assertEquals("the readable paragraphs played, in book order", expectedKeys, loads)
-        assertEquals("the truncated segment is counted exactly once", 1u, snapshot.failures.skipped)
+        assertEquals("the corrupt segment is counted exactly once", 1u, snapshot.failures.skipped)
         assertTrue("book end terminal-stops the player", walk.port.stops >= 1)
         assertTrue("at most one segment file resident during the walk", maxResident <= 1)
 
@@ -94,15 +101,15 @@ class CorruptWalkTest {
     }
 
     /**
-     * Rewrite the bundle with the first `audio/` entry truncated to
-     * half its bytes — a valid zip entry whose OGG payload is cut
-     * short (decode fails, the archive itself doesn't). Returns the
-     * corrupted entry's name (the segment key).
+     * Rewrite the bundle with the first `audio/` entry's OGG page magic
+     * ("OggS") zeroed — same byte length (the zip stays valid), but the
+     * extractor can no longer sniff the stream: a load error, the
+     * `SegmentFailed` path.
      */
-    private fun truncatedFirstAudioEntry(
+    private fun corruptFirstAudioEntry(
         source: File,
         dest: File,
-    ): String {
+    ) {
         ZipFile(source).use { zip ->
             val entries = zip.entries().toList()
             val corrupt = entries.first { it.name.startsWith("audio/") }
@@ -112,7 +119,8 @@ class CorruptWalkTest {
                     zip.getInputStream(entry).use { input ->
                         if (entry.name == corrupt.name) {
                             val bytes = input.readBytes()
-                            out.write(bytes, 0, maxOf(1, bytes.size / 2))
+                            for (i in 0 until 4) bytes[i] = 0
+                            out.write(bytes)
                         } else {
                             input.copyTo(out)
                         }
@@ -120,7 +128,6 @@ class CorruptWalkTest {
                     out.closeEntry()
                 }
             }
-            return corrupt.name
         }
     }
 

@@ -62,9 +62,12 @@ android {
 
     // The committed kernel fixtures ride in as androidTest assets —
     // single source of truth with the Rust suites, no copied files.
+    // Paths resolve from this module's dir (android/app), so the repo
+    // root is ../.. — a silent no-op if the dir doesn't exist (no assets
+    // in the APK, every fixture test FileNotFounds on device).
     sourceSets {
         getByName("androidTest") {
-            assets.directories += "../crates/synth/tests/fixtures"
+            assets.directories += "../../crates/synth/tests/fixtures"
         }
     }
 }

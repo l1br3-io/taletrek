@@ -58,6 +58,12 @@ interface ReaderTransport {
 class MediaControllerTransport(
     context: Context,
 ) : ReaderTransport {
+    // GOTCHA: must be declared BEFORE controllerFuture — initializers run in
+    // declaration order, and buildController() (below) reads appContext while
+    // constructing. Declared after, the field is still null and ComponentName
+    // NPEs on the very first launch (first surfaced by the emulator suites).
+    private val appContext: Context = context.applicationContext
+
     private var controller: MediaController? = null
 
     private val _states =
@@ -120,8 +126,6 @@ class MediaControllerTransport(
         )
         return future
     }
-
-    private val appContext: Context = context.applicationContext
 
     fun release() {
         MediaController.releaseFuture(controllerFuture)

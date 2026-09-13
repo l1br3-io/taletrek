@@ -70,6 +70,13 @@ class ReaderSyncTest {
         fun seedLibrary() {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val target = instrumentation.targetContext
+            // Grant POST_NOTIFICATIONS ahead of launch — the first-run
+            // permission dialog would cover the app (see ReaderScreenTest).
+            instrumentation
+                .uiAutomation
+                .executeShellCommand(
+                    "pm grant ${target.packageName} android.permission.POST_NOTIFICATIONS",
+                ).close()
             File(target.filesDir, "books").deleteRecursively()
             File(target.filesDir, "datastore").deleteRecursively()
             val books = File(target.filesDir, "books").apply { mkdirs() }

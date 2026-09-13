@@ -122,7 +122,10 @@ task-002 Outcome for the pairing rationale):
 
 ```
 just android              # kernel .so + gradle assembleDebug → APK
-just android-install      # install on the connected device/emulator
+just android-serve-dev    # daily: build → emulator up (boot only if needed) → install → force-stop + relaunch TaleTrek (fast, no emulator reboot)
+just android-serve-fresh  # clean slate: stop emulator → cold-boot (no quickboot resume) → install → relaunch
+just android-fixtures     # push the test .taletrek bundles to the emulator's Download folder (manual import testing)
+just android-push FILE    # push any file from your machine into the emulator's Download folder
 just android-test         # JVM unit tests + ktlintCheck
 just android-instrumented # kernel round-trip on device (ffi smoke)
 just android-bindings     # regen the checked-in UniFFI Kotlin
@@ -135,6 +138,30 @@ need a real device or emulator via adb — ffi round-trips, the playback walk,
 the corrupt-segment walk, and the Compose reader/UI suites all run there;
 with no device attached, the headless gates (`just android-test`,
 `assembleDebug`) are the local loop, exactly like CI.
+
+**Emulator:** works out of the box — the kernel `.so` is cross-built for
+both `arm64-v8a` and `x86_64`, and the x86_64 ABI runs natively on standard
+emulator system images (no ARM translation). Linux needs KVM.
+
+```
+just android-emulator-setup    # one-time: emulator + android-36 google_apis x86_64 image + `taletrek` AVD (pixel_6; idempotent, ~1.5 GB)
+just android-serve-dev         # build → emulator up (boot only if needed) → install → relaunch TaleTrek (left running)
+just android-serve-fresh       # same, but stops the emulator first and cold-boots (no quickboot resume)
+just android-emulator-stop     # shut it down cleanly
+```
+
+(`scripts/setup-android-emulator.sh` behind the setup recipe wraps the raw
+`sdkmanager`/`avdmanager` commands — binaries live under
+`$ANDROID_HOME/cmdline-tools/latest/bin` and `$ANDROID_HOME/emulator` if you
+need them directly. Windowed boots render via SwiftShader software GL
+(`-gpu swiftshader_indirect`): the default host-GL pipe can show a black
+window on hybrid-GPU laptops — override with `TT_EMULATOR_GPU=host`. Boot
+log: `~/.cache/taletrek/emulator.log`.)
+With the emulator up, `just android-instrumented` runs the on-device suites.
+An emulator covers the ffi round-trips, playback/corrupt walks, Compose UI
+suites, and most of the manual smoke (import → play → seek → kill → resume);
+audio focus, real lock-screen behavior, and OEM background-killing are
+device-only signal — the spec's final smoke stays a hardware checklist.
 
 ## Ports at a glance
 

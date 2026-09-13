@@ -53,11 +53,15 @@ class PositionStore(
     suspend fun load(bookId: String): FfiPosition? {
         val base = positionStorageKey(bookId)
         val prefs = datastore.data.first()
-        // Wrong-typed fields read null here (DataStore's typed get) — the
-        // desktop's discard-the-whole-entry rule.
-        val chapter = prefs[longPreferencesKey("$base.chapter")] ?: return null
-        val index = prefs[longPreferencesKey("$base.index")] ?: return null
-        val offset = prefs[doublePreferencesKey("$base.offset")] ?: return null
+        // GOTCHA: Preferences keys compare by NAME only — a String written
+        // under "$base.chapter" is happily returned by longPreferencesKey()
+        // and the typed get ClassCastExceptions. Go through the untyped
+        // map + safe casts so a wrong-typed field reads the whole entry
+        // as absent — the desktop's discard-the-entry rule.
+        val values = prefs.asMap()
+        val chapter = values[longPreferencesKey("$base.chapter")] as? Long ?: return null
+        val index = values[longPreferencesKey("$base.index")] as? Long ?: return null
+        val offset = values[doublePreferencesKey("$base.offset")] as? Double ?: return null
         if (chapter < 0 || index < 0 || !offset.isFinite()) return null
         return FfiPosition(chapter.toUInt(), index.toUInt(), offset)
     }
