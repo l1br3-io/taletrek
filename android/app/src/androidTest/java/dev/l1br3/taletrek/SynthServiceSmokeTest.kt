@@ -39,7 +39,28 @@ import java.util.concurrent.atomic.AtomicBoolean
 class SynthServiceSmokeTest {
     @After
     fun resetSeam() {
+        // Explicit teardown: a stopped record can't wedge a later test's
+        // start (the service's own linger is a production nicety, not a
+        // test contract).
+        ApplicationProvider.getApplicationContext<android.content.Context>().let {
+            it.stopService(android.content.Intent(it, SynthService::class.java))
+        }
         SynthService.seamOverride = null
+    }
+
+    /**
+     * Await THIS run's outcome, never a stale terminal: observe a change
+     * from the snapshot first (a fresh controller resets the slot to
+     * null), then the target. Guard borrowed from the matrix test.
+     */
+    private suspend fun awaitFresh(target: (SynthUiState?) -> Boolean): SynthUiState {
+        val before = SynthService.active.value
+        withTimeout(20_000) {
+            SynthService.active.first { it != before }
+        }
+        return withTimeout(30_000) {
+            SynthService.active.first { target(it) && it != null }!!
+        }
     }
 
     /** Emits a scripted lifecycle (paragraph steps over ~1 s), then a
@@ -126,10 +147,7 @@ class SynthServiceSmokeTest {
                 }
             try {
                 startService(engine)
-                val done =
-                    withTimeout(20_000) {
-                        SynthService.active.first { it is SynthUiState.Done }
-                    }
+                val done = awaitFresh { it is SynthUiState.Done }
                 assertEquals(
                     SynthUiState.Done(
                         bookId = "bk_smoke",
@@ -157,19 +175,14 @@ class SynthServiceSmokeTest {
         runBlocking {
             val engine = ScriptedEngine(FfiPipelineState.Finished(FfiPipelineOutcome("x", "x", true, 1u, 1u, 1u)))
             startService(engine)
-            withTimeout(10_000) {
-                SynthService.active.first { it is SynthUiState.Synthesizing }
-            }
+            awaitFresh { it is SynthUiState.Synthesizing }
             val context = ApplicationProvider.getApplicationContext<android.content.Context>()
             context.startService(
                 android.content
                     .Intent(context, SynthService::class.java)
                     .setAction(SynthService.ACTION_CANCEL),
             )
-            val terminal =
-                withTimeout(20_000) {
-                    SynthService.active.first { it is SynthUiState.Cancelled }
-                }
+            val terminal = awaitFresh { it is SynthUiState.Cancelled }
             assertEquals(SynthUiState.Cancelled, terminal)
         }
 
@@ -199,10 +212,7 @@ class SynthServiceSmokeTest {
                 )
             context.startForegroundService(request.toIntent(context))
 
-            val done =
-                withTimeout(30_000) {
-                    SynthService.active.first { it is SynthUiState.Done }
-                }
+            val done = awaitFresh { it is SynthUiState.Done }
             val bundle = java.io.File((done as SynthUiState.Done).bundlePath)
             assertTrue("bundle missing at ${bundle.absolutePath}", bundle.isFile)
             assertTrue(bundle.name.startsWith("bk_"))

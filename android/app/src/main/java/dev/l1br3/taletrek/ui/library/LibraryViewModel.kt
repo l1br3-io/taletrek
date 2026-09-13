@@ -45,6 +45,11 @@ class LibraryViewModel(
         }
     }
 
+    /** Re-scan now — e.g. after a convert job dropped a bundle in `books/`. */
+    fun rescan() {
+        viewModelScope.launch { repo.refresh() }
+    }
+
     /** A document was picked (SAF) or opened (VIEW intent) — import it. */
     fun onImportPicked(uri: String) {
         viewModelScope.launch {

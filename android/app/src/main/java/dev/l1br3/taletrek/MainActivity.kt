@@ -1,6 +1,7 @@
 package dev.l1br3.taletrek
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,6 +22,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import dev.l1br3.taletrek.data.BooksRepository
 import dev.l1br3.taletrek.data.PositionStore
+import dev.l1br3.taletrek.data.SourceImport
+import dev.l1br3.taletrek.service.SynthJobRequest
+import dev.l1br3.taletrek.ui.library.ImportViewModel
 import dev.l1br3.taletrek.ui.library.LibraryScreen
 import dev.l1br3.taletrek.ui.library.LibraryViewModel
 import dev.l1br3.taletrek.ui.reader.MediaControllerTransport
@@ -28,12 +32,16 @@ import dev.l1br3.taletrek.ui.reader.ReaderScreen
 import dev.l1br3.taletrek.ui.reader.ReaderViewModel
 import dev.l1br3.taletrek.ui.reader.openBookForReading
 import dev.l1br3.taletrek.ui.theme.TaletrekTheme
+import kotlinx.coroutines.Dispatchers
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private var navController: NavHostController? = null
     private var pendingImportUri by mutableStateOf<String?>(null)
+    private var pendingSourceUri by mutableStateOf<String?>(null)
 
     private lateinit var libraryViewModel: LibraryViewModel
+    private lateinit var importViewModel: ImportViewModel
     private lateinit var positionStore: PositionStore
     private lateinit var transport: MediaControllerTransport
 
@@ -48,16 +56,46 @@ class MainActivity : ComponentActivity() {
                 this,
                 LibraryViewModel.factory(BooksRepository(this, positionStore)),
             )[LibraryViewModel::class.java]
+        importViewModel =
+            ViewModelProvider(
+                this,
+                ImportViewModel.factory(
+                    io = kotlinx.coroutines.Dispatchers.IO,
+                    copySource = { uri ->
+                        val parsed = Uri.parse(uri)
+                        val file = SourceImport.copyToCache(this, parsed)
+                        file.absolutePath to SourceImport.displayNameOf(this, parsed)
+                    },
+                    hasCachedVoice = {
+                        dev.l1br3.taletrek.ffi
+                            .cachedVoiceIds(filesDir.resolve("voices").path)
+                            .isNotEmpty()
+                    },
+                    startJob = { request: SynthJobRequest ->
+                        startForegroundService(request.toIntent(this))
+                    },
+                    deleteSource = { path: String -> SourceImport.deleteQuietly(File(path)) },
+                    dirs =
+                        ImportViewModel.ImportDirs(
+                            voiceCacheDir = filesDir.resolve("voices").path,
+                            espeakDir = filesDir.resolve("espeak-ng-data").path,
+                            booksDir = filesDir.resolve("books").path,
+                        ),
+                ),
+            )[ImportViewModel::class.java]
         handleViewIntent(intent)
         setContent {
             TaletrekTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     AppNav(
                         libraryViewModel = libraryViewModel,
+                        importViewModel = importViewModel,
                         positionStore = positionStore,
                         transport = transport,
                         pendingImportUri = pendingImportUri,
+                        pendingSourceUri = pendingSourceUri,
                         onImportConsumed = { pendingImportUri = null },
+                        onSourceConsumed = { pendingSourceUri = null },
                         onNavControllerReady = { navController = it },
                     )
                 }
@@ -72,14 +110,23 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Import-from-open: a file manager hands us a `.taletrek` VIEW
-     * intent; the library consumes it (copy-on-import, same path as the
-     * picker) and we make sure the user lands on the library to see it.
+     * Import-from-open: a file manager hands us a `.taletrek` VIEW intent
+     * (the library consumes it — copy-on-import, same path as the picker)
+     * or a source document VIEW/OPEN_WITH intent (routed to the convert
+     * gate). Mime decides the lane; mislabeled payloads fall to the source
+     * lane where the kernel's content sniffing arbitrates.
      */
     private fun handleViewIntent(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_VIEW && intent.data != null) {
-            pendingImportUri = intent.data.toString()
-            navController?.popBackStack(ROUTE_LIBRARY, inclusive = false)
+        if (intent?.action != Intent.ACTION_VIEW && intent?.action != Intent.ACTION_OPEN_DOCUMENT) return
+        val uri = intent.data ?: return
+        when {
+            dev.l1br3.taletrek.data.SourceImport
+                .isSourceMime(intent.type) ->
+                pendingSourceUri = uri.toString()
+            else -> {
+                pendingImportUri = uri.toString()
+                navController?.popBackStack(ROUTE_LIBRARY, inclusive = false)
+            }
         }
     }
 
@@ -97,10 +144,13 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppNav(
     libraryViewModel: LibraryViewModel,
+    importViewModel: ImportViewModel,
     positionStore: PositionStore,
     transport: MediaControllerTransport,
     pendingImportUri: String?,
+    pendingSourceUri: String?,
     onImportConsumed: () -> Unit,
+    onSourceConsumed: () -> Unit,
     onNavControllerReady: (NavHostController) -> Unit,
 ) {
     val nav = rememberNavController()
@@ -109,9 +159,12 @@ fun AppNav(
         composable("library") {
             LibraryScreen(
                 viewModel = libraryViewModel,
+                importViewModel = importViewModel,
                 onOpenBook = { book -> nav.navigate("reader/${book.bookId}") },
                 pendingImportUri = pendingImportUri,
+                pendingSourceUri = pendingSourceUri,
                 onImportConsumed = onImportConsumed,
+                onSourceConsumed = onSourceConsumed,
             )
         }
         composable("reader/{bookId}") { entry ->

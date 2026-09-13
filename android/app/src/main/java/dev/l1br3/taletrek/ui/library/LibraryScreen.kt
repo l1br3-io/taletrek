@@ -59,11 +59,17 @@ import dev.l1br3.taletrek.data.BookShelf
 @Composable
 fun LibraryScreen(
     viewModel: LibraryViewModel,
+    importViewModel: ImportViewModel,
     onOpenBook: (BookShelf) -> Unit,
     pendingImportUri: String?,
+    pendingSourceUri: String?,
     onImportConsumed: () -> Unit,
+    onSourceConsumed: () -> Unit,
 ) {
     val ui by viewModel.ui.collectAsState()
+    val importUi by importViewModel.ui.collectAsState()
+    val synthState by dev.l1br3.taletrek.service.SynthService.active
+        .collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     val notifPermission =
@@ -78,12 +84,24 @@ fun LibraryScreen(
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) viewModel.onImportPicked(uri.toString())
         }
+    val pickSource =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) importViewModel.onSourcePicked(uri.toString())
+        }
 
     // Import-from-open: a VIEW intent handed over by the activity.
     LaunchedEffect(pendingImportUri) {
         pendingImportUri?.let {
             viewModel.onImportPicked(it)
             onImportConsumed()
+        }
+    }
+
+    // Convert-from-open: a source-document VIEW/OPEN_WITH intent.
+    LaunchedEffect(pendingSourceUri) {
+        pendingSourceUri?.let {
+            importViewModel.onSourcePicked(it)
+            onSourceConsumed()
         }
     }
 
@@ -95,11 +113,38 @@ fun LibraryScreen(
         }
     }
 
+    // Convert-flow failures surface the same way.
+    LaunchedEffect(importUi) {
+        val failed = importUi as? ImportUiState.Failed ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar("Couldn't import: ${failed.message}")
+        importViewModel.dismissError()
+    }
+
+    // The job's terminal state spends the source copy and refreshes the
+    // shelf (the bundle lands via filesDir/books — the scan's root).
+    LaunchedEffect(synthState) {
+        when (synthState) {
+            is dev.l1br3.taletrek.service.SynthUiState.Done,
+            is dev.l1br3.taletrek.service.SynthUiState.Failed,
+            dev.l1br3.taletrek.service.SynthUiState.Cancelled,
+            -> {
+                importViewModel.onJobTerminal()
+                viewModel.rescan()
+            }
+            else -> {}
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Library") },
                 actions = {
+                    TextButton(
+                        onClick = { pickSource.launch(dev.l1br3.taletrek.data.SourceImport.PICKER_MIME_TYPES) },
+                        modifier =
+                            Modifier.semantics { contentDescription = "Convert a document to an audio book" },
+                    ) { Text("Convert") }
                     IconButton(
                         onClick = { pickDocument.launch(arrayOf("*/*")) },
                         modifier =
@@ -127,11 +172,14 @@ fun LibraryScreen(
                         style = MaterialTheme.typography.titleLarge,
                     )
                     Text(
-                        "Import a .taletrek bundle to start listening.",
+                        "Convert a document on this device, or import a .taletrek bundle.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Button(onClick = { pickDocument.launch(arrayOf("*/*")) }) {
+                    Button(onClick = { pickSource.launch(dev.l1br3.taletrek.data.SourceImport.PICKER_MIME_TYPES) }) {
+                        Text("Convert a document")
+                    }
+                    TextButton(onClick = { pickDocument.launch(arrayOf("*/*")) }) {
                         Text("Import a bundle")
                     }
                 }
@@ -141,6 +189,9 @@ fun LibraryScreen(
                     modifier = Modifier.fillMaxSize().padding(padding),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
+                    synthState?.let { state ->
+                        item { ConvertProgressRow(state) }
+                    }
                     if (ui.skipped > 0) {
                         item {
                             Text(
@@ -163,6 +214,31 @@ fun LibraryScreen(
         }
     }
 
+    (importUi as? ImportUiState.Gate)?.let { gate ->
+        AlertDialog(
+            onDismissRequest = importViewModel::cancelGate,
+            title = { Text("Convert \"${gate.fileName}\"?") },
+            text = {
+                Text(
+                    if (gate.hasVoice) {
+                        "Listen — synthesize the audio on this device (≈${gate.estimatedMinutes} min), or import as text only."
+                    } else {
+                        "No voice downloaded yet — Listen downloads the default voice (~60 MB) first, then synthesizes (≈${gate.estimatedMinutes} min). Or import as text only."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = importViewModel::chooseListen) { Text("Listen") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = importViewModel::chooseTextOnly) { Text("Text only") }
+                    TextButton(onClick = importViewModel::cancelGate) { Text("Cancel") }
+                }
+            },
+        )
+    }
+
     ui.pendingDelete?.let { book ->
         AlertDialog(
             onDismissRequest = viewModel::cancelDelete,
@@ -178,6 +254,47 @@ fun LibraryScreen(
             },
         )
     }
+}
+
+/** The in-flight convert job as a compact library row (no separate screen). */
+@Suppress("FunctionName") // Compose factory convention — PascalCase composables
+@Composable
+private fun ConvertProgressRow(state: dev.l1br3.taletrek.service.SynthUiState) {
+    val (label, cancelable) =
+        when (state) {
+            is dev.l1br3.taletrek.service.SynthUiState.Preparing ->
+                "Converting — reading document" to true
+            is dev.l1br3.taletrek.service.SynthUiState.DownloadingVoice ->
+                "Downloading voice ${state.done / (1024 * 1024)}/${state.total / (1024 * 1024)} MB" to true
+            is dev.l1br3.taletrek.service.SynthUiState.Synthesizing ->
+                "Synthesizing ${state.done}/${state.total}" to true
+            dev.l1br3.taletrek.service.SynthUiState.Writing -> "Writing bundle…" to true
+            is dev.l1br3.taletrek.service.SynthUiState.Done ->
+                "Added \"${state.bookId}\" to the library" to false
+            is dev.l1br3.taletrek.service.SynthUiState.Failed ->
+                "Conversion failed: ${state.message}" to false
+            dev.l1br3.taletrek.service.SynthUiState.Cancelled ->
+                "Conversion cancelled" to false
+            dev.l1br3.taletrek.service.SynthUiState.Idle -> return
+        }
+    ListItem(
+        headlineContent = { Text(label, style = MaterialTheme.typography.bodyMedium) },
+        trailingContent = {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            if (cancelable) {
+                TextButton(onClick = {
+                    context.startService(
+                        android.content
+                            .Intent(
+                                context,
+                                dev.l1br3.taletrek.service.SynthService::class.java,
+                            ).setAction(dev.l1br3.taletrek.service.SynthService.ACTION_CANCEL),
+                    )
+                }) { Text("Cancel") }
+            }
+        },
+    )
+    HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
 }
 
 @OptIn(ExperimentalFoundationApi::class)
