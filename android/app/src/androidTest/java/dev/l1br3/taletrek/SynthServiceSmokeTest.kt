@@ -104,7 +104,6 @@ class SynthServiceSmokeTest {
         SynthJobRequest(
             sourcePath = "/cache/fake-source.txt",
             hint = "fake-source.txt",
-            textOnly = false,
             voiceId = null,
             voiceCacheDir = "/files/voices",
             espeakDir = "/files/espeak",
@@ -152,7 +151,6 @@ class SynthServiceSmokeTest {
                     SynthUiState.Done(
                         bookId = "bk_smoke",
                         bundlePath = "/files/books/bk_smoke.taletrek",
-                        textOnly = false,
                     ),
                     done,
                 )
@@ -184,38 +182,5 @@ class SynthServiceSmokeTest {
             )
             val terminal = awaitFresh { it is SynthUiState.Cancelled }
             assertEquals(SynthUiState.Cancelled, terminal)
-        }
-
-    @Test
-    fun realTextOnlyJobProducesABookThroughTheRealKernel() =
-        runBlocking {
-            // No seam override: the REAL PipelineHandle + kernel parse path,
-            // text-only so no voice/network is needed. This is the manual
-            // emulator pass from the task made repeatable.
-            val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-            val source = java.io.File(context.cacheDir, "real-source.txt")
-            source.writeText("chapter one\n\nalpha beta gamma\n\ndelta epsilon")
-            val books = java.io.File(context.filesDir, "books")
-            books.mkdirs()
-
-            val request =
-                SynthJobRequest(
-                    sourcePath = source.absolutePath,
-                    hint = "real-source.txt",
-                    textOnly = true,
-                    voiceId = null,
-                    voiceCacheDir = java.io.File(context.filesDir, "voices").absolutePath,
-                    espeakDir = java.io.File(context.filesDir, "espeak-ng-data").absolutePath,
-                    booksDir = books.absolutePath,
-                    jobs = 2,
-                    generatorApp = "taletrek-android",
-                )
-            context.startForegroundService(request.toIntent(context))
-
-            val done = awaitFresh { it is SynthUiState.Done }
-            val bundle = java.io.File((done as SynthUiState.Done).bundlePath)
-            assertTrue("bundle missing at ${bundle.absolutePath}", bundle.isFile)
-            assertTrue(bundle.name.startsWith("bk_"))
-            assertTrue(done.textOnly)
         }
 }

@@ -58,11 +58,9 @@ class PerfDatapointsTest {
         src: File,
         books: File,
         jobs: Int,
-        textOnly: Boolean,
     ) = SynthJobRequest(
         sourcePath = src.absolutePath,
         hint = src.name,
-        textOnly = textOnly,
         voiceId = null,
         voiceCacheDir = File(files, "voices").path,
         espeakDir = File(files, "espeak-ng-data").path,
@@ -80,6 +78,13 @@ class PerfDatapointsTest {
             }
         }
 
+    /**
+     * Parse-RAM datapoint, kernel-direct: the service lane only ever
+     * converts full now (Android never sends text-only), and full-synth
+     * RAM is not what this number measures — so the datapoint rides the
+     * FFI text-only capability directly (the spec's sanctioned cheap test
+     * path), same process, same measurement.
+     */
     @Test
     fun bigDocumentParseRamDelta() {
         val src = bigTxt(6)
@@ -88,23 +93,47 @@ class PerfDatapointsTest {
         android.os.Debug.getMemoryInfo(infoBefore)
         val pssBefore = infoBefore.totalPss
 
-        val terminal =
-            runBlocking {
-                val before = SynthService.active.value
-                context.startForegroundService(request(src, shelf("ram"), 2, textOnly = true).toIntent(context))
-                withTimeout(120_000) { SynthService.active.first { it != before } }
-                withTimeout(600_000) {
-                    SynthService.active.first {
-                        it is SynthUiState.Done || it is SynthUiState.Failed || it is SynthUiState.Cancelled
-                    }!!
+        val handle =
+            dev.l1br3.taletrek.ffi.PipelineHandle(
+                dev.l1br3.taletrek.ffi.FfiPipelineConfig(
+                    sourcePath = src.absolutePath,
+                    hint = src.name,
+                    textOnly = true,
+                    voiceId = null,
+                    voiceCacheDir = File(files, "voices").path,
+                    espeakDir = File(files, "espeak-ng-data").path,
+                    booksDir = File(files, "books/ram").path,
+                    jobs = 2u,
+                    generatorApp = "taletrek-perf",
+                ),
+            )
+        handle.start(
+            object : dev.l1br3.taletrek.ffi.PipelineObserver {
+                override fun onPipelineEvent(event: dev.l1br3.taletrek.ffi.FfiPipelineEvent) {}
+            },
+        )
+        val deadline = System.nanoTime() + 120_000_000_000L
+        var terminal: dev.l1br3.taletrek.ffi.FfiPipelineState? = null
+        while (terminal == null) {
+            assertTrue("parse-RAM run did not finish in 120 s", System.nanoTime() < deadline)
+            terminal =
+                when (val s = handle.state()) {
+                    is dev.l1br3.taletrek.ffi.FfiPipelineState.Finished,
+                    is dev.l1br3.taletrek.ffi.FfiPipelineState.Failed,
+                    dev.l1br3.taletrek.ffi.FfiPipelineState.Cancelled,
+                    -> s
+                    else -> {
+                        Thread.sleep(100)
+                        null
+                    }
                 }
-            }
-        assertTrue("big import failed: $terminal", terminal is SynthUiState.Done)
+        }
+        assertTrue("big import failed: $terminal", terminal is dev.l1br3.taletrek.ffi.FfiPipelineState.Finished)
         val infoAfter = android.os.Debug.MemoryInfo()
         android.os.Debug.getMemoryInfo(infoAfter)
-        // Rough by construction (the pipeline runs on a service thread and
-        // GC timing varies) — the number is a floor for the parse+bundle
-        // working set, labeled as such in the task Outcome.
+        // Rough by construction (GC timing varies) — the number is a floor
+        // for the parse+bundle working set, labeled as such in the task
+        // Outcome.
         android.util.Log.i(
             "PerfDatapoints",
             "big-doc RAM: pss before=${infoBefore.totalPss}KB after=${infoAfter.totalPss}KB " +
@@ -122,8 +151,6 @@ class PerfDatapointsTest {
                 ) {}
             }
         dev.l1br3.taletrek.ffi
-            .ffiEnsureEspeak(files.path, silent)
-        dev.l1br3.taletrek.ffi
             .ffiResolveVoice(null, File(files, "voices").path, silent)
 
         // 60 paragraphs: ~40 s at pool=1 on the emulator datapoint — well
@@ -135,7 +162,7 @@ class PerfDatapointsTest {
             val t0 = System.nanoTime()
             runBlocking {
                 val before = SynthService.active.value
-                context.startForegroundService(request(src, shelf, jobs, textOnly = false).toIntent(context))
+                context.startForegroundService(request(src, shelf, jobs).toIntent(context))
                 withTimeout(120_000) { SynthService.active.first { it != before } }
             }
             val terminal = awaitTerminal()

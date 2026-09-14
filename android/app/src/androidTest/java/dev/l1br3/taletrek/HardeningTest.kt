@@ -52,12 +52,10 @@ class HardeningTest {
 
     private fun request(
         src: File,
-        textOnly: Boolean,
         books: File,
     ) = SynthJobRequest(
         sourcePath = src.absolutePath,
         hint = src.name,
-        textOnly = textOnly,
         voiceId = null,
         voiceCacheDir = File(files, "voices").path,
         espeakDir = File(files, "espeak-ng-data").path,
@@ -65,6 +63,13 @@ class HardeningTest {
         jobs = 2,
         generatorApp = "taletrek-android",
     )
+
+    /** Idempotent voice-cache warm-up — espeak needs no prerequisite since
+     *  the job ensures it itself. */
+    private fun warmSharedVoiceCache() {
+        dev.l1br3.taletrek.ffi
+            .ffiResolveVoice(null, File(files, "voices").path, SilentDownload)
+    }
 
     private fun snapshot(dir: File): Set<String> =
         dir
@@ -113,7 +118,7 @@ class HardeningTest {
 
             // Run until the download phase, then cancel.
             val before = SynthService.active.value
-            context.startForegroundService(request(src, textOnly = false, books = books).toIntent(context))
+            context.startForegroundService(request(src, books = books).toIntent(context))
             withTimeout(120_000) {
                 SynthService.active.first { it is SynthUiState.DownloadingVoice }
             }
@@ -134,7 +139,7 @@ class HardeningTest {
             }
 
             // Re-import of the same document works immediately after.
-            val reimport = startAndAwaitTerminal(request(src, textOnly = true, books = books))
+            val reimport = startAndAwaitTerminal(request(src, books = books))
             assertTrue("re-import after cancel failed: $reimport", reimport is SynthUiState.Done)
         }
 
@@ -142,18 +147,16 @@ class HardeningTest {
     fun cancelMidSynthEarlyLeavesNoTempOrBook() =
         runBlocking {
             // Voice must be present so the cancel lands inside synth, not
-            // download: ensure the phonemizer + seed by a full run first
-            // (cache-or-download).
-            dev.l1br3.taletrek.ffi
-                .ffiEnsureEspeak(files.path, SilentDownload)
+            // download: warm the cache by a full run first (cache-or-
+            // download; espeak is ensured in-job — no prerequisite).
             val books = shelf("cancel-synth")
             val src = source("cancel-synth.txt", 12)
-            val warmup = startAndAwaitTerminal(request(src, textOnly = false, books = books))
+            val warmup = startAndAwaitTerminal(request(src, books = books))
             assertTrue("warmup run failed: $warmup", warmup is SynthUiState.Done)
             books.listFiles()!!.forEach { it.delete() }
 
             val before = SynthService.active.value
-            context.startForegroundService(request(src, textOnly = false, books = books).toIntent(context))
+            context.startForegroundService(request(src, books = books).toIntent(context))
             withTimeout(120_000) {
                 SynthService.active.first { it is SynthUiState.Synthesizing && it.done < 6 }
             }
@@ -177,8 +180,9 @@ class HardeningTest {
 
     @Test
     fun unwritableOutputDirSurfacesARealMessage() {
+        warmSharedVoiceCache() // reach the write phase without a download
         val books = File("/proc/taletrek-no-write") // unwritable by construction
-        val terminal = startAndAwaitTerminal(request(source("deny.txt", 2), textOnly = true, books = books))
+        val terminal = startAndAwaitTerminal(request(source("deny.txt", 2), books = books))
         assertTrue("expected Failed, got $terminal", terminal is SynthUiState.Failed)
         val message = (terminal as SynthUiState.Failed).message
         assertFalse("dead-spinner message", message.isBlank())
@@ -187,6 +191,7 @@ class HardeningTest {
 
     @Test
     fun notificationsDeniedStillRunsTheJobToDone() {
+        warmSharedVoiceCache()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.uiAutomation
             .executeShellCommand(
@@ -195,7 +200,7 @@ class HardeningTest {
         try {
             val terminal =
                 startAndAwaitTerminal(
-                    request(source("noperm.txt", 2), textOnly = true, books = shelf("noperm")),
+                    request(source("noperm.txt", 2), books = shelf("noperm")),
                 )
             assertTrue("job must complete without notification permission: $terminal", terminal is SynthUiState.Done)
         } finally {
@@ -221,10 +226,15 @@ class HardeningTest {
         try {
             val terminal =
                 startAndAwaitTerminal(
-                    request(source("offline.txt", 2), textOnly = false, books = shelf("offline")),
+                    request(source("offline.txt", 2), books = shelf("offline")),
                 )
             assertTrue("expected Failed, got $terminal", terminal is SynthUiState.Failed)
-            assertFalse("error must carry a message", (terminal as SynthUiState.Failed).message.isBlank())
+            val failed = terminal as SynthUiState.Failed
+            assertFalse("error must carry a message", failed.message.isBlank())
+            assertTrue(
+                "download failure must be typed (resolve or espeak), got ${failed.kind}",
+                failed.kind == "resolve" || failed.kind == "espeak",
+            )
             assertTrue(shelf("offline").listFiles().isNullOrEmpty())
         } finally {
             instrumentation.uiAutomation.executeShellCommand("svc wifi enable").close()

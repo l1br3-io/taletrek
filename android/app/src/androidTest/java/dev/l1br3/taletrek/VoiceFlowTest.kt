@@ -62,7 +62,7 @@ class VoiceFlowTest {
 
     /**
      * The selection contract end-to-end: select a NON-default voice in
-     * the store, build the import request exactly like the gate does
+     * the store, build the import request exactly like the flow does
      * (`voiceId = selectedSnapshot()`), run a full synth — the stamped
      * manifest carries the selected voice.
      */
@@ -83,7 +83,6 @@ class VoiceFlowTest {
                 SynthJobRequest(
                     sourcePath = source.absolutePath,
                     hint = "no-outline.pdf",
-                    textOnly = false,
                     voiceId = store.selectedSnapshot(),
                     voiceCacheDir = File(files, "voices").path,
                     espeakDir = File(files, "espeak-ng-data").path,
