@@ -65,6 +65,29 @@ describe("bundle parity — reads the Rust crate's committed fixtures", () => {
     expect(bundle.audio.size).toBe(bundle.manifest.audio.segmentCount)
   })
 
+  it('book-streamed.taletrek: manifest-last streaming fixture — keys + counts still exact', async () => {
+    // Written by the Rust `BundleWriter` (streaming-synth) with manifest.json
+    // as the LAST entry — proof that name-based JSZip reads are order-blind.
+    // The same load-bearing key assertion as book-full applies.
+    const bundle = await readBookBundle(fixture('book-streamed.taletrek'))
+
+    expect(bundle.manifest.audio.present).toBe(true)
+    expect(bundle.manifest.audio.codec).toBe('opus')
+
+    const voice = voiceId(bundle.manifest.book.voiceId)
+    const expectedKeys = new Set<string>()
+    for (const ch of bundle.chapters) {
+      for (const text of ch.paragraphs) {
+        if (!text.trim()) continue
+        expectedKeys.add(await audioCacheKey(voice, text))
+      }
+    }
+    // Chapter 2 repeats chapter 1's first paragraph — dedup means 2 segments.
+    expect(expectedKeys.size).toBe(2)
+    expect(new Set(bundle.audio.keys())).toEqual(expectedKeys)
+    expect(bundle.audio.size).toBe(bundle.manifest.audio.segmentCount)
+  })
+
   it('library.taletrek-lib: refused with UnsupportedBundleKindError (library bundles not yet supported)', async () => {
     const err = await readBookBundle(fixture('library.taletrek-lib')).catch((e) => e)
     expect(err).toBeInstanceOf(UnsupportedBundleKindError)

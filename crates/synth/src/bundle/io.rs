@@ -84,6 +84,76 @@ pub fn write_book_bundle(
     Ok(())
 }
 
+/// Incremental `.taletrek` writer: entries stream into a `Write + Seek`
+/// sink as they are produced, so peak memory is one segment — not the
+/// whole book's audio. `manifest.json` is written last by [`BundleWriter::finish`]
+/// (segment count and codec are only known then); entry order is not part of
+/// the format contract (`docs/bundle-format.md`) — readers resolve entries by
+/// name. Duplicate keys collapse exactly as the in-memory writer's HashMap
+/// did: the first write wins, later `add_segment` calls return `false`.
+///
+/// The in-memory [`write_book_bundle`] stays untouched for library nesting,
+/// tests, and small/compat paths — this is the large-document convert path.
+pub struct BundleWriter<W: Write + std::io::Seek> {
+    zip: ZipWriter<W>,
+    written: std::collections::HashSet<String>,
+    segments: u32,
+}
+
+impl<W: Write + std::io::Seek> BundleWriter<W> {
+    /// Start an archive on `sink` and write `text.json` immediately (it is
+    /// known up front, before any synthesis).
+    pub fn new(sink: W, chapters: &[ChapterText]) -> Result<Self, BundleError> {
+        let mut zip = ZipWriter::new(sink);
+        let opts = SimpleFileOptions::default();
+        let text = TextFile {
+            schema_version: SCHEMA_VERSION,
+            chapters: chapters.to_vec(),
+        };
+        zip.start_file(TEXT_ENTRY, opts)?;
+        zip.write_all(&serde_json::to_vec_pretty(&text)?)?;
+        Ok(Self {
+            zip,
+            written: std::collections::HashSet::new(),
+            segments: 0,
+        })
+    }
+
+    /// Write one audio segment as `audio/<key>.<ext>`. Returns `false` when
+    /// `key` was already written (content addressing dedups identical
+    /// paragraphs — the duplicate is skipped, not an error). The key is
+    /// validated before any entry is created.
+    pub fn add_segment(&mut self, key: &str, seg: &AudioSegment) -> Result<bool, BundleError> {
+        validate_audio_key(key)?;
+        if !self.written.insert(key.to_string()) {
+            return Ok(false);
+        }
+        let name = format!("{AUDIO_PREFIX}{key}.{}", seg.codec.ext());
+        self.zip.start_file(&name, SimpleFileOptions::default())?;
+        self.zip.write_all(&seg.bytes)?;
+        self.segments += 1;
+        Ok(true)
+    }
+
+    /// Distinct segments written so far (the dedup'd count the manifest's
+    /// `segment_count` should carry).
+    #[must_use]
+    pub fn segment_count(&self) -> u32 {
+        self.segments
+    }
+
+    /// Write `manifest.json` (last — the caller stamps it with the final
+    /// codec/segment count), complete the archive, and flush the sink.
+    pub fn finish(mut self, manifest: Manifest) -> Result<W, BundleError> {
+        self.zip
+            .start_file(MANIFEST_ENTRY, SimpleFileOptions::default())?;
+        self.zip.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
+        let mut sink = self.zip.finish()?;
+        sink.flush()?;
+        Ok(sink)
+    }
+}
+
 /// Reject content keys that could shape a lookup outside `audio/`.
 ///
 /// A content key becomes an entry-name fragment (`audio/<key>.<ext>`), so it
@@ -683,6 +753,179 @@ mod tests {
         ))
         .unwrap_err();
         assert!(matches!(err, BundleError::Io(_)), "got: {err}");
+    }
+
+    // ---- BundleWriter (streaming write path — manifest last) ----
+
+    fn raw_entry_names(bytes: &[u8]) -> Vec<String> {
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn bundle_writer_output_is_identical_to_the_in_memory_writer() {
+        // Same content through both writers must parse to the same bundle:
+        // manifest JSON, chapters, keys, codec, and bytes — entry ORDER is
+        // the only allowed difference (streaming writes manifest last).
+        let (tmp, path, keys) = opus_bundle_on_disk();
+        let _ = tmp; // kept alive
+        let bundle = read_book_bundle(&std::fs::read(&path).unwrap()).unwrap();
+        let mut mem = Cursor::new(Vec::new());
+        write_book_bundle(&bundle, &mut mem).unwrap();
+
+        let mut w = BundleWriter::new(Cursor::new(Vec::new()), &bundle.chapters).unwrap();
+        for seg in bundle.audio.values() {
+            assert!(w.add_segment(&seg.key, seg).unwrap());
+        }
+        assert_eq!(w.segment_count() as usize, bundle.audio.len());
+        let streamed = w.finish(bundle.manifest.clone()).unwrap().into_inner();
+
+        let a = read_book_bundle(&mem.into_inner()).unwrap();
+        let b = read_book_bundle(&streamed).unwrap();
+        assert_eq!(
+            serde_json::to_value(&a.manifest).unwrap(),
+            serde_json::to_value(&b.manifest).unwrap()
+        );
+        assert_eq!(a.chapters.len(), b.chapters.len());
+        for (ca, cb) in a.chapters.iter().zip(b.chapters.iter()) {
+            assert_eq!(ca.id, cb.id);
+            assert_eq!(ca.title, cb.title);
+            assert_eq!(ca.paragraphs, cb.paragraphs);
+        }
+        assert_eq!(a.audio.len(), b.audio.len());
+        for (key, seg) in &a.audio {
+            let other = b.audio.get(key).expect("same keys");
+            assert_eq!(seg.codec, other.codec);
+            assert_eq!(seg.bytes, other.bytes);
+        }
+
+        // Disk readers (the reader open path + per-segment playback path).
+        let tmp = tempfile::tempdir().unwrap();
+        let disk = tmp.path().join("streamed.taletrek");
+        std::fs::write(&disk, &streamed).unwrap();
+        let (meta, chapters) = read_book_metadata(&disk).unwrap();
+        assert!(meta.audio.present);
+        assert_eq!(chapters[0].paragraphs.len(), 2);
+        let seg = read_audio_segment(&disk, &keys[0])
+            .unwrap()
+            .expect("segment present");
+        assert_eq!(seg.bytes, b.audio[&keys[0]].bytes);
+    }
+
+    #[test]
+    fn bundle_writer_writes_manifest_last() {
+        let mut audio = HashMap::new();
+        for para in ["Hello world.", "Second paragraph."] {
+            let key = cache_key(TEST_VOICE, para);
+            audio.insert(
+                key.clone(),
+                AudioSegment {
+                    key: key.clone(),
+                    codec: AudioCodec::Opus,
+                    bytes: format!("OggS-fake-{key}").into_bytes(),
+                },
+            );
+        }
+        let bundle = bundle_with_audio(AudioCodec::Opus, audio);
+
+        let mut w = BundleWriter::new(Cursor::new(Vec::new()), &bundle.chapters).unwrap();
+        for seg in bundle.audio.values() {
+            w.add_segment(&seg.key, seg).unwrap();
+        }
+        let bytes = w.finish(bundle.manifest.clone()).unwrap().into_inner();
+
+        let names = raw_entry_names(&bytes);
+        assert_eq!(names.first().map(String::as_str), Some(TEXT_ENTRY));
+        assert_eq!(names.last().map(String::as_str), Some(MANIFEST_ENTRY));
+        assert_eq!(names.len(), 2 + bundle.audio.len());
+        for name in &names[1..names.len() - 1] {
+            assert!(name.starts_with(AUDIO_PREFIX), "got {name}");
+        }
+    }
+
+    #[test]
+    fn bundle_writer_dedups_duplicate_keys_to_one_entry() {
+        let key = cache_key(TEST_VOICE, "Hello world.");
+        let seg = AudioSegment {
+            key: key.clone(),
+            codec: AudioCodec::Opus,
+            bytes: b"OggS-dedup-probe".to_vec(),
+        };
+        let mut audio = HashMap::new();
+        audio.insert(key.clone(), seg.clone());
+        let bundle = bundle_with_audio(AudioCodec::Opus, audio);
+        let chapters = vec![ChapterText::new(
+            "bk_audio",
+            0,
+            "Ch",
+            vec!["Hello world.".into(), "Hello world.".into()],
+        )];
+
+        let mut w = BundleWriter::new(Cursor::new(Vec::new()), &chapters).unwrap();
+        assert_eq!(w.segment_count(), 0);
+        assert!(w.add_segment(&key, &seg).unwrap());
+        assert!(!w.add_segment(&key, &seg).unwrap());
+        assert_eq!(w.segment_count(), 1);
+        let bytes = w.finish(bundle.manifest.clone()).unwrap().into_inner();
+
+        let back = read_book_bundle(&bytes).unwrap();
+        assert_eq!(back.audio.len(), 1);
+        assert_eq!(back.manifest.audio.segment_count, 1);
+        assert_eq!(back.audio[&key].bytes, seg.bytes);
+    }
+
+    #[test]
+    fn bundle_writer_rejects_an_invalid_key_before_any_entry() {
+        let good_key = cache_key(TEST_VOICE, "Hello world.");
+        let good = AudioSegment {
+            key: good_key.clone(),
+            codec: AudioCodec::Opus,
+            bytes: b"OggS-good".to_vec(),
+        };
+        let bad = AudioSegment {
+            key: "../evil".into(),
+            codec: AudioCodec::Opus,
+            bytes: b"nope".to_vec(),
+        };
+        let mut audio = HashMap::new();
+        audio.insert(good_key.clone(), good.clone());
+        let bundle = bundle_with_audio(AudioCodec::Opus, audio);
+
+        let mut w = BundleWriter::new(Cursor::new(Vec::new()), &bundle.chapters).unwrap();
+        let err = w.add_segment("../evil", &bad).unwrap_err();
+        assert!(
+            matches!(err, BundleError::InvalidAudioKey(_)),
+            "got {err:?}"
+        );
+        // The writer stays usable and the finished archive has no evil entry.
+        assert!(w.add_segment(&good_key, &good).unwrap());
+        let bytes = w.finish(bundle.manifest.clone()).unwrap().into_inner();
+
+        let names = raw_entry_names(&bytes);
+        assert_eq!(names.len(), 3);
+        assert!(names.iter().all(|n| !n.contains("evil")));
+    }
+
+    #[test]
+    fn bundle_writer_zero_segments_is_a_text_only_bundle() {
+        let bundle = bundle_with_audio(AudioCodec::Opus, HashMap::new());
+        let w = BundleWriter::new(Cursor::new(Vec::new()), &bundle.chapters).unwrap();
+        assert_eq!(w.segment_count(), 0);
+        let bytes = w.finish(bundle.manifest.clone()).unwrap().into_inner();
+
+        let back = read_book_bundle(&bytes).unwrap();
+        assert!(!back.manifest.audio.present);
+        assert!(back.audio.is_empty());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let disk = tmp.path().join("text-only.taletrek");
+        std::fs::write(&disk, &bytes).unwrap();
+        let (meta, _) = read_book_metadata(&disk).unwrap();
+        assert!(!meta.audio.present);
+        let key = cache_key(TEST_VOICE, "Hello world.");
+        assert!(read_audio_segment(&disk, &key).unwrap().is_none());
     }
 
     /// An audio-present archive (manifest + text + one `audio/` entry, all

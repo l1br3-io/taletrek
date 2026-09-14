@@ -32,7 +32,8 @@ pub use bundle::{audio, error, io, library, manifest, text};
 pub use bundle::audio::{AudioCodec, AudioSegment};
 pub use bundle::error::BundleError;
 pub use bundle::io::{
-    read_audio_segment, read_book_bundle, read_book_metadata, validate_audio_key, write_book_bundle,
+    read_audio_segment, read_book_bundle, read_book_metadata, validate_audio_key,
+    write_book_bundle, BundleWriter,
 };
 pub use bundle::library::{
     read_library_bundle, write_library_bundle, LibraryBundle, LibraryEntry, LibraryKind,
