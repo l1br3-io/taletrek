@@ -311,3 +311,20 @@ android-test:
 # Instrumented tests on connected device (kernel round-trip, Compose UI)
 android-instrumented:
     JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android connectedDebugAndroidTest
+
+# ---- iOS (ios-app) ------------------------------------------------------------
+
+# Host cdylib extension: Linux names it .so, macOS .dylib — the bindgen
+# reads the proc-macro metadata back out of whichever host built it.
+host_dylib := "libtaletrek_ffi." + if os() == "macos" { "dylib" } else { "so" }
+
+# Regenerate the checked-in UniFFI Swift bindings for crates/ffi under
+# ios/TaleTrek/FFI (ios-app task 002). Same mechanics as android-bindings —
+# the host-built cdylib carries the metadata — with `--language swift`.
+# Xcode never invokes Cargo (the Gradle-never-invokes-Cargo doctrine,
+# transposed); compile validation is the Xcode project's (task 003).
+# One-time prerequisite: cargo install uniffi --features cli --version 0.32.0 --locked
+ios-bindings:
+    cargo build -p taletrek-ffi --lib
+    uniffi-bindgen generate --library target/debug/{{host_dylib}} --language swift \
+        --config crates/ffi/uniffi.toml --no-format --out-dir ios/TaleTrek/FFI

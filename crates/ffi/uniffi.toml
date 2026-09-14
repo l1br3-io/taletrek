@@ -1,7 +1,13 @@
 # UniFFI global config (new-style [crates.<name>] sections) — passed to
-# `uniffi-bindgen generate --config` by `just android-bindings`. The
-# Kotlin package matches the app's package root so the generated file
-# sits inside the hand-written sources it serves.
+# `uniffi-bindgen generate --config` by `just android-bindings` /
+# `just ios-bindings`. The Kotlin package matches the app's package root so
+# the generated file sits inside the hand-written sources it serves; the
+# Swift module keeps the crate name (default) so the checked-in files read
+# `taletrek_ffi.swift` + `taletrek_ffiFFI.h` + `taletrek_ffi.modulemap`.
 [crates.taletrek_ffi.bindings.kotlin]
 package_name = "dev.l1br3.taletrek.ffi"
+cdylib_name = "taletrek_ffi"
+
+[crates.taletrek_ffi.bindings.swift]
+module_name = "taletrek_ffi"
 cdylib_name = "taletrek_ffi"
