@@ -6,32 +6,46 @@
 //!
 //! Every host — today the desktop CLI (`taletrek-desktop`), soon the desktop
 //! GUI and mobile apps — stamps `generator.app` through this one module. The
-//! producer string is a **parameter** ([`synth_and_stamp`] / [`resynth_and_stamp`]
-//! take `generator_app: &str`); it is never hardcoded here. A new host that
+//! producer string is a **parameter** ([`synth_and_stamp`] /
+//! [`resynth_and_stamp`] / [`synth_and_stamp_streaming`] take
+//! `generator_app: &str`); it is never hardcoded here. A new host that
 //! stamps a different `generator.app` without routing through this module would
 //! re-introduce the "bundle format drift, 3rd producer" risk this effort's plan
-//! calls out — the mitigation is keeping one code path.
+//! calls out — the mitigation is keeping one code path. The module has two
+//! entry-point *shapes* — in-memory ([`synth_and_stamp`], segments accumulate
+//! into `bundle.audio`) and streaming ([`synth_and_stamp_streaming`], segments
+//! flow through a sink into an open [`taletrek_synth::BundleWriter`]) — but
+//! both stamp through the same `stamp_manifest_fields`: one stamper, two
+//! delivery shapes, byte-identical manifests.
 //!
 //! # Purity
 //!
 //! This module is pure: no file I/O, no network. The desktop's
 //! `write_book_bundle_file` wraps the lib's in-memory writer with a buffered
-//! file write; future hosts wrap their own stores.
+//! file write; future hosts wrap their own stores. The streaming entry point
+//! is sink-agnostic (`W: Write + Seek`) — it writes whatever sink the caller's
+//! `BundleWriter` was opened on, never a path of its own.
 //! Accordingly [`StampError`] has **no** `WriteFile` variant — file errors stay
-//! host-side. Both stamp functions write the effective synth voice into
+//! host-side (the streaming path surfaces sink failures as
+//! [`StampError::Bundle`], the typed zip/write error from the writer). Both
+//! stamp functions write the effective synth voice into
 //! `manifest.book.voiceId` so the stamped manifest and the content-addressed
 //! cache keys always agree (the format's implicit paragraph→audio mapping is
 //! computed from the manifest voice — docs/bundle-format.md).
 
+use std::io::{Seek, Write};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
 
-use taletrek_synth::bundle::manifest::{AudioMeta, Generator};
+use taletrek_synth::bundle::manifest::{AudioMeta, Generator, Manifest};
 use taletrek_synth::synth::PiperRunner;
-use taletrek_synth::{AudioCodec, BookBundle, BundleError, Encoder, NORM_VERSION};
+use taletrek_synth::{AudioCodec, BookBundle, BundleError, BundleWriter, Encoder, NORM_VERSION};
 
-use crate::{synth_all_paragraphs, ProgressSink, SynthJobError};
+use crate::{
+    synth_all_paragraphs, synth_paragraphs_into, ProgressSink, SegmentSink, SynthJobError,
+};
 
 /// Error returned when `synth` is pointed at a bundle that already carries
 /// audio. `synth` only accepts text-only input; the user wants `resynth` to
@@ -88,17 +102,21 @@ pub fn refuse_full_input(bundle: &BookBundle, label: &str) -> Result<(), FullInp
     Ok(())
 }
 
-/// Stamp `bundle`'s manifest to reflect a completed synth run: audio present,
-/// the encoder's codec, the current norm version, the segment count, and the
-/// `generator.app` passed by the caller at the running crate version. The
-/// book's `voice_id` is preserved — `synth` keeps the input value; `resynth`
-/// rewrites it before calling [`synth_and_stamp`] so keys and manifest agree.
-fn stamp_full_manifest(bundle: &mut BookBundle, codec: AudioCodec, generator_app: &str) {
+/// Stamp a manifest's audio descriptor + generator for a completed synth run:
+/// audio present, the encoder's codec, the current norm version, the given
+/// (dedup'd) segment count, and the `generator_app` the caller passed at the
+/// running crate version. This is the one stamping implementation both entry
+/// points route through — the single-stamping-path invariant.
+fn stamp_manifest_fields(
+    manifest: &mut Manifest,
+    codec: AudioCodec,
+    segment_count: u32,
+    generator_app: &str,
+) {
     // Dedup collapses identical paragraphs into one segment, so `segment_count`
     // is the stored entry count (not the paragraph count). Matches how the SPA's
     // audio cache behaves and what `read_book_bundle` reconstructs on import.
-    let segment_count = u32::try_from(bundle.audio.len()).unwrap_or(u32::MAX);
-    bundle.manifest.audio = AudioMeta {
+    manifest.audio = AudioMeta {
         present: true,
         codec,
         norm_version: NORM_VERSION
@@ -106,10 +124,20 @@ fn stamp_full_manifest(bundle: &mut BookBundle, codec: AudioCodec, generator_app
             .expect("NORM_VERSION is a decimal u32 (crate invariant)"),
         segment_count,
     };
-    bundle.manifest.generator = Generator {
+    manifest.generator = Generator {
         app: generator_app.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
+}
+
+/// Stamp `bundle`'s manifest to reflect a completed synth run: audio present,
+/// the encoder's codec, the current norm version, the segment count, and the
+/// `generator.app` passed by the caller at the running crate version. The
+/// book's `voice_id` is preserved — `synth` keeps the input value; `resynth`
+/// rewrites it before calling [`synth_and_stamp`] so keys and manifest agree.
+fn stamp_full_manifest(bundle: &mut BookBundle, codec: AudioCodec, generator_app: &str) {
+    let segment_count = u32::try_from(bundle.audio.len()).unwrap_or(u32::MAX);
+    stamp_manifest_fields(&mut bundle.manifest, codec, segment_count, generator_app);
 }
 
 /// Run the parallel synth engine over every paragraph in `bundle`, fill its
@@ -172,6 +200,96 @@ where
     bundle.audio = segments;
     stamp_full_manifest(bundle, encoder.codec(), generator_app);
     Ok(())
+}
+
+/// The streaming flavor of [`synth_and_stamp`]: run the sink synth engine over
+/// every paragraph in `bundle`, delivering each finished segment straight into
+/// `writer` (an open [`BundleWriter`] on the run's final resting sink —
+/// typically a same-dir temp file), then stamp the manifest with the exact
+/// same fields the in-memory path produces and `finish` the archive. Returns
+/// the flushed sink plus the stamped (dedup'd) segment count.
+///
+/// Manifest discipline is identical to [`synth_and_stamp`]: `book.voiceId` is
+/// rewritten to `voice_id` **before** synth (keys and manifest must agree —
+/// the format contract), and the stamped fields route through the same
+/// `stamp_manifest_fields` the in-memory path uses (the single-stamping-path
+/// invariant holds: one module, two entry points). `bundle.audio` is ignored
+/// and never populated — nothing accumulates; peak memory is one segment.
+///
+/// On success `bundle.manifest` is stamped in place (same as the in-memory
+/// path) and the returned `W` holds the complete, flushed `.taletrek` bytes —
+/// the caller performs the final atomic rename. On error the writer and its
+/// sink are consumed and closed (the archive is left unfinished and therefore
+/// unusable) — the caller must discard the backing temp file; a partial book
+/// is never a book.
+///
+/// `make_runner`, `encoder`, `jobs`, and `progress` behave exactly as in
+/// [`synth_and_stamp`]. Aborts on the first paragraph *or write* error
+/// (lifted as [`StampError::Synth`] / [`StampError::Bundle`]).
+#[allow(clippy::too_many_arguments)] // mirrors synth_and_stamp + the writer param; the sibling's rationale applies.
+pub fn synth_and_stamp_streaming<R, E, F, W>(
+    bundle: &mut BookBundle,
+    voice_id: &str,
+    voice_model: &Path,
+    make_runner: F,
+    encoder: &E,
+    jobs: usize,
+    generator_app: &str,
+    progress: Option<&dyn ProgressSink>,
+    writer: BundleWriter<W>,
+) -> Result<(W, u32), StampError>
+where
+    R: PiperRunner + Send,
+    E: Encoder + Sync,
+    F: Fn() -> R + Sync,
+    W: Write + Seek + Send + 'static,
+{
+    // Rewrite the manifest's voice FIRST so the stamped manifest and the
+    // content-addressed cache keys agree — same contract as the in-memory
+    // path, applied before the sink engine starts delivering.
+    bundle.manifest.book.voice_id = voice_id.to_string();
+
+    let writer = Arc::new(Mutex::new(writer));
+    let sink_writer = writer.clone();
+    let sink = SegmentSink::new(move |key, seg| {
+        sink_writer
+            .lock()
+            .map_err(|_| BundleError::Io(std::io::Error::other("bundle writer mutex poisoned")))?
+            .add_segment(&key, &seg)?;
+        Ok(())
+    });
+
+    let synth = synth_paragraphs_into(
+        bundle,
+        voice_id,
+        voice_model,
+        make_runner,
+        encoder,
+        jobs,
+        progress,
+        &sink,
+    );
+    drop(sink);
+
+    // On a synth/write error the writer is dropped with the Arc — its sink
+    // closes, the archive stays unfinished, and the caller discards the file.
+    synth?;
+
+    let writer = match Arc::try_unwrap(writer) {
+        Ok(mutex) => mutex
+            .into_inner()
+            .map_err(|_| BundleError::Io(std::io::Error::other("bundle writer mutex poisoned")))?,
+        Err(_) => unreachable!("streaming sink dropped after the run"),
+    };
+    let segment_count = writer.segment_count();
+    stamp_manifest_fields(
+        &mut bundle.manifest,
+        encoder.codec(),
+        segment_count,
+        generator_app,
+    );
+    let sink = writer.finish(bundle.manifest.clone())?;
+    Ok((sink, segment_count))
 }
 
 /// Re-voice a bundle: rewrite `book.voiceId` to `new_voice_id`, then re-synth
@@ -485,6 +603,161 @@ mod tests {
         )
         .expect_err("empty paragraph must error");
         assert!(matches!(err, StampError::Synth(_)));
+    }
+
+    // ---- synth_and_stamp_streaming (streaming stamp — streaming-synth) ----
+
+    /// Field-for-field manifest equality (the types don't derive PartialEq —
+    /// compare every stamped field explicitly; this IS the parity contract).
+    fn assert_manifests_equal(a: &Manifest, b: &Manifest) {
+        assert_eq!(a.schema_version, b.schema_version);
+        assert_eq!(a.kind, b.kind);
+        assert_eq!(a.book.id, b.book.id);
+        assert_eq!(a.book.title, b.book.title);
+        assert_eq!(a.book.author, b.book.author);
+        assert_eq!(a.book.source_format, b.book.source_format);
+        assert_eq!(a.book.chapter_count, b.book.chapter_count);
+        assert_eq!(a.book.voice_id, b.book.voice_id);
+        assert_eq!(a.book.created_at, b.book.created_at);
+        assert_eq!(a.book.updated_at, b.book.updated_at);
+        assert_eq!(a.book.progress_fraction, b.book.progress_fraction);
+        assert_eq!(a.audio.present, b.audio.present);
+        assert_eq!(a.audio.codec, b.audio.codec);
+        assert_eq!(a.audio.norm_version, b.audio.norm_version);
+        assert_eq!(a.audio.segment_count, b.audio.segment_count);
+        assert_eq!(a.generator.app, b.generator.app);
+        assert_eq!(a.generator.version, b.generator.version);
+    }
+
+    #[test]
+    fn streaming_stamp_matches_in_memory_stamp_field_for_field() {
+        // Same stub-synthesized input through both entry points must produce
+        // equal manifests (field-for-field) and equal audio maps on read-back.
+        // The input's manifest voice deliberately differs from the synth voice
+        // so the rewrite-before-synth contract is exercised on both paths.
+        let make_chapters = || {
+            vec![
+                ChapterText::new(
+                    "bk_test",
+                    0,
+                    "Ch",
+                    vec!["Hello world.".into(), "Second paragraph.".into()],
+                ),
+                ChapterText::new("bk_test", 1, "Two", vec!["Across chapters.".into()]),
+            ]
+        };
+
+        let mut mem = text_only_bundle("en_US-lessac-medium", make_chapters());
+        synth_and_stamp(
+            &mut mem,
+            "en_US-ryan-medium",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            2,
+            TEST_APP,
+            None,
+        )
+        .expect("in-memory path succeeds");
+        let mut mem_buf = Cursor::new(Vec::new());
+        write_book_bundle(&mem, &mut mem_buf).expect("in-memory write succeeds");
+
+        let mut streaming = text_only_bundle("en_US-lessac-medium", make_chapters());
+        let writer =
+            taletrek_synth::BundleWriter::new(Cursor::new(Vec::new()), &streaming.chapters)
+                .expect("writer opens");
+        let (cursor, count) = synth_and_stamp_streaming(
+            &mut streaming,
+            "en_US-ryan-medium",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            2,
+            TEST_APP,
+            None,
+            writer,
+        )
+        .expect("streaming path succeeds");
+
+        let a = read_book_bundle(&mem_buf.into_inner()).unwrap();
+        let b = read_book_bundle(&cursor.into_inner()).unwrap();
+        assert_manifests_equal(&a.manifest, &b.manifest);
+        assert_eq!(a.audio.len(), b.audio.len());
+        for (key, seg) in &a.audio {
+            let other = b.audio.get(key).expect("same keys");
+            assert_eq!(seg.bytes, other.bytes);
+            assert_eq!(seg.codec, other.codec);
+        }
+        assert_eq!(count, b.manifest.audio.segment_count);
+
+        // The streaming caller's bundle manifest was stamped in place too —
+        // the same in-place discipline as the in-memory path.
+        assert_eq!(streaming.manifest.book.voice_id, "en_US-ryan-medium");
+        assert!(streaming.manifest.audio.present);
+        assert_eq!(streaming.manifest.generator.app, TEST_APP);
+    }
+
+    #[test]
+    fn streaming_stamp_segment_count_reflects_dedup() {
+        let mut b = text_only_bundle(
+            "v",
+            vec![ChapterText::new(
+                "bk_test",
+                0,
+                "Ch",
+                vec!["Repeat.".into(), "Repeat.".into()],
+            )],
+        );
+        let writer = taletrek_synth::BundleWriter::new(Cursor::new(Vec::new()), &b.chapters)
+            .expect("writer opens");
+        let (cursor, count) = synth_and_stamp_streaming(
+            &mut b,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+            TEST_APP,
+            None,
+            writer,
+        )
+        .expect("streaming path succeeds");
+
+        assert_eq!(count, 1, "duplicate paragraphs collapse to one entry");
+        let back = read_book_bundle(&cursor.into_inner()).unwrap();
+        assert_eq!(back.audio.len(), 1);
+        assert_eq!(back.manifest.audio.segment_count, 1);
+    }
+
+    #[test]
+    fn streaming_stamp_aborts_with_the_same_typing_on_synth_failure() {
+        let mut b = text_only_bundle(
+            "v",
+            vec![ChapterText::new(
+                "bk_test",
+                0,
+                "Ch",
+                vec!["   \n   ".into()],
+            )],
+        );
+        let writer = taletrek_synth::BundleWriter::new(Cursor::new(Vec::new()), &b.chapters)
+            .expect("writer opens");
+        let err = synth_and_stamp_streaming(
+            &mut b,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+            TEST_APP,
+            None,
+            writer,
+        )
+        .expect_err("empty paragraph must error");
+        assert!(
+            matches!(err, StampError::Synth(_)),
+            "expected StampError::Synth, got {err:?}"
+        );
     }
 
     // ---- resynth_and_stamp ----

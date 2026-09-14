@@ -736,12 +736,26 @@ mod tests {
 
         let seen = deliveries.lock().unwrap();
         assert_eq!(seen.len(), 3, "one delivery per paragraph occurrence");
-        let expected_key = cache_key("v", "Repeat me.");
+        // Delivery ORDER across parallel chunks is nondeterministic (the sink
+        // serializes but does not order) — assert the delivery multiset: the
+        // repeated paragraph delivered twice, the unique one once.
+        let repeat_key = cache_key("v", "Repeat me.");
+        let unique_key = cache_key("v", "Unique.");
         assert_eq!(
-            seen[0].0, expected_key,
-            "chapter/paragraph order at jobs=2 is chunked, but single-chunk size 2 keeps order"
+            seen.iter().filter(|(k, _)| *k == repeat_key).count(),
+            2,
+            "identical paragraphs deliver every occurrence (dedup is the sink's)"
         );
-        assert_eq!(seen[0].1, canonical_wav(&[0x01, 0x02, 0x03, 0x04]).len());
+        assert_eq!(
+            seen.iter().filter(|(k, _)| *k == unique_key).count(),
+            1,
+            "every distinct paragraph delivered"
+        );
+        assert_eq!(
+            seen[0].1,
+            canonical_wav(&[0x01, 0x02, 0x03, 0x04]).len(),
+            "segments carry the synthesized bytes"
+        );
     }
 
     #[test]
