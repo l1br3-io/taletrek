@@ -52,5 +52,5 @@ cat <<EOF
 
 Done. Run the app with:
 
-  just android-serve-dev          # build APK → boot windowed emulator → install → launch TaleTrek
+  just android-serve-dev          # build APK -> boot emulator (headless on Linux; screen: just android-scrcpy) -> install -> launch TaleTrek
 EOF

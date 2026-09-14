@@ -35,7 +35,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo test --workspace -- --ignored    # real piper+ffmpeg+sherpa; needs TALETREK_VOICE_PATH — see docs/testing.md
 just gui                               # run the desktop GUI (egui)
-# Android (SDK/NDK prereqs — docs/developing.md § Android)
+# Android (one-time: just android-setup — see docs/developing.md § Android)
 just android                           # kernel .so + gradle assembleDebug → APK
 just android-test                      # Kotlin JVM unit tests + ktlint (headless)
 just android-instrumented              # on-device suites (needs adb hardware)

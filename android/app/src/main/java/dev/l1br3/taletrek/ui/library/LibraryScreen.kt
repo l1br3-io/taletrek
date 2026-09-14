@@ -1,6 +1,7 @@
 package dev.l1br3.taletrek.ui.library
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,6 +28,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -40,13 +43,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.l1br3.taletrek.data.BookShelf
+import dev.l1br3.taletrek.data.PickedLane
+import dev.l1br3.taletrek.data.SourceImport
+import dev.l1br3.taletrek.service.SynthService
+import dev.l1br3.taletrek.service.SynthUiState
+import dev.l1br3.taletrek.service.isRunningPhase
+import kotlinx.coroutines.launch
 
 /**
  * The app's front door: every book the kernel can read out of
@@ -68,9 +79,15 @@ fun LibraryScreen(
 ) {
     val ui by viewModel.ui.collectAsState()
     val importUi by importViewModel.ui.collectAsState()
-    val synthState by dev.l1br3.taletrek.service.SynthService.active
-        .collectAsState()
+    val synthState by SynthService.active.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Terminal convert feedback (Done/Failed/Cancelled) lingers as a
+    // dismissible card; the flag resets when the next job starts.
+    var terminalDismissed by remember { mutableStateOf(false) }
+    LaunchedEffect(synthState) {
+        if (synthState?.isRunningPhase == true) terminalDismissed = false
+    }
 
     val notifPermission =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -80,13 +97,23 @@ fun LibraryScreen(
         }
     }
 
+    // One add action: pick anything, then route by display name — a
+    // `.taletrek` is a bundle import, everything else converts (the
+    // kernel's content sniffing arbitrates unknowns).
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val pickDocument =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) viewModel.onImportPicked(uri.toString())
-        }
-    val pickSource =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) importViewModel.onSourcePicked(uri.toString())
+            if (uri != null) {
+                scope.launch {
+                    val lane = SourceImport.laneOf(SourceImport.displayNameOf(context, uri))
+                    if (lane == PickedLane.BUNDLE) {
+                        viewModel.onImportPicked(uri.toString())
+                    } else {
+                        importViewModel.onSourcePicked(uri.toString())
+                    }
+                }
+            }
         }
 
     // Import-from-open: a VIEW intent handed over by the activity.
@@ -124,9 +151,9 @@ fun LibraryScreen(
     // shelf (the bundle lands via filesDir/books — the scan's root).
     LaunchedEffect(synthState) {
         when (synthState) {
-            is dev.l1br3.taletrek.service.SynthUiState.Done,
-            is dev.l1br3.taletrek.service.SynthUiState.Failed,
-            dev.l1br3.taletrek.service.SynthUiState.Cancelled,
+            is SynthUiState.Done,
+            is SynthUiState.Failed,
+            SynthUiState.Cancelled,
             -> {
                 importViewModel.onJobTerminal()
                 viewModel.rescan()
@@ -140,11 +167,6 @@ fun LibraryScreen(
             TopAppBar(
                 title = { Text("Library") },
                 actions = {
-                    TextButton(
-                        onClick = { pickSource.launch(dev.l1br3.taletrek.data.SourceImport.PICKER_MIME_TYPES) },
-                        modifier =
-                            Modifier.semantics { contentDescription = "Convert a document to an audio book" },
-                    ) { Text("Convert") }
                     IconButton(
                         onClick = onOpenVoices,
                         modifier =
@@ -153,66 +175,85 @@ fun LibraryScreen(
                     IconButton(
                         onClick = { pickDocument.launch(arrayOf("*/*")) },
                         modifier =
-                            Modifier.semantics { contentDescription = "Import a .taletrek bundle" },
+                            Modifier.semantics { contentDescription = "Add a document or .taletrek bundle" },
                     ) { Icon(Icons.Default.Add, contentDescription = null) }
                 },
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        when {
-            ui.loading -> {
-                Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    Text("Scanning library…", style = MaterialTheme.typography.bodyLarge)
-                }
-            }
-            ui.books.isEmpty() -> {
-                Column(
-                    modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        "No books yet.",
-                        style = MaterialTheme.typography.titleLarge,
-                    )
-                    Text(
-                        "Convert a document on this device, or import a .taletrek bundle.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Button(onClick = { pickSource.launch(dev.l1br3.taletrek.data.SourceImport.PICKER_MIME_TYPES) }) {
-                        Text("Convert a document")
-                    }
-                    TextButton(onClick = { pickDocument.launch(arrayOf("*/*")) }) {
-                        Text("Import a bundle")
-                    }
-                }
-            }
-            else -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    synthState?.let { state ->
-                        item { ConvertProgressRow(state) }
-                    }
-                    if (ui.skipped > 0) {
-                        item {
-                            Text(
-                                "${ui.skipped} unreadable book${if (ui.skipped == 1) "" else "s"} skipped",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // The in-page convert surface — pinned above the body in
+            // EVERY state (empty first-run library included), not just
+            // the notification's shade. Running phases always show;
+            // terminal ones stay until dismissed.
+            val convertState = synthState
+            if (convertState != null && convertState !is SynthUiState.Idle) {
+                if (convertState.isRunningPhase || !terminalDismissed) {
+                    ConvertProgressCard(
+                        state = convertState,
+                        onCancel = {
+                            context.startService(
+                                Intent(context, SynthService::class.java)
+                                    .setAction(SynthService.ACTION_CANCEL),
                             )
+                        },
+                        onDismiss = { terminalDismissed = true },
+                    )
+                }
+            }
+            when {
+                ui.loading -> {
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("Scanning library…", style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                ui.books.isEmpty() -> {
+                    Column(
+                        modifier =
+                            Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            "No books yet.",
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                        Text(
+                            "Add a document to convert it, or a .taletrek bundle to import it.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(onClick = { pickDocument.launch(arrayOf("*/*")) }) {
+                            Text("Add a document")
                         }
                     }
-                    items(ui.books, key = { it.bookId }) { book ->
-                        BookRow(
-                            book = book,
-                            onOpen = { onOpenBook(book) },
-                            onRequestDelete = { viewModel.requestDelete(book) },
-                        )
+                }
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        if (ui.skipped > 0) {
+                            item {
+                                Text(
+                                    "${ui.skipped} unreadable book${if (ui.skipped == 1) "" else "s"} skipped",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                )
+                            }
+                        }
+                        items(ui.books, key = { it.bookId }) { book ->
+                            BookRow(
+                                book = book,
+                                onOpen = { onOpenBook(book) },
+                                onRequestDelete = { viewModel.requestDelete(book) },
+                            )
+                        }
                     }
                 }
             }
@@ -236,41 +277,77 @@ fun LibraryScreen(
     }
 }
 
-/** The in-flight convert job as a compact library row (no separate screen). */
+/**
+ * The live convert job as a pinned status card — the page's own
+ * processing feedback, mirroring the notification's phases and copy:
+ * a determinate bar while the state carries counts (download bytes,
+ * synthesized paragraphs), indeterminate otherwise, Cancel while
+ * running, Dismiss once terminal.
+ */
 @Suppress("FunctionName") // Compose factory convention — PascalCase composables
 @Composable
-private fun ConvertProgressRow(state: dev.l1br3.taletrek.service.SynthUiState) {
-    val (label, cancelable) =
+private fun ConvertProgressCard(
+    state: SynthUiState,
+    onCancel: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val (title, detail) =
         when (state) {
-            is dev.l1br3.taletrek.service.SynthUiState.Preparing ->
-                "Converting — reading document" to true
-            is dev.l1br3.taletrek.service.SynthUiState.DownloadingVoice ->
-                "Downloading ${state.done / (1024 * 1024)}/${state.total / (1024 * 1024)} MB" to true
-            is dev.l1br3.taletrek.service.SynthUiState.Synthesizing ->
-                "Synthesizing ${state.done}/${state.total}" to true
-            dev.l1br3.taletrek.service.SynthUiState.Writing -> "Writing bundle…" to true
-            is dev.l1br3.taletrek.service.SynthUiState.Done ->
-                "Added \"${state.bookId}\" to the library" to false
-            is dev.l1br3.taletrek.service.SynthUiState.Failed ->
-                "Conversion failed: ${state.message}" to false
-            dev.l1br3.taletrek.service.SynthUiState.Cancelled ->
-                "Conversion cancelled" to false
-            dev.l1br3.taletrek.service.SynthUiState.Idle -> return
+            is SynthUiState.Preparing ->
+                "Converting document" to
+                    if (state.paragraphs != null && state.paragraphs > 0) {
+                        "${state.chapters} chapters · ${state.paragraphs} paragraphs"
+                    } else {
+                        "Reading…"
+                    }
+            is SynthUiState.DownloadingVoice ->
+                "Downloading voice" to
+                    if (state.total > 0) {
+                        "${state.done / (1024 * 1024)} of ${state.total / (1024 * 1024)} MB"
+                    } else {
+                        "Downloading…"
+                    }
+            is SynthUiState.Synthesizing ->
+                "Synthesizing audio" to
+                    if (state.total > 0) "${state.done} of ${state.total} paragraphs" else "Starting…"
+            SynthUiState.Writing -> "Finishing" to "Writing bundle…"
+            is SynthUiState.Done -> "Book ready" to "Added to your library"
+            is SynthUiState.Failed -> "Conversion failed" to state.message
+            SynthUiState.Cancelled -> "Conversion cancelled" to null
+            SynthUiState.Idle -> return
+        }
+    val percent =
+        when (state) {
+            is SynthUiState.DownloadingVoice ->
+                if (state.total > 0) ((state.done * 100) / state.total).toInt() else null
+            is SynthUiState.Synthesizing ->
+                if (state.total > 0) (state.done * 100) / state.total else null
+            else -> null
         }
     ListItem(
-        headlineContent = { Text(label, style = MaterialTheme.typography.bodyMedium) },
+        headlineContent = { Text(title, style = MaterialTheme.typography.titleSmall) },
+        supportingContent = {
+            Column {
+                detail?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                if (state.isRunningPhase) {
+                    if (percent != null) {
+                        LinearProgressIndicator(
+                            progress = { percent / 100f },
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        )
+                    }
+                }
+            }
+        },
         trailingContent = {
-            val context = androidx.compose.ui.platform.LocalContext.current
-            if (cancelable) {
-                TextButton(onClick = {
-                    context.startService(
-                        android.content
-                            .Intent(
-                                context,
-                                dev.l1br3.taletrek.service.SynthService::class.java,
-                            ).setAction(dev.l1br3.taletrek.service.SynthService.ACTION_CANCEL),
-                    )
-                }) { Text("Cancel") }
+            if (state.isRunningPhase) {
+                TextButton(onClick = onCancel) { Text("Cancel") }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Dismiss") }
             }
         },
     )
