@@ -15,15 +15,31 @@
 //! (CLI output-path naming — the server has no concept of "beside the input"),
 //! and [`write_book_bundle_file`] (buffered file write — the server writes its
 //! own store).
+//!
+//! # Two write paths, deliberately
+//!
+//! `synth` **streams**: [`synth_stamp_to_file`] opens a same-dir temp before
+//! synthesis and hands every finished segment to the worker's streaming stamp
+//! ([`taletrek_worker::stamp::synth_and_stamp_streaming`]) — peak memory is
+//! one segment, not the whole book's audio (the `streaming-synth` bound; the
+//! GUI executor and the CLI `synth` both route here). `parse` and `resynth`
+//! keep the in-memory [`write_book_bundle_file`]: parse output is text-only
+//! (tiny), and re-voicing is spec-deferred to a follow-up (desktop RAM
+//! headroom makes it non-urgent). Atomic-write discipline is shared: both
+//! paths write a unique same-dir temp and rename only a complete archive —
+//! never a partial book.
 
 use std::fs;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use thiserror::Error;
 
 use taletrek_synth::synth::PiperRunner;
-use taletrek_synth::{write_book_bundle, BookBundle, BundleError, Encoder, Generator};
+use taletrek_synth::{
+    write_book_bundle, BookBundle, BundleError, BundleWriter, Encoder, Generator,
+};
 
 use taletrek_worker::stamp;
 use taletrek_worker::ProgressSink;
@@ -51,6 +67,13 @@ pub enum BundleIoError {
     /// Serializing the bundle (ZIP + JSON) failed. Lifted from the lib.
     #[error(transparent)]
     Bundle(#[from] BundleError),
+
+    /// Synthesis or stamping failed inside the streaming write path. Lifted
+    /// from the worker's stamping core — carried here because
+    /// [`synth_stamp_to_file`] runs synth, stamp, and file write as one
+    /// atomic operation.
+    #[error(transparent)]
+    Stamp(#[from] StampError),
 
     /// Writing the output file failed (disk full, permissions, missing parent).
     /// Carries the output path so the user knows where it broke.
@@ -127,11 +150,36 @@ pub fn refuse_full_input(bundle: &BookBundle, input: &Path) -> Result<(), FullIn
     stamp::refuse_full_input(bundle, &input.display().to_string())
 }
 
-/// Run the parallel synth engine over every paragraph in `bundle`, fill its
-/// `audio` map, and stamp the manifest as a full bundle. Thin desktop wrapper
-/// around [`taletrek_worker::stamp::synth_and_stamp`] that fixes
-/// [`GENERATOR_APP`] — see the worker for the pure semantics. No file I/O.
-pub fn synth_and_stamp<R, E, F>(
+/// Unique same-dir temp path for `path`: `<name>.<pid>.<seq>.tmp`. Mirrors
+/// the kernel pipeline's helper — the temp MUST live in the destination
+/// directory (rename across filesystems fails with `EXDEV`), and the
+/// pid+seq suffix keeps concurrent writers from clobbering each other's
+/// temp.
+fn unique_tmp_path(path: &Path) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    path.with_file_name(format!(
+        "{}.{}.{}.tmp",
+        path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed),
+    ))
+}
+
+/// The desktop's `synth` write path: stream every synthesized segment of
+/// `bundle` into a same-dir temp beside `output`, stamp the manifest through
+/// the single stamping path (fixing [`GENERATOR_APP`]), and rename the
+/// complete archive into `output`. Returns the dedup'd segment count for the
+/// caller's summary (`bundle.audio` is never populated — nothing
+/// accumulates; see the module doc's two-write-paths note).
+///
+/// The temp is opened **before** synthesis begins; on any failure (synth,
+/// stamp, write) it is removed — never a partial book. The parent directory
+/// must exist (callers create the output dir; the CLI writes beside the
+/// input).
+#[allow(clippy::too_many_arguments)] // mirrors the stamping core's seam set; the wrapper adds only `output`.
+pub fn synth_stamp_to_file<R, E, F>(
     bundle: &mut BookBundle,
     voice_id: &str,
     voice_model: &Path,
@@ -139,13 +187,27 @@ pub fn synth_and_stamp<R, E, F>(
     encoder: &E,
     jobs: usize,
     progress: Option<&dyn ProgressSink>,
-) -> Result<(), StampError>
+    output: &Path,
+) -> Result<u32, BundleIoError>
 where
     R: PiperRunner + Send,
     E: Encoder + Sync,
     F: Fn() -> R + Sync,
 {
-    stamp::synth_and_stamp(
+    let tmp = unique_tmp_path(output);
+    let discard_tmp = |e: BundleIoError| {
+        let _ = fs::remove_file(&tmp);
+        e
+    };
+
+    let file = fs::File::create(&tmp).map_err(|source| BundleIoError::WriteFile {
+        path: output.to_path_buf(),
+        source,
+    })?;
+    let writer = BundleWriter::new(BufWriter::new(file), &bundle.chapters)
+        .map_err(|e| discard_tmp(e.into()))?;
+
+    let (_sink, segment_count) = stamp::synth_and_stamp_streaming(
         bundle,
         voice_id,
         voice_model,
@@ -154,7 +216,16 @@ where
         jobs,
         GENERATOR_APP,
         progress,
+        writer,
     )
+    .map_err(|e| discard_tmp(e.into()))?;
+    fs::rename(&tmp, output).map_err(|source| {
+        discard_tmp(BundleIoError::WriteFile {
+            path: output.to_path_buf(),
+            source,
+        })
+    })?;
+    Ok(segment_count)
 }
 
 /// Re-voice a bundle: rewrite `book.voiceId` to `new_voice_id`, then re-synth
@@ -365,9 +436,10 @@ mod tests {
             "v",
             vec![ChapterText::new("bk_test", 0, "Ch", vec!["One.".into()])],
         );
-        // Use the desktop wrapper so the manifest it stamps reads
-        // generator.app == "taletrek-desktop" — the invariant main.rs relies on.
-        synth_and_stamp(
+        // Produce the full bundle through the streaming path so the manifest
+        // it stamps reads generator.app == "taletrek-desktop" — the invariant
+        // main.rs relies on — then exercise the buffered file write on it.
+        synth_stamp_to_file(
             &mut b,
             "v",
             Path::new("/dev/null"),
@@ -375,10 +447,10 @@ mod tests {
             &WavPassthrough,
             1,
             None,
+            &out,
         )
-        .expect("synth succeeds");
+        .expect("streaming stamp succeeds");
 
-        write_book_bundle_file(&b, &out).expect("file write should succeed");
         assert!(out.is_file(), "output file must exist");
 
         let bytes = std::fs::read(&out).unwrap();
@@ -401,17 +473,23 @@ mod tests {
         }
     }
 
-    // ---- desktop wrappers stamp the desktop producer string ----
+    // ---- synth_stamp_to_file (streaming synth write path — streaming-synth) ----
 
     #[test]
-    fn synth_and_stamp_wrapper_stamps_desktop_generator_app() {
-        // The thin wrapper fixes generator.app = GENERATOR_APP; this pins that
-        // the desktop can't drift from "taletrek-desktop" via the worker path.
+    fn synth_stamp_to_file_streams_stamps_and_renames() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("book.synth.taletrek");
         let mut b = text_only_bundle(
-            "v",
-            vec![ChapterText::new("bk_test", 0, "Ch", vec!["Hi.".into()])],
+            "v-old",
+            vec![ChapterText::new(
+                "bk_test",
+                0,
+                "Ch",
+                vec!["Hello world.".into(), "Second.".into()],
+            )],
         );
-        synth_and_stamp(
+
+        let count = synth_stamp_to_file(
             &mut b,
             "v",
             Path::new("/dev/null"),
@@ -419,11 +497,105 @@ mod tests {
             &WavPassthrough,
             1,
             None,
+            &out,
+        )
+        .expect("streaming stamp succeeds");
+
+        assert_eq!(count, 2, "dedup'd segment count returns to the caller");
+        // Nothing accumulated in memory — the bundle's audio map stays empty.
+        assert!(b.audio.is_empty());
+        assert!(b.manifest.audio.present, "manifest stamped in place");
+        assert_eq!(b.manifest.book.voice_id, "v", "voice rewrite contract");
+
+        // Same-dir temp is renamed into place; no residue.
+        assert!(out.is_file(), "output exists");
+        let residue: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(residue.is_empty(), "temp residue: {residue:?}");
+
+        let back = read_book_bundle(&std::fs::read(&out).unwrap()).unwrap();
+        assert!(back.manifest.audio.present);
+        assert_eq!(back.manifest.audio.segment_count, 2);
+        assert_eq!(back.manifest.generator.app, GENERATOR_APP);
+        assert_eq!(back.manifest.generator.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(back.audio.len(), 2);
+    }
+
+    #[test]
+    fn synth_stamp_to_file_failure_removes_temp_and_writes_nothing() {
+        // A whitespace-only paragraph aborts synthesis (EmptyText) AFTER the
+        // temp file exists — the failure must leave neither output nor temp.
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("book.synth.taletrek");
+        let mut b = text_only_bundle(
+            "v",
+            vec![ChapterText::new(
+                "bk_test",
+                0,
+                "Ch",
+                vec!["   \n   ".into()],
+            )],
+        );
+
+        let err = synth_stamp_to_file(
+            &mut b,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+            None,
+            &out,
+        )
+        .expect_err("empty paragraph must abort");
+        assert!(
+            matches!(err, BundleIoError::Stamp(_)),
+            "expected Stamp, got {err:?}"
+        );
+
+        assert!(!out.exists(), "no output on failure");
+        let residue: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(residue.is_empty(), "temp residue: {residue:?}");
+    }
+
+    // ---- desktop wrappers stamp the desktop producer string ----
+
+    #[test]
+    fn synth_stamp_to_file_stamps_desktop_generator_app() {
+        // The streaming wrapper fixes generator.app = GENERATOR_APP; this
+        // pins that the desktop can't drift from "taletrek-desktop" via the
+        // worker path.
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("book.synth.taletrek");
+        let mut b = text_only_bundle(
+            "v",
+            vec![ChapterText::new("bk_test", 0, "Ch", vec!["Hi.".into()])],
+        );
+        synth_stamp_to_file(
+            &mut b,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+            None,
+            &out,
         )
         .expect("wrapper succeeds");
 
         assert_eq!(b.manifest.generator.app, GENERATOR_APP);
         assert_eq!(b.manifest.generator.version, env!("CARGO_PKG_VERSION"));
+        let back = read_book_bundle(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!(back.manifest.generator.app, GENERATOR_APP);
     }
 
     #[test]

@@ -39,7 +39,7 @@ use taletrek_worker::{
 
 use crate::bundle_io::{
     default_parse_output, default_resynth_output, default_synth_output, desktop_generator,
-    refuse_full_input, resynth_and_stamp, synth_and_stamp, write_book_bundle_file,
+    refuse_full_input, resynth_and_stamp, synth_stamp_to_file, write_book_bundle_file,
 };
 use crate::cli::{Cli, Cmd, CommonArgs, ParseArgs};
 use crate::engine::{effective_jobs, DesktopEncoder, DesktopRunner, RunnerSpec};
@@ -198,11 +198,21 @@ where
     )
     .context("resolving voice model")?;
 
-    // Parallel synth + manifest stamp. A fresh runner is constructed per work
-    // chunk via the factory (the native engine loads its model once per
-    // chunk); the encoder is shared by ref.
+    // Streaming synth + stamp + atomic write: the output's same-dir temp
+    // opens before synthesis, every finished segment flows into it through
+    // the single stamping path (generator.app = taletrek-desktop), and the
+    // complete archive renames into place — peak memory is one segment, not
+    // the book. A fresh runner is constructed per work chunk via the factory
+    // (the native engine loads its model once per chunk); the encoder is
+    // shared by ref. Explicit --output, else <stem>.synth.taletrek beside
+    // the input (a chained source keeps its own stem: fable.txt →
+    // fable.synth.taletrek — the unchanged naming rule).
+    let output = common
+        .output
+        .clone()
+        .unwrap_or_else(|| default_synth_output(&common.input));
     let factory_voice_model = voice_model.clone();
-    synth_and_stamp(
+    let segment_count = synth_stamp_to_file(
         &mut bundle,
         &voice_id,
         &voice_model,
@@ -210,19 +220,11 @@ where
         encoder,
         jobs,
         progress.map(|p| p as &dyn taletrek_worker::ProgressSink),
-    )?;
-
-    // Write the full bundle out: explicit --output, else <stem>.synth.taletrek
-    // beside the input (a chained source keeps its own stem: fable.txt →
-    // fable.synth.taletrek — the unchanged naming rule).
-    let output = common
-        .output
-        .clone()
-        .unwrap_or_else(|| default_synth_output(&common.input));
-    write_book_bundle_file(&bundle, &output)
-        .with_context(|| format!("writing output bundle {}", output.display()))?;
+        &output,
+    )
+    .with_context(|| format!("writing output bundle {}", output.display()))?;
     if let Some(p) = progress {
-        p.summary("synth", bundle.audio.len(), &voice_id, &output);
+        p.summary("synth", segment_count as usize, &voice_id, &output);
     }
     Ok(())
 }

@@ -64,7 +64,7 @@ use super::settings::{resolve_output, RunConfig};
 use super::sink::{ChannelSink, WorkerMsg};
 use crate::bundle_io::{
     default_resynth_output, default_synth_output, refuse_full_input, resynth_and_stamp,
-    synth_and_stamp, write_book_bundle_file, FullInputError,
+    synth_stamp_to_file, write_book_bundle_file, FullInputError,
 };
 use crate::engine::{DesktopEncoder, DesktopRunner, RunnerSpec};
 
@@ -652,16 +652,19 @@ fn encoder_for_gui() -> Result<DesktopEncoder> {
 /// 3. resolve the voice model via `resolve_voice_model` (production: curated
 ///    id → cache or download, progress → [`WorkerMsg::Download`]),
 /// 4. synthesize every paragraph in parallel through the injected runner
-///    factory + encoder (progress → [`QueueEvent::Progress`]),
-/// 5. write the full bundle beside the input (`<stem>.synth.taletrek` —
-///    the CLI naming rule) or into `run.output_dir` under the same name.
+///    factory + encoder (progress → [`QueueEvent::Progress`]) **streaming
+///    straight into the output's same-dir temp** — segments never
+///    accumulate in memory (the streaming-synth bound),
+/// 5. rename the completed bundle into place beside the input
+///    (`<stem>.synth.taletrek` — the CLI naming rule) or into
+///    `run.output_dir` under the same name.
 ///
 /// The cancel `flag` is checked at every stage boundary and — via whatever
 /// [`CancellableRunner`] the factory installs — between paragraphs; a
-/// cancelled run fails with the typed [`SynthError::Cancelled`] **before**
-/// any file is written. Returns the written output path; the caller
-/// ([`execute_and_report`]) turns `Ok`/`Err` into `Finished`/`Failed`
-/// events.
+/// cancelled run fails with the typed [`SynthError::Cancelled`] and the
+/// streaming temp is removed — never a partial book. Returns the written
+/// output path; the caller ([`execute_and_report`]) turns `Ok`/`Err` into
+/// `Finished`/`Failed` events.
 #[allow(clippy::too_many_arguments)] // mirrors the CLI's `run_synth_with` seam set (identity + channel + flag/tuning + three injectables); grouping would hide the test seams.
 fn run_convert_job_with<R, E, F>(
     id: JobId,
@@ -690,8 +693,17 @@ where
     let voice_model = resolve_voice_model()?;
     ensure_not_cancelled(flag)?;
 
+    // Streaming synth + stamp + atomic write (the streaming-synth memory
+    // bound): output resolution and its directory move BEFORE synthesis —
+    // the wrapper opens the same-dir temp first, then every finished segment
+    // flows into it (bundle.audio never accumulates).
+    let output = resolve_output(default_synth_output(input), run.output_dir.as_deref());
+    if let Some(dir) = &run.output_dir {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("creating output directory {}", dir.display()))?;
+    }
     let factory_model = voice_model.clone();
-    synth_and_stamp(
+    synth_stamp_to_file(
         &mut bundle,
         voice,
         &voice_model,
@@ -699,16 +711,9 @@ where
         encoder,
         run.jobs,
         Some(&sink),
-    )?;
-    ensure_not_cancelled(flag)?;
-
-    let output = resolve_output(default_synth_output(input), run.output_dir.as_deref());
-    if let Some(dir) = &run.output_dir {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("creating output directory {}", dir.display()))?;
-    }
-    write_book_bundle_file(&bundle, &output)
-        .with_context(|| format!("writing output bundle {}", output.display()))?;
+        &output,
+    )
+    .with_context(|| format!("writing output bundle {}", output.display()))?;
     Ok(output)
 }
 
