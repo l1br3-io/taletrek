@@ -328,3 +328,50 @@ ios-bindings:
     cargo build -p taletrek-ffi --lib
     uniffi-bindgen generate --library target/debug/{{host_dylib}} --language swift \
         --config crates/ffi/uniffi.toml --no-format --out-dir ios/TaleTrek/FFI
+
+# iOS kernel static libs (device + simulator) + the sherpa xcframework, into
+# ios/TaleTrek/Vendor/ (gitignored — populated per machine, like jniLibs).
+# TRAP LEDGER (extend here as the Mac session finds them, android-T1 style):
+# - sherpa-onnx-sys on iOS forces SHARED mode and auto-downloads
+#   sherpa-onnx-v<ver>-ios-shared-onnxruntime-static.xcframework.zip from the
+#   `xcframework` release tag into target/sherpa-onnx-prebuilt/; onnxruntime
+#   is statically INSIDE the SherpaOnnxC dylib (no separate onnxruntime to
+#   link); it wires lib/ (device) vs lib-sim/ (sim) symlink dirs itself.
+# - `--crate-type staticlib` drops rustc link directives: the app supplies
+#   -ltaletrek_ffi -lc++ and embeds the framework (pbxproj settings).
+# - libopus (the `opus` crate) cross-builds via cmake; the cmake crate maps
+#   Apple triples — unverified on a real Mac until task 003's run.
+ios-kernel:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for t in aarch64-apple-ios aarch64-apple-ios-sim; do
+        cargo rustc -p taletrek-ffi --lib --crate-type staticlib --release --target "$t"
+    done
+    VENDOR=ios/TaleTrek/Vendor
+    mkdir -p "$VENDOR/iphoneos" "$VENDOR/iphonesimulator"
+    cp target/aarch64-apple-ios/release/libtaletrek_ffi.a "$VENDOR/iphoneos/"
+    cp target/aarch64-apple-ios-sim/release/libtaletrek_ffi.a "$VENDOR/iphonesimulator/"
+    XCF="target/sherpa-onnx-prebuilt/sherpa-onnx-v{{sherpa_ver}}-ios-shared-onnxruntime-static/SherpaOnnxC.xcframework"
+    rm -rf "$VENDOR/SherpaOnnxC.xcframework"
+    cp -R "$XCF" "$VENDOR/"
+
+# Simulator destination for ios/ios-test (override: IOS_SIM_DEST='platform=iOS Simulator,name=iPhone 16')
+ios_sim_dest := env_var_or_default('IOS_SIM_DEST', 'platform=iOS Simulator,name=iPhone 16')
+
+# Kernel + xcodebuild build (simulator)
+ios: ios-kernel
+    xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+        -destination 'generic/platform=iOS Simulator' build
+
+# Swift unit tests on the simulator (app-hosted — the kernel rides the app binary)
+ios-test: ios-kernel
+    xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+        -destination '{{ios_sim_dest}}' test
+
+# Build for a connected iPhone (dev signing): needs IOS_DEVICE_ID (xcrun devicectl
+# list devices) + DEVELOPMENT_TEAM; then install:
+#   xcrun devicectl device install app --device "$IOS_DEVICE_ID" <product path>
+ios-install:
+    xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+        -destination "platform=iOS,id=${IOS_DEVICE_ID:?set IOS_DEVICE_ID}" \
+        DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:?set DEVELOPMENT_TEAM}" build

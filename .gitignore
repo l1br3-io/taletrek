@@ -48,3 +48,10 @@ target/
 !crates/synth/tests/fixtures/*.taletrek
 !crates/synth/tests/fixtures/*.taletrek-lib
 !crates/parse/testdata/plain.taletrek
+
+# iOS kernel/vendor artifacts (populated by `just ios-kernel`, per machine —
+# the jniLibs analogue) + Xcode local state
+ios/TaleTrek/Vendor/
+ios/TaleTrek.xcodeproj/xcuserdata/
+*.xcuserdatad/
+ios/DerivedData/

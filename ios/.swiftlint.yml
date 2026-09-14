@@ -1,0 +1,10 @@
+# SwiftLint config — the ktlint analogue (spec: SwiftLint is the Swift gate).
+# Generated bindings are never hand-edited and never linted.
+included:
+  - TaleTrek
+  - TaleTrekTests
+excluded:
+  - TaleTrek/FFI
+line_length:
+  ignores_function_declarations: true
+  ignores_comments: true
