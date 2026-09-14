@@ -10,20 +10,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-/** The source-import flow's render state (the gate dialog + error row). */
+/** The source-import flow's render state (the error row; there is no gate). */
 sealed interface ImportUiState {
-    /** Nothing importing — no gate, no error. */
+    /** Nothing importing — no error. */
     data object Idle : ImportUiState
-
-    /** A document was copied; the user chooses listen vs text-only.
-     *  `estimatedMinutes` is a size-derived roughage, not a promise. */
-    data class Gate(
-        val sourcePath: String,
-        val hint: String?,
-        val fileName: String,
-        val hasVoice: Boolean,
-        val estimatedMinutes: Int,
-    ) : ImportUiState
 
     /** The copy or start failed — surfaced, dismissible. */
     data class Failed(
@@ -32,19 +22,22 @@ sealed interface ImportUiState {
 }
 
 /**
- * The convert gate's state machine — pure Kotlin over injected seams (the
- * JVM tests drive fakes; the real seams touch `ContentResolver`, the FFI
- * voice cache, and `startForegroundService`). The progress row is NOT here:
- * it renders [dev.l1br3.taletrek.service.SynthService.active] directly —
- * one process-wide job slot, one source of truth.
+ * The import flow's state machine — pure Kotlin over injected seams (the
+ * JVM tests drive fakes; the real seams touch `ContentResolver`, the
+ * service's single-job slot, and `startForegroundService`). The progress
+ * row is NOT here: it renders [dev.l1br3.taletrek.service.SynthService.active]
+ * directly — one process-wide job slot, one source of truth.
  *
- * The source copy's lifecycle is here: deleted on gate cancel and when the
- * job reaches any terminal state ([onJobTerminal]).
+ * Zero decisions: a picked (or shared) source is copied and submitted as
+ * the FULL job in one step — the voice (and, first run, espeak-ng-data)
+ * resolves inside the job with progress. The source copy's lifecycle is
+ * here: deleted when the job reaches any terminal state
+ * ([onJobTerminal]).
  */
 class ImportViewModel(
     private val io: CoroutineDispatcher,
     private val copySource: suspend (uri: String) -> Pair<String, String?>,
-    private val hasCachedVoice: () -> Boolean,
+    private val isConverting: () -> Boolean,
     private val selectedVoice: () -> String?,
     private val startJob: (SynthJobRequest) -> Unit,
     private val deleteSource: (path: String) -> Unit,
@@ -57,7 +50,13 @@ class ImportViewModel(
 
     /** A source document was picked (SAF) or opened (VIEW intent). */
     fun onSourcePicked(uri: String) {
-        if (_ui.value is ImportUiState.Gate) return // one gate at a time
+        // The guard fires BEFORE the copy: the service's single-job slot
+        // would silently reject the submit, stranding an orphaned copy only
+        // the NEXT terminal cleans up. Fail loudly instead.
+        if (isConverting()) {
+            _ui.value = ImportUiState.Failed(ALREADY_CONVERTING)
+            return
+        }
         _ui.value = ImportUiState.Idle
         viewModelScope.launch(io) {
             val (path, hint) =
@@ -71,49 +70,20 @@ class ImportViewModel(
                     return@launch
                 }
             pendingSource = path
-            val size = java.io.File(path).length()
-            _ui.value =
-                ImportUiState.Gate(
+            startJob(
+                SynthJobRequest(
                     sourcePath = path,
                     hint = hint,
-                    fileName = hint?.substringAfterLast('/') ?: "Document",
-                    hasVoice = hasCachedVoice(),
-                    // ~3 KB/paragraph of source, ~1.5 s/paragraph of synth —
-                    // a roughage, labelled "≈" in the UI.
-                    estimatedMinutes = ((size / 3072L) * 15L / 1000L).toInt().coerceAtLeast(1),
-                )
+                    voiceId = selectedVoice(),
+                    voiceCacheDir = dirs.voiceCacheDir,
+                    espeakDir = dirs.espeakDir,
+                    booksDir = dirs.booksDir,
+                    jobs = 2,
+                    generatorApp = "taletrek-android",
+                ),
+            )
+            _ui.value = ImportUiState.Idle
         }
-    }
-
-    /** Gate choice: full synth (voice resolves inside the job — cached or
-     *  the curated default downloads with progress). */
-    fun chooseListen() = submit(textOnly = false)
-
-    /** Gate choice: stop after parse — a readable text-only bundle. */
-    fun chooseTextOnly() = submit(textOnly = true)
-
-    private fun submit(textOnly: Boolean) {
-        val gate = _ui.value as? ImportUiState.Gate ?: return
-        startJob(
-            SynthJobRequest(
-                sourcePath = gate.sourcePath,
-                hint = gate.hint,
-                textOnly = textOnly,
-                voiceId = selectedVoice(),
-                voiceCacheDir = dirs.voiceCacheDir,
-                espeakDir = dirs.espeakDir,
-                booksDir = dirs.booksDir,
-                jobs = 2,
-                generatorApp = "taletrek-android",
-            ),
-        )
-        _ui.value = ImportUiState.Idle
-    }
-
-    /** Gate dismissed — drop the copied source. */
-    fun cancelGate() {
-        deletePending()
-        _ui.value = ImportUiState.Idle
     }
 
     /** The job reached a terminal state — the source copy is spent. */
@@ -137,11 +107,13 @@ class ImportViewModel(
     )
 
     companion object {
+        const val ALREADY_CONVERTING = "Already converting a document"
+
         /** The activity-scoped factory over the real seams. */
         fun factory(
             io: CoroutineDispatcher,
             copySource: suspend (uri: String) -> Pair<String, String?>,
-            hasCachedVoice: () -> Boolean,
+            isConverting: () -> Boolean,
             selectedVoice: () -> String?,
             startJob: (SynthJobRequest) -> Unit,
             deleteSource: (path: String) -> Unit,
@@ -153,7 +125,7 @@ class ImportViewModel(
                     ImportViewModel(
                         io,
                         copySource,
-                        hasCachedVoice,
+                        isConverting,
                         selectedVoice,
                         startJob,
                         deleteSource,

@@ -66,7 +66,6 @@ class SynthStateMachineTest {
         SynthJobRequest(
             sourcePath = "/cache/source.pdf",
             hint = "source.pdf",
-            textOnly = false,
             voiceId = null,
             voiceCacheDir = "/files/voices",
             espeakDir = "/files/espeak-ng-data",
@@ -99,7 +98,7 @@ class SynthStateMachineTest {
 
         engine.terminal(FfiPipelineState.Finished(outcome()))
         assertEquals(
-            SynthUiState.Done(bookId = "bk_abc", bundlePath = "/books/bk_abc.taletrek", textOnly = false),
+            SynthUiState.Done(bookId = "bk_abc", bundlePath = "/books/bk_abc.taletrek"),
             controller.state.value,
         )
     }
@@ -137,16 +136,6 @@ class SynthStateMachineTest {
         controller.submit(request())
         engine.terminal(FfiPipelineState.Failed(kind = "resolve", message = "network down"))
         assertEquals(SynthUiState.Failed("resolve", "network down"), controller.state.value)
-    }
-
-    @Test
-    fun textOnlyOutcomeCarriesThrough() {
-        val engine = FakeEngine()
-        val controller = SynthController(engine)
-        controller.submit(request())
-        engine.terminal(FfiPipelineState.Finished(outcome(textOnly = true)))
-        val done = controller.state.value
-        assertTrue(done is SynthUiState.Done && done.textOnly)
     }
 
     @Test

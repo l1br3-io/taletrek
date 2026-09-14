@@ -25,6 +25,7 @@ import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.data.SourceImport
 import dev.l1br3.taletrek.data.VoiceStore
 import dev.l1br3.taletrek.service.SynthJobRequest
+import dev.l1br3.taletrek.service.isRunningPhase
 import dev.l1br3.taletrek.ui.library.ImportViewModel
 import dev.l1br3.taletrek.ui.library.LibraryScreen
 import dev.l1br3.taletrek.ui.library.LibraryViewModel
@@ -72,10 +73,9 @@ class MainActivity : ComponentActivity() {
                         val file = SourceImport.copyToCache(this, parsed)
                         file.absolutePath to SourceImport.displayNameOf(this, parsed)
                     },
-                    hasCachedVoice = {
-                        dev.l1br3.taletrek.ffi
-                            .cachedVoiceIds(filesDir.resolve("voices").path)
-                            .isNotEmpty()
+                    isConverting = {
+                        dev.l1br3.taletrek.service.SynthService.active.value
+                            ?.isRunningPhase == true
                     },
                     selectedVoice = { voiceStore.selectedSnapshot() },
                     startJob = { request: SynthJobRequest ->

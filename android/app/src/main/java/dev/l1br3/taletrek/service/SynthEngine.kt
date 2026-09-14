@@ -90,11 +90,12 @@ class HandleSynthEngine(
     }
 }
 
-/** One convert request, carried across the service intent. */
+/** One convert request, carried across the service intent. Android only
+ *  ever submits the full job (the kernel/FFI keep the text-only variant —
+ *  it's the format's capability, used by desktop/web). */
 data class SynthJobRequest(
     val sourcePath: String,
     val hint: String?,
-    val textOnly: Boolean,
     val voiceId: String?,
     val voiceCacheDir: String,
     val espeakDir: String,
@@ -107,7 +108,6 @@ data class SynthJobRequest(
             action = SynthService.ACTION_START
             putExtra(EXTRA_SOURCE, sourcePath)
             putExtra(EXTRA_HINT, hint)
-            putExtra(EXTRA_TEXT_ONLY, textOnly)
             putExtra(EXTRA_VOICE, voiceId)
             putExtra(EXTRA_VOICE_CACHE, voiceCacheDir)
             putExtra(EXTRA_ESPEAK, espeakDir)
@@ -119,7 +119,6 @@ data class SynthJobRequest(
     companion object {
         const val EXTRA_SOURCE = "dev.l1br3.taletrek.synth.source"
         const val EXTRA_HINT = "dev.l1br3.taletrek.synth.hint"
-        const val EXTRA_TEXT_ONLY = "dev.l1br3.taletrek.synth.textOnly"
         const val EXTRA_VOICE = "dev.l1br3.taletrek.synth.voice"
         const val EXTRA_VOICE_CACHE = "dev.l1br3.taletrek.synth.voiceCache"
         const val EXTRA_ESPEAK = "dev.l1br3.taletrek.synth.espeak"
@@ -134,7 +133,6 @@ data class SynthJobRequest(
             return SynthJobRequest(
                 sourcePath = source,
                 hint = intent.getStringExtra(EXTRA_HINT),
-                textOnly = intent.getBooleanExtra(EXTRA_TEXT_ONLY, false),
                 voiceId = intent.getStringExtra(EXTRA_VOICE),
                 voiceCacheDir = intent.getStringExtra(EXTRA_VOICE_CACHE) ?: return null,
                 espeakDir = intent.getStringExtra(EXTRA_ESPEAK) ?: return null,
@@ -176,7 +174,6 @@ sealed interface SynthUiState {
     data class Done(
         val bookId: String,
         val bundlePath: String,
-        val textOnly: Boolean,
     ) : SynthUiState
 
     /** Failed: stable kernel error kind + human message. */
@@ -244,20 +241,12 @@ class SynthController(
             }
         }
 
-    private val SynthUiState.isRunningPhase: Boolean
-        get() =
-            this is SynthUiState.Preparing ||
-                this is SynthUiState.DownloadingVoice ||
-                this is SynthUiState.Synthesizing ||
-                this is SynthUiState.Writing
-
     private fun FfiPipelineState.toUi(): SynthUiState =
         when (this) {
             is FfiPipelineState.Finished ->
                 SynthUiState.Done(
                     bookId = v1.`bookId`,
                     bundlePath = v1.`bundlePath`,
-                    textOnly = v1.`textOnly`,
                 )
             is FfiPipelineState.Failed -> SynthUiState.Failed(`kind`, `message`)
             FfiPipelineState.Cancelled -> SynthUiState.Cancelled
@@ -266,11 +255,22 @@ class SynthController(
         }
 }
 
+/** Whether the state is a pre-terminal phase — a job owns the single slot.
+ *  Public seam for the import flow's converting guard. */
+val SynthUiState.isRunningPhase: Boolean
+    get() =
+        this is SynthUiState.Preparing ||
+            this is SynthUiState.DownloadingVoice ||
+            this is SynthUiState.Synthesizing ||
+            this is SynthUiState.Writing
+
 private fun SynthJobRequest.toConfig() =
     FfiPipelineConfig(
         sourcePath = sourcePath,
         hint = hint,
-        textOnly = textOnly,
+        // Android only ever converts to audio — the text-only variant is a
+        // kernel/FFI capability (desktop/web bundles), never sent from here.
+        textOnly = false,
         voiceId = voiceId,
         voiceCacheDir = voiceCacheDir,
         espeakDir = espeakDir,

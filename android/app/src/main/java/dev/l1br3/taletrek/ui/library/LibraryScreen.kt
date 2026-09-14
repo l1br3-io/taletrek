@@ -9,7 +9,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,7 +31,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -221,34 +219,6 @@ fun LibraryScreen(
         }
     }
 
-    (importUi as? ImportUiState.Gate)?.let { gate ->
-        AlertDialog(
-            onDismissRequest = importViewModel::cancelGate,
-            title = { Text("Convert \"${gate.fileName}\"?") },
-            text = {
-                Text(
-                    if (gate.hasVoice) {
-                        "Listen — synthesize the audio on this device (≈${gate.estimatedMinutes} min), or import as text only."
-                    } else {
-                        "No voice downloaded yet — Listen downloads the default voice (~60 MB) first, then synthesizes (≈${gate.estimatedMinutes} min). Or import as text only."
-                    },
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = importViewModel::chooseListen) { Text("Listen") }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = importViewModel::chooseTextOnly) { Text("Text only") }
-                    if (!gate.hasVoice) {
-                        TextButton(onClick = onOpenVoices) { Text("Voices…") }
-                    }
-                    TextButton(onClick = importViewModel::cancelGate) { Text("Cancel") }
-                }
-            },
-        )
-    }
-
     ui.pendingDelete?.let { book ->
         AlertDialog(
             onDismissRequest = viewModel::cancelDelete,
@@ -325,22 +295,19 @@ private fun BookRow(
             )
         },
         trailingContent = {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                AudioBadge(audioPresent = book.audioPresent)
-                Box {
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Book actions")
-                    }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Delete") },
-                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                            onClick = {
-                                menuOpen = false
-                                onRequestDelete()
-                            },
-                        )
-                    }
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Book actions")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Delete") },
+                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        onClick = {
+                            menuOpen = false
+                            onRequestDelete()
+                        },
+                    )
                 }
             }
         },
@@ -351,24 +318,4 @@ private fun BookRow(
             ),
     )
     HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
-}
-
-/** The one fact a reader cares about at a glance: listen or read. */
-@Suppress("FunctionName") // Compose factory convention — PascalCase composables
-@Composable
-private fun AudioBadge(audioPresent: Boolean) {
-    val (label, container, content) =
-        if (audioPresent) {
-            Triple("Audio", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
-        } else {
-            Triple("Text", MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    Surface(shape = MaterialTheme.shapes.small, color = container) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = content,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        )
-    }
 }

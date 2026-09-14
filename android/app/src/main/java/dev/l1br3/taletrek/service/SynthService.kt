@@ -271,16 +271,7 @@ class SynthService : Service() {
                     },
                 )
             SynthUiState.Writing -> Triple("Finishing", "Writing bundle…", Progress.Indeterminate)
-            is SynthUiState.Done ->
-                Triple(
-                    "Book ready",
-                    if (textOnly) {
-                        "Imported — text only (no voice downloaded)"
-                    } else {
-                        "Audio book ready"
-                    },
-                    null,
-                )
+            is SynthUiState.Done -> Triple("Book ready", "Audio book ready", null)
             is SynthUiState.Failed -> Triple("Conversion failed", message, null)
             SynthUiState.Cancelled -> Triple("Conversion cancelled", "", null)
         }

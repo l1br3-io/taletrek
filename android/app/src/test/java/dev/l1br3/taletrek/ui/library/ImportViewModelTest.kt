@@ -7,40 +7,43 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
 
 /**
- * The convert gate over fakes — the JVM half of the split (ContentResolver,
- * FFI voice cache, and startForegroundService all stay behind seams).
+ * The import flow over fakes — the JVM half of the split (ContentResolver
+ * and startForegroundService stay behind seams). The gate is gone: a pick
+ * submits the full job immediately; the only UI states are Idle | Failed.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ImportViewModelTest {
     private lateinit var copied: File
     private val started = mutableListOf<SynthJobRequest>()
     private val deleted = mutableListOf<String>()
-    private var voiceCached = false
+    private var copyCalls = 0
     private var copyFails = false
+    private var converting = false
 
     @Before
     fun setUp() {
         copied = File.createTempFile("source", ".txt").apply { writeText("chapter one\n\nalpha") }
         started.clear()
         deleted.clear()
-        voiceCached = false
+        copyCalls = 0
         copyFails = false
+        converting = false
     }
 
     private fun vm(dispatcher: CoroutineDispatcher) =
         ImportViewModel(
             io = dispatcher,
             copySource = {
+                copyCalls++
                 if (copyFails) error("no stream") else copied.absolutePath to "source.txt"
             },
-            hasCachedVoice = { voiceCached },
+            isConverting = { converting },
             selectedVoice = { null },
             startJob = { started += it },
             deleteSource = { deleted += it },
@@ -53,58 +56,23 @@ class ImportViewModelTest {
         )
 
     @Test
-    fun pickShowsTheGateWithVoiceContextAndEstimate() =
+    fun pickSubmitsTheFullJobImmediately() =
         runTest(StandardTestDispatcher()) {
             val vm = vm(StandardTestDispatcher(testScheduler))
             vm.onSourcePicked("content://picked")
             advanceUntilIdle()
-            val gate = vm.ui.value
-            assertTrue(gate is ImportUiState.Gate)
-            gate as ImportUiState.Gate
-            assertEquals(copied.absolutePath, gate.sourcePath)
-            assertEquals("source.txt", gate.hint)
-            assertEquals("source.txt", gate.fileName)
-            assertFalse(gate.hasVoice)
-            assertTrue(gate.estimatedMinutes >= 1)
-        }
 
-    @Test
-    fun listenSubmitsAFullJobAndDropsTheGate() =
-        runTest(StandardTestDispatcher()) {
-            val vm = vm(StandardTestDispatcher(testScheduler))
-            vm.onSourcePicked("content://picked")
-            advanceUntilIdle()
-            vm.chooseListen()
             val request = started.single()
             assertEquals(copied.absolutePath, request.sourcePath)
             assertEquals("source.txt", request.hint)
-            assertFalse(request.textOnly)
+            assertEquals(null, request.voiceId)
+            assertEquals("/files/voices", request.voiceCacheDir)
+            assertEquals("/files/espeak", request.espeakDir)
+            assertEquals("/files/books", request.booksDir)
             assertEquals(2, request.jobs)
             assertEquals("taletrek-android", request.generatorApp)
-            assertEquals("/files/books", request.booksDir)
             assertEquals(ImportUiState.Idle, vm.ui.value)
             assertTrue("source lives until the job ends", deleted.isEmpty())
-        }
-
-    @Test
-    fun textOnlySubmitsATextJob() =
-        runTest(StandardTestDispatcher()) {
-            val vm = vm(StandardTestDispatcher(testScheduler))
-            vm.onSourcePicked("content://picked")
-            advanceUntilIdle()
-            vm.chooseTextOnly()
-            assertTrue(started.single().textOnly)
-        }
-
-    @Test
-    fun gateCancelDeletesTheCopy() =
-        runTest(StandardTestDispatcher()) {
-            val vm = vm(StandardTestDispatcher(testScheduler))
-            vm.onSourcePicked("content://picked")
-            advanceUntilIdle()
-            vm.cancelGate()
-            assertEquals(listOf(copied.absolutePath), deleted)
-            assertEquals(ImportUiState.Idle, vm.ui.value)
         }
 
     @Test
@@ -113,7 +81,6 @@ class ImportViewModelTest {
             val vm = vm(StandardTestDispatcher(testScheduler))
             vm.onSourcePicked("content://picked")
             advanceUntilIdle()
-            vm.chooseListen()
             assertTrue(deleted.isEmpty())
             vm.onJobTerminal()
             assertEquals(listOf(copied.absolutePath), deleted)
@@ -129,19 +96,24 @@ class ImportViewModelTest {
             val failed = vm.ui.value
             assertTrue(failed is ImportUiState.Failed)
             assertEquals("no stream", (failed as ImportUiState.Failed).message)
+            assertTrue(started.isEmpty())
             vm.dismissError()
             assertEquals(ImportUiState.Idle, vm.ui.value)
         }
 
     @Test
-    fun secondPickWhileGatedIsIgnored() =
+    fun pickWhileConvertingFailsBeforeCopyingOrStarting() =
         runTest(StandardTestDispatcher()) {
+            converting = true
             val vm = vm(StandardTestDispatcher(testScheduler))
             vm.onSourcePicked("content://picked")
             advanceUntilIdle()
-            vm.onSourcePicked("content://other")
-            advanceUntilIdle()
-            val gate = vm.ui.value as ImportUiState.Gate
-            assertEquals(copied.absolutePath, gate.sourcePath)
+            assertEquals("the guard fires before the copy", 0, copyCalls)
+            assertTrue(started.isEmpty())
+            assertTrue(deleted.isEmpty())
+            val failed = vm.ui.value
+            assertTrue(failed is ImportUiState.Failed)
+            vm.dismissError()
+            assertEquals(ImportUiState.Idle, vm.ui.value)
         }
 }
