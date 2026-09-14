@@ -1,0 +1,21 @@
+[package]
+name = "taletrek-memtrack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "TaleTrek peak-heap instrument — a counting GlobalAlloc for the streaming-synth memory-bound test. Internal."
+
+# This crate deliberately REPLACES the workspace lints table: the workspace
+# forbids `unsafe_code` everywhere, and a `GlobalAlloc` implementation is the
+# one kernel-side instrument that cannot exist without it. The escape is
+# scoped to exactly this leaf crate (the same isolation pattern as sherpa-rs /
+# audiopus: unavoidable unsafe lives in a dedicated leaf, nothing else). Do
+# not add functionality here beyond the allocation counter.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
