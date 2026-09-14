@@ -7,7 +7,7 @@
 //! interface. Every decision stays in the kernel — the wrappers only
 //! flatten types and forward calls.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use taletrek_worker::{PipelineEvent, PipelineJob, PipelineOutcome, PipelineSpec, PipelineVariant};
@@ -204,6 +204,7 @@ fn error_kind(err: &taletrek_worker::PipelineError) -> &'static str {
         taletrek_worker::PipelineError::Parse(_) => "parse",
         taletrek_worker::PipelineError::UnknownFormat { .. } => "unknown_format",
         taletrek_worker::PipelineError::Resolve(_) => "resolve",
+        taletrek_worker::PipelineError::Espeak(_) => "espeak",
         taletrek_worker::PipelineError::Stamp(_) => "stamp",
         taletrek_worker::PipelineError::Cancelled => "cancelled",
         taletrek_worker::PipelineError::Write { .. } => "write",
@@ -294,6 +295,10 @@ impl PipelineHandle {
                 None,
                 PathBuf::from(&config.voice_cache_dir),
             ),
+            espeak_root: PathBuf::from(&config.espeak_dir)
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(".")),
             books_dir: PathBuf::from(&config.books_dir),
             make_runner,
             encoder: Arc::new(taletrek_synth::NativeOpusEncoder::new()),
@@ -430,6 +435,12 @@ mod tests {
     fn config(dir: &Path, text_only: bool) -> FfiPipelineConfig {
         let source = dir.join("source.txt");
         std::fs::write(&source, b"chapter one\n\nalpha beta\n\ngamma delta").unwrap();
+        // Pre-seed the espeak marker (config.espeak_dir = <dir>/espeak-ng-data
+        // ⇒ espeak_root = <dir>): the full variant's ensure short-circuits and
+        // the real UreqVoiceSource stays offline in tests.
+        let espeak = dir.join("espeak-ng-data");
+        std::fs::create_dir_all(&espeak).unwrap();
+        std::fs::write(espeak.join("en_dict"), b"marker").unwrap();
         FfiPipelineConfig {
             source_path: source.display().to_string(),
             hint: Some("source.txt".to_string()),

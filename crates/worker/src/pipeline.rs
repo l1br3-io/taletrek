@@ -9,13 +9,13 @@
 //! object runs.
 //!
 //! One `run` = parse → deterministic id → text-only bundle → (text-only
-//! variant: write | full variant: resolve voice → `synth_and_stamp`) →
-//! atomic write to `books_dir/<book_id>.taletrek`. Cancellation is
-//! cooperative and per-paragraph ([`CancellableRunner`] checks the flag
-//! before every predict; stage boundaries check it too) — a cancelled or
-//! failed job never leaves a partial book behind, because the bundle is
-//! serialized to a same-dir temp file and renamed into place only when
-//! complete.
+//! variant: write | full variant: resolve voice → ensure espeak-ng-data →
+//! `synth_and_stamp`) → atomic write to `books_dir/<book_id>.taletrek`.
+//! Cancellation is cooperative and per-paragraph ([`CancellableRunner`]
+//! checks the flag before every predict; stage boundaries check it too) — a
+//! cancelled or failed job never leaves a partial book behind, because the
+//! bundle is serialized to a same-dir temp file and renamed into place only
+//! when complete.
 //!
 //! Threading: the job is `Send + 'static`-spawnable but thread-agnostic —
 //! the FFI layer decides how to host it. Progress flows through
@@ -37,7 +37,10 @@ use taletrek_synth::{write_book_bundle, AudioCodec, BookBundle, Encoder};
 
 use crate::stamp::{synth_and_stamp, StampError};
 use crate::synth_job::SynthJobError;
-use crate::voices::{resolve_voice, ResolveError, ResolveOpts, VoiceSource, DEFAULT_VOICE_ID};
+use crate::voices::{
+    ensure_espeak_data, resolve_voice, EspeakError, ResolveError, ResolveOpts, VoiceSource,
+    DEFAULT_VOICE_ID,
+};
 use crate::ProgressSink;
 
 /// Shared cooperative-cancel flag (the desktop executor's `CancelFlag`,
@@ -86,6 +89,13 @@ pub struct PipelineSpec {
     /// dir must be explicit; the `voice_path` override short-circuits the
     /// catalog (CLI-style power use).
     pub resolve: ResolveOpts,
+    /// Root dir for espeak-ng-data acquisition: the ensured dir is
+    /// `<espeak_root>/espeak-ng-data` (parent-dir convention — see
+    /// [`ensure_espeak_data`]). The full variant ensures it after voice
+    /// resolve, before synth, so every host (Android, iOS) is first-run
+    /// correct without app-side prerequisite calls. Ignored by the
+    /// text-only variant.
+    pub espeak_root: PathBuf,
     /// Directory the finished bundle is written into (the library scan
     /// root). The file is `<book_id>.taletrek`.
     pub books_dir: PathBuf,
@@ -187,6 +197,9 @@ pub enum PipelineError {
     /// Voice resolution (catalog lookup / download / override) failed.
     #[error(transparent)]
     Resolve(#[from] ResolveError),
+    /// Acquiring espeak-ng-data failed (download, size band, extraction).
+    #[error(transparent)]
+    Espeak(#[from] EspeakError),
     /// Synthesis or stamping failed (non-cancel).
     #[error(transparent)]
     Stamp(#[from] StampError),
@@ -369,6 +382,9 @@ impl PipelineJob {
                 ensure_not_cancelled(&flag)?;
                 emit(PipelineEvent::Phase(PipelinePhase::ResolvingVoice));
                 let model = resolve_voice(Some(&voice), &spec.resolve, source, sink_ref)?;
+
+                ensure_not_cancelled(&flag)?;
+                ensure_espeak_data(&spec.espeak_root, source, sink_ref)?;
 
                 ensure_not_cancelled(&flag)?;
                 emit(PipelineEvent::Phase(PipelinePhase::Synthesizing));
@@ -618,6 +634,8 @@ mod tests {
     }
 
     fn spec(books_dir: &Path, variant: PipelineVariant, runner: RunnerFactory) -> PipelineSpec {
+        let espeak_root = books_dir.join("espeak");
+        seed_espeak_marker(&espeak_root);
         PipelineSpec {
             source: b"chapter one\n\nalpha beta gamma\n\ndelta epsilon\n\nzeta eta theta".to_vec(),
             hint: Some("source.txt".to_string()),
@@ -625,10 +643,21 @@ mod tests {
             generator_app: "taletrek-pipeline-test".to_string(),
             jobs: 1,
             resolve: ResolveOpts::new(None, books_dir.join("voices")),
+            espeak_root,
             books_dir: books_dir.to_path_buf(),
             make_runner: runner,
             encoder: Arc::new(taletrek_synth::WavPassthrough),
         }
+    }
+
+    /// Pre-seed the `en_dict` marker so `ensure_espeak_data` short-circuits
+    /// — the shared `spec()` default keeps routine tests offline and
+    /// zip-URL-free; the ensure-path tests remove the marker to own
+    /// freshness.
+    fn seed_espeak_marker(espeak_root: &Path) {
+        let data = espeak_root.join("espeak-ng-data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("en_dict"), b"marker").unwrap();
     }
 
     fn stub_factory() -> RunnerFactory {
@@ -817,6 +846,187 @@ mod tests {
         assert_eq!(outcome.segments, 3);
     }
 
+    /// Build a minimal in-memory espeak-ng-data zip: top-level
+    /// `espeak-ng-data/` with the `en_dict` marker + padding entries so the
+    /// body passes the download size band (zeros compress ~1000:1 — the
+    /// band checks the wire size). Ported from `voices.rs` tests.
+    fn espeak_zip_body() -> Vec<u8> {
+        use std::io::Write as _;
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+            zip.start_file("espeak-ng-data/en_dict", opts).unwrap();
+            zip.write_all(b"marker").unwrap();
+            let mut state = 0x2545_F491_4F6C_DD1Du64;
+            for i in 0..96 {
+                zip.start_file(format!("espeak-ng-data/lang/x/{i}"), opts)
+                    .unwrap();
+                let mut chunk = vec![0u8; 32 * 1024];
+                for b in &mut chunk {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    *b = (state >> 33) as u8;
+                }
+                zip.write_all(&chunk).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// Stub source serving both download lanes the full variant exercises:
+    /// voice URLs get the padded stub body ([`StubSource`] behavior), the
+    /// espeak zip URL gets a band-valid in-memory zip. Records calls.
+    #[derive(Default)]
+    struct ZipServingSource {
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl VoiceSource for ZipServingSource {
+        fn fetch_with_progress(
+            &self,
+            url: &str,
+            progress: &mut dyn FnMut(u64, u64),
+        ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+            self.calls.lock().unwrap().push(url.to_string());
+            let body = if url == crate::voices::ESPEAK_ZIP_URL {
+                espeak_zip_body()
+            } else {
+                let mut body = url.as_bytes().to_vec();
+                if let Some(id) = url.rsplit('/').next().unwrap_or("").strip_suffix(".onnx") {
+                    if let Some(v) = crate::voices::find_curated(id) {
+                        body.resize(v.size_bytes as usize, 0);
+                    }
+                }
+                body
+            };
+            progress(body.len() as u64, body.len() as u64);
+            Ok(body)
+        }
+    }
+
+    #[test]
+    fn full_variant_ensures_espeak_data_on_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = spec(
+            dir.path(),
+            PipelineVariant::Full { voice_id: None },
+            stub_factory(),
+        );
+        // Own freshness: remove the marker the spec helper seeds so the job
+        // must fetch the zip (and the voice — nothing is cached).
+        fs::remove_file(s.espeak_root.join("espeak-ng-data/en_dict")).unwrap();
+
+        #[derive(Default)]
+        struct Recorder {
+            events: Mutex<Vec<PipelineEvent>>,
+        }
+        impl PipelineReporter for Recorder {
+            fn pipeline_event(&self, event: PipelineEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+        }
+        let recorder = Recorder::default();
+        let source = ZipServingSource::default();
+        let outcome = PipelineJob::new(s)
+            .run(&source, Some(&recorder))
+            .expect("full first-run pipeline");
+
+        assert!(!outcome.text_only, "the book is audible");
+        assert!(
+            source
+                .calls
+                .lock()
+                .unwrap()
+                .contains(&crate::voices::ESPEAK_ZIP_URL.to_string()),
+            "espeak zip must be fetched when the marker is absent"
+        );
+        assert!(
+            dir.path().join("espeak/espeak-ng-data/en_dict").is_file(),
+            "the ensured marker must exist after the run"
+        );
+        let zip_len = espeak_zip_body().len() as u64;
+        assert!(
+            recorder.events.lock().unwrap().iter().any(
+                |e| matches!(e, PipelineEvent::DownloadStep { bytes_total, .. } if *bytes_total == zip_len)
+            ),
+            "espeak download progress must ride DownloadStep events"
+        );
+    }
+
+    #[test]
+    fn espeak_fetch_failure_fails_typed_with_no_bundle_residue() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = spec(
+            dir.path(),
+            PipelineVariant::Full { voice_id: None },
+            stub_factory(),
+        );
+        fs::remove_file(s.espeak_root.join("espeak-ng-data/en_dict")).unwrap();
+
+        #[derive(Default)]
+        struct EspeakFailSource {
+            calls: Mutex<Vec<String>>,
+        }
+        impl VoiceSource for EspeakFailSource {
+            fn fetch_with_progress(
+                &self,
+                url: &str,
+                _progress: &mut dyn FnMut(u64, u64),
+            ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+                self.calls.lock().unwrap().push(url.to_string());
+                if url == crate::voices::ESPEAK_ZIP_URL {
+                    return Err("network down".into());
+                }
+                let mut body = url.as_bytes().to_vec();
+                if let Some(id) = url.rsplit('/').next().unwrap_or("").strip_suffix(".onnx") {
+                    if let Some(v) = crate::voices::find_curated(id) {
+                        body.resize(v.size_bytes as usize, 0);
+                    }
+                }
+                Ok(body)
+            }
+        }
+
+        let err = PipelineJob::new(s)
+            .run(&EspeakFailSource::default(), None)
+            .unwrap_err();
+        assert!(
+            matches!(err, PipelineError::Espeak(_)),
+            "expected Espeak, got {err:?}"
+        );
+        let entries: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".taletrek") || n.ends_with(".tmp"))
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "failed job left bundle artifacts behind: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn text_only_variant_never_touches_the_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = ZipServingSource::default();
+        let outcome = PipelineJob::new(spec(
+            dir.path(),
+            PipelineVariant::TextOnly { voice_id: None },
+            stub_factory(),
+        ))
+        .run(&source, None)
+        .expect("text-only run");
+        assert!(outcome.text_only);
+        assert!(
+            source.calls.lock().unwrap().is_empty(),
+            "text-only must fetch neither voice nor espeak"
+        );
+    }
+
     #[test]
     fn unknown_format_errors_typed() {
         let dir = tempfile::tempdir().unwrap();
@@ -867,6 +1077,10 @@ mod tests {
             generator_app: "taletrek-pipeline-e2e".to_string(),
             jobs: 1,
             resolve: ResolveOpts::new(Some(voice_model), dir.path().join("voices")),
+            espeak_root: espeak
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(".")),
             books_dir: dir.path().to_path_buf(),
             make_runner,
             // WavPassthrough keeps this fixture dependent on sherpa alone —
