@@ -4493,6 +4493,8 @@ dependencies = [
 name = "taletrek-ffi"
 version = "0.1.0"
 dependencies = [
+ "ogg",
+ "opus",
  "taletrek-parse",
  "taletrek-reader",
  "taletrek-synth",
