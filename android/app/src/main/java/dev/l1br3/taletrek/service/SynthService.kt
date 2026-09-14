@@ -248,7 +248,7 @@ class SynthService : Service() {
                 )
             is SynthUiState.DownloadingVoice ->
                 Triple(
-                    "Downloading voice",
+                    "Downloading",
                     if (total > 0) {
                         "${done / (1024 * 1024)} of ${total / (1024 * 1024)} MB"
                     } else {

@@ -81,7 +81,7 @@ fun TransportBar(
             }
             if (!state.canPlayPause) {
                 Text(
-                    "Text-only bundle — no audio to play. Convert the document again and choose Listen to add audio.",
+                    "Text-only bundle — no audio to play.",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),

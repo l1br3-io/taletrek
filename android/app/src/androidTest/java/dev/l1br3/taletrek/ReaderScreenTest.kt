@@ -62,7 +62,7 @@ class ReaderScreenTest {
 
         rule
             .onNodeWithText(
-                "Text-only bundle — no audio to play. Convert the document again and choose Listen to add audio.",
+                "Text-only bundle — no audio to play.",
                 substring = true,
             ).assertIsDisplayed()
         rule.onNodeWithContentDescription("Play").assertIsNotEnabled()

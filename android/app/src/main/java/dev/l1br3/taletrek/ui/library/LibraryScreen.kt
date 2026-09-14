@@ -245,7 +245,7 @@ private fun ConvertProgressRow(state: dev.l1br3.taletrek.service.SynthUiState) {
             is dev.l1br3.taletrek.service.SynthUiState.Preparing ->
                 "Converting — reading document" to true
             is dev.l1br3.taletrek.service.SynthUiState.DownloadingVoice ->
-                "Downloading voice ${state.done / (1024 * 1024)}/${state.total / (1024 * 1024)} MB" to true
+                "Downloading ${state.done / (1024 * 1024)}/${state.total / (1024 * 1024)} MB" to true
             is dev.l1br3.taletrek.service.SynthUiState.Synthesizing ->
                 "Synthesizing ${state.done}/${state.total}" to true
             dev.l1br3.taletrek.service.SynthUiState.Writing -> "Writing bundle…" to true
