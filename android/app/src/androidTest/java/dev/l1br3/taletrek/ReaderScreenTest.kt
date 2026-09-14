@@ -61,8 +61,10 @@ class ReaderScreenTest {
         openSampleBook()
 
         rule
-            .onNodeWithText("Text-only bundle — no audio to play. Convert it on the desktop to listen.", substring = true)
-            .assertIsDisplayed()
+            .onNodeWithText(
+                "Text-only bundle — no audio to play. Convert the document again and choose Listen to add audio.",
+                substring = true,
+            ).assertIsDisplayed()
         rule.onNodeWithContentDescription("Play").assertIsNotEnabled()
         rule.onNodeWithContentDescription("Next paragraph").assertIsNotEnabled()
     }
