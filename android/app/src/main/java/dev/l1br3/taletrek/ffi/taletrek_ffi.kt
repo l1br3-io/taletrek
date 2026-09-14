@@ -721,6 +721,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_read_segment(
     ): Int
+    external fun uniffi_taletrek_ffi_checksum_func_decode_segment(
+    ): Int
     external fun uniffi_taletrek_ffi_checksum_func_position_storage_key(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_cached_voice_ids(
@@ -808,6 +810,8 @@ internal object UniffiLib {
     external fun uniffi_taletrek_ffi_fn_func_open_book(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_read_segment(`path`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_taletrek_ffi_fn_func_decode_segment(`path`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_position_storage_key(`bookId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -944,6 +948,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_func_read_segment() != 37961) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_func_decode_segment() != 39744) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_func_position_storage_key() != 1146) {
@@ -1183,6 +1190,56 @@ private class JavaLangRefCleanable(
     val cleanable: java.lang.ref.Cleaner.Cleanable
 ) : UniffiCleaner.Cleanable {
     override fun clean() = cleanable.clean()
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUByte: FfiConverter<UByte, Byte> {
+    override fun lift(value: Byte): UByte {
+        return value.toUByte()
+    }
+
+    fun lift(value: Int): UByte {
+        return value.toUByte()
+    }
+
+    override fun read(buf: ByteBuffer): UByte {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: UByte): Byte {
+        return value.toByte()
+    }
+
+    override fun allocationSize(value: UByte) = 1UL
+
+    override fun write(value: UByte, buf: ByteBuffer) {
+        buf.put(value.toByte())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterShort: FfiConverter<Short, Short> {
+    override fun lift(value: Short): Short {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Short {
+        return buf.getShort()
+    }
+
+    override fun lower(value: Short): Short {
+        return value
+    }
+
+    override fun allocationSize(value: Short) = 2UL
+
+    override fun write(value: Short, buf: ByteBuffer) {
+        buf.putShort(value)
+    }
 }
 
 /**
@@ -2166,6 +2223,64 @@ public object FfiConverterTypeFfiChapter: FfiConverterRustBuffer<FfiChapter> {
 
 
 /**
+ * One segment's decoded audio as foreign callers receive it:
+ * interleaved i16 PCM at `sample_rate`, the libopus-native rate
+ * nearest the voice's original rate (Opus decode is always
+ * whole-stream single-rate; 22050 Hz voices decode at 24 kHz).
+ */
+data class FfiDecodedAudio (
+    /**
+     * Interleaved PCM samples (i16, native endianness flattened to LE).
+     */
+    var `samples`: List<kotlin.Short>
+    , 
+    /**
+     * The PCM's sample rate (Hz) — schedule it at this rate.
+     */
+    var `sampleRate`: kotlin.UInt
+    , 
+    /**
+     * Channel count (1 = mono, 2 = stereo).
+     */
+    var `channels`: kotlin.UByte
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiDecodedAudio: FfiConverterRustBuffer<FfiDecodedAudio> {
+    override fun read(buf: ByteBuffer): FfiDecodedAudio {
+        return FfiDecodedAudio(
+            FfiConverterSequenceShort.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUByte.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiDecodedAudio) = (
+            FfiConverterSequenceShort.allocationSize(value.`samples`) +
+            FfiConverterUInt.allocationSize(value.`sampleRate`) +
+            FfiConverterUByte.allocationSize(value.`channels`)
+    )
+
+    override fun write(value: FfiDecodedAudio, buf: ByteBuffer) {
+            FfiConverterSequenceShort.write(value.`samples`, buf)
+            FfiConverterUInt.write(value.`sampleRate`, buf)
+            FfiConverterUByte.write(value.`channels`, buf)
+    }
+}
+
+
+
+/**
  * Running record of skipped segments, retrievable in every phase.
  */
 data class FfiFailureLog (
@@ -2825,6 +2940,22 @@ sealed class FfiException: kotlin.Exception() {
             get() = "limit=${ `limit` }"
     }
     
+    /**
+     * An audio segment's bytes could not be decoded to PCM (not
+     * OGG/Opus or 16-bit PCM WAV, or corrupt within its codec) — the
+     * platform maps this onto the kernel's segment-skip path.
+     */
+    class DecodeFailed(
+        
+        /**
+         * The underlying decode failure, one sentence.
+         */
+        val `detail`: kotlin.String
+        ) : FfiException() {
+        override val message
+            get() = "detail=${ `detail` }"
+    }
+    
 
     
 
@@ -2869,6 +3000,9 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 )
             8 -> FfiException.TotalTooLarge(
                 FfiConverterULong.read(buf),
+                )
+            9 -> FfiException.DecodeFailed(
+                FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
@@ -2918,6 +3052,11 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 4UL
                 + FfiConverterULong.allocationSize(value.`limit`)
             )
+            is FfiException.DecodeFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`detail`)
+            )
         }
     }
 
@@ -2963,6 +3102,11 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
             is FfiException.TotalTooLarge -> {
                 buf.putInt(8)
                 FfiConverterULong.write(value.`limit`, buf)
+                Unit
+            }
+            is FfiException.DecodeFailed -> {
+                buf.putInt(9)
+                FfiConverterString.write(value.`detail`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -4191,6 +4335,38 @@ public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteA
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeFfiDecodedAudio: FfiConverterRustBuffer<FfiDecodedAudio?> {
+    override fun read(buf: ByteBuffer): FfiDecodedAudio? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiDecodedAudio.read(buf)
+    }
+
+    override fun allocationSize(value: FfiDecodedAudio?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiDecodedAudio.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiDecodedAudio?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiDecodedAudio.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeFfiParagraphPos: FfiConverterRustBuffer<FfiParagraphPos?> {
     override fun read(buf: ByteBuffer): FfiParagraphPos? {
         if (buf.get().toInt() == 0) {
@@ -4245,6 +4421,34 @@ public object FfiConverterOptionalTypeFfiPosition: FfiConverterRustBuffer<FfiPos
         } else {
             buf.put(1)
             FfiConverterTypeFfiPosition.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceShort: FfiConverterRustBuffer<List<kotlin.Short>> {
+    override fun read(buf: ByteBuffer): List<kotlin.Short> {
+        val len = buf.getInt()
+        return List<kotlin.Short>(len) {
+            FfiConverterShort.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.Short>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterShort.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.Short>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterShort.write(it, buf)
         }
     }
 }
@@ -4386,6 +4590,27 @@ public object FfiConverterSequenceTypeFfiVoice: FfiConverterRustBuffer<List<FfiV
             return FfiConverterOptionalByteArray.lift(
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.uniffi_taletrek_ffi_fn_func_read_segment(
+    
+        
+        FfiConverterString.lower(`path`),
+        FfiConverterString.lower(`key`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Read one audio segment from the bundle at `path` and decode it to
+         * PCM — the single hop a platform player needs when its own audio
+         * stack cannot host the codec. `None` when the archive carries no
+         * segment for `key` (the same contract as [`read_segment`]); bytes
+         * that are neither OGG/Opus nor 16-bit PCM WAV fail as
+         * [`FfiError::DecodeFailed`] — the segment-skip path, never a panic.
+         */
+    @Throws(FfiException::class) fun `decodeSegment`(`path`: kotlin.String, `key`: kotlin.String): FfiDecodedAudio? {
+            return FfiConverterOptionalTypeFfiDecodedAudio.lift(
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_decode_segment(
     
         
         FfiConverterString.lower(`path`),

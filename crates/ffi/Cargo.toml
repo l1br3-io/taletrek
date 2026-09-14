@@ -27,6 +27,11 @@ taletrek-parse = { path = "../parse" }
 taletrek-worker = { path = "../worker" }
 thiserror = "2"
 uniffi = "0.32"
+# Segment decode (ios-app task 001): the same ogg demux + libopus pair the
+# desktop reader and NativeOpusEncoder already use in-tree — decode stays in
+# the kernel because AVFoundation cannot host OGG/Opus.
+ogg = "0.9"
+opus = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

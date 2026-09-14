@@ -59,6 +59,13 @@ pub enum FfiError {
         /// The archive-level budget that was exceeded.
         limit: u64,
     },
+    /// An audio segment's bytes could not be decoded to PCM (not
+    /// OGG/Opus or 16-bit PCM WAV, or corrupt within its codec) — the
+    /// platform maps this onto the kernel's segment-skip path.
+    DecodeFailed {
+        /// The underlying decode failure, one sentence.
+        detail: String,
+    },
 }
 
 impl From<BundleError> for FfiError {
@@ -109,6 +116,7 @@ impl fmt::Display for FfiError {
                 f,
                 "bundle contents decompress beyond the total budget of {limit} bytes"
             ),
+            Self::DecodeFailed { detail } => write!(f, "segment decode failed: {detail}"),
         }
     }
 }
