@@ -146,6 +146,31 @@ android-serve-dev: android
 android-serve-fresh: android
     just _android-serve fresh
 
+# The single-command dev loop: initial build + relaunch, then watch Android
+# and kernel sources and rebuild + relaunch on every save (Ctrl-C to stop).
+# Poll-based (find -newer, 1 s) so nothing extra must be installed; jniLibs
+# and build/ are pruned or the build's own outputs would retrigger forever.
+# Rust saves are covered via crates/ (cargo no-ops in ~seconds when only
+# Kotlin changed); a failed build is reported and the loop keeps watching.
+android-watch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    STAMP="$(mktemp)"
+    trap 'rm -f "$STAMP"' EXIT
+    build() { just android-serve-dev; }
+    echo "taletrek watch: initial build + relaunch — then watching android/app/src + crates (Ctrl-C to stop)"
+    build || echo "taletrek watch: initial build failed — fix and save to retry"
+    while true; do
+        sleep 1
+        CHANGED="$(find android/app/src crates \
+            \( -name jniLibs -o -name build -o -name .gradle \) -prune \
+            -o -type f -newer "$STAMP" -print -quit || true)"
+        [ -n "$CHANGED" ] || continue
+        touch "$STAMP"
+        echo "── change: $CHANGED → rebuild + relaunch"
+        build || echo "taletrek watch: build failed — fix and save to retry"
+    done
+
 # Workhorse behind the serve recipes; mode = fast | fresh. Boot always uses
 # software GL (swiftshader_indirect) — on hybrid-GPU hosts (Intel+NVIDIA) the
 # default host-GL pipe renders a black window (guest fine, window dead);
@@ -184,7 +209,7 @@ _android-serve mode:
     echo "taletrek: relaunched (fresh process) — emulator stays up (stop: just android-emulator-stop)"
 
 # Push a file from your machine into the emulator's Download folder — then
-# in TaleTrek tap Import and pick it from the Downloads root in the picker
+# in TaleTrek tap Add and pick it from the Downloads root in the picker
 android-push file:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -194,7 +219,7 @@ android-push file:
     "$ADB" push "$FILE" /sdcard/Download/
     "$ADB" shell content call --uri content://media/none/media_scanner \
         --method scan_volume --arg external_primary >/dev/null 2>&1 || true
-    echo "pushed: $FILE — in the app tap Import, then pick Downloads in the picker"
+    echo "pushed: $FILE — in the app tap Add, then pick Downloads in the picker"
 
 # Push the test .taletrek bundles into the emulator's Download folder — for
 # manually testing Library import (picker → Downloads root). Idempotent.
@@ -209,7 +234,7 @@ android-fixtures:
     done
     "$ADB" shell content call --uri content://media/none/media_scanner \
         --method scan_volume --arg external_primary >/dev/null 2>&1 || true
-    echo "fixtures: /sdcard/Download — in the app tap Import, then pick Downloads in the picker"
+    echo "fixtures: /sdcard/Download — in the app tap Add, then pick Downloads in the picker"
 
 # Shut the running emulator down cleanly (adb emu kill)
 android-emulator-stop:

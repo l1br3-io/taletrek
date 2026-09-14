@@ -40,13 +40,18 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.l1br3.taletrek.data.BookShelf
+import dev.l1br3.taletrek.data.PickedLane
+import dev.l1br3.taletrek.data.SourceImport
+import kotlinx.coroutines.launch
 
 /**
  * The app's front door: every book the kernel can read out of
@@ -80,13 +85,23 @@ fun LibraryScreen(
         }
     }
 
+    // One add action: pick anything, then route by display name — a
+    // `.taletrek` is a bundle import, everything else converts (the
+    // kernel's content sniffing arbitrates unknowns).
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val pickDocument =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) viewModel.onImportPicked(uri.toString())
-        }
-    val pickSource =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) importViewModel.onSourcePicked(uri.toString())
+            if (uri != null) {
+                scope.launch {
+                    val lane = SourceImport.laneOf(SourceImport.displayNameOf(context, uri))
+                    if (lane == PickedLane.BUNDLE) {
+                        viewModel.onImportPicked(uri.toString())
+                    } else {
+                        importViewModel.onSourcePicked(uri.toString())
+                    }
+                }
+            }
         }
 
     // Import-from-open: a VIEW intent handed over by the activity.
@@ -140,11 +155,6 @@ fun LibraryScreen(
             TopAppBar(
                 title = { Text("Library") },
                 actions = {
-                    TextButton(
-                        onClick = { pickSource.launch(dev.l1br3.taletrek.data.SourceImport.PICKER_MIME_TYPES) },
-                        modifier =
-                            Modifier.semantics { contentDescription = "Convert a document to an audio book" },
-                    ) { Text("Convert") }
                     IconButton(
                         onClick = onOpenVoices,
                         modifier =
@@ -153,7 +163,7 @@ fun LibraryScreen(
                     IconButton(
                         onClick = { pickDocument.launch(arrayOf("*/*")) },
                         modifier =
-                            Modifier.semantics { contentDescription = "Import a .taletrek bundle" },
+                            Modifier.semantics { contentDescription = "Add a document or .taletrek bundle" },
                     ) { Icon(Icons.Default.Add, contentDescription = null) }
                 },
             )
@@ -177,15 +187,12 @@ fun LibraryScreen(
                         style = MaterialTheme.typography.titleLarge,
                     )
                     Text(
-                        "Convert a document on this device, or import a .taletrek bundle.",
+                        "Add a document to convert it, or a .taletrek bundle to import it.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Button(onClick = { pickSource.launch(dev.l1br3.taletrek.data.SourceImport.PICKER_MIME_TYPES) }) {
-                        Text("Convert a document")
-                    }
-                    TextButton(onClick = { pickDocument.launch(arrayOf("*/*")) }) {
-                        Text("Import a bundle")
+                    Button(onClick = { pickDocument.launch(arrayOf("*/*")) }) {
+                        Text("Add a document")
                     }
                 }
             }

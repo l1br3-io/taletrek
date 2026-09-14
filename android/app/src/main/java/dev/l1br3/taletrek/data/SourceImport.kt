@@ -7,23 +7,37 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** Which intake lane a picked document takes. */
+enum class PickedLane {
+    /** A finished `.taletrek` bundle — copy-on-import into the library. */
+    BUNDLE,
+
+    /** A source document — the on-device convert pipeline. */
+    SOURCE,
+}
+
 /**
- * Source-document import plumbing: the six kernel-parseable types, the
- * SAF/intent mime map, and the copy-to-cache policy (SAF streams can't be
- * reopened and parse wants bytes anyway — the copy is the job's input and
- * is deleted when the job ends).
+ * Source-document import plumbing: the SAF/intent mime map and the
+ * single-pick lane router, plus the copy-to-cache policy (SAF streams
+ * can't be reopened and parse wants bytes anyway — the copy is the job's
+ * input and is deleted when the job ends).
  */
 object SourceImport {
-    /** The picker's mime array for source documents (all six types). */
-    val PICKER_MIME_TYPES =
-        arrayOf(
-            "application/epub+zip",
-            "application/pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "text/html",
-            "text/markdown",
-            "text/plain",
-        )
+    /**
+     * Route one picked document: a display name ending in `.taletrek` is
+     * a bundle; everything else — known source formats, mislabeled mimes,
+     * unknown names — is a source document, where the kernel's
+     * `detect_format` content-sniffs and fails with a clear error if it
+     * can't. Extension beats mime here: SAF mimes lie (`octet-stream`
+     * covers both lanes), and the source lane is the safe default
+     * because sniffing arbitrates.
+     */
+    fun laneOf(displayName: String?): PickedLane =
+        if (displayName != null && displayName.endsWith(".taletrek", ignoreCase = true)) {
+            PickedLane.BUNDLE
+        } else {
+            PickedLane.SOURCE
+        }
 
     /**
      * Does `mime` (from an intent or content resolver) name a source
