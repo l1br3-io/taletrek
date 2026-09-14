@@ -605,6 +605,54 @@ mod tests {
         assert_eq!(handle.state(), FfiPipelineState::Idle);
     }
 
+    #[test]
+    fn spec_from_pins_espeak_root_at_the_config_espeak_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path(), false);
+        let spec = PipelineHandle::spec_from(&cfg, stub_factory()).unwrap();
+        assert_eq!(
+            spec.espeak_root,
+            dir.path(),
+            "espeak_root must be config.espeak_dir's parent"
+        );
+        // The kernel ensures <espeak_root>/espeak-ng-data — pin that this is
+        // exactly the dir the runner receives, so the ensure path and the
+        // LazySherpaRunner path can never disagree.
+        assert_eq!(
+            spec.espeak_root.join("espeak-ng-data"),
+            PathBuf::from(&cfg.espeak_dir)
+        );
+    }
+
+    #[test]
+    fn espeak_failure_surfaces_typed_espeak_kind_through_the_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_voice_cache(dir.path());
+        let mut cfg = config(dir.path(), false);
+        // A regular file where the espeak root must live: the marker check
+        // can't traverse it and create_dir_all errors — a deterministic,
+        // offline espeak failure through the real handle thread.
+        let blocker = dir.path().join("espeak-root-is-a-file");
+        std::fs::write(&blocker, b"not a dir").unwrap();
+        cfg.espeak_dir = blocker.join("espeak-ng-data").display().to_string();
+
+        let handle = Arc::new(PipelineHandle::new(cfg));
+        Arc::clone(&handle)
+            .start_with_factory(
+                Box::new(ArcObserver(Arc::new(RecordingObserver::default()))),
+                stub_factory(),
+            )
+            .expect("start");
+
+        let state = wait_for_terminal(&handle);
+        match state {
+            FfiPipelineState::Failed { kind, message } => {
+                assert_eq!(kind, "espeak", "message was: {message}");
+            }
+            other => panic!("expected Failed(espeak), got {other:?}"),
+        }
+    }
+
     /// `Arc<RecordingObserver>` forwarder so tests can observe after the
     /// `Box<dyn PipelineObserver>` crosses into `start`.
     struct ArcObserver(Arc<RecordingObserver>);
