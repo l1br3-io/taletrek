@@ -10,12 +10,16 @@
 //!
 //! One `run` = parse → deterministic id → text-only bundle → (text-only
 //! variant: write | full variant: resolve voice → ensure espeak-ng-data →
-//! `synth_and_stamp`) → atomic write to `books_dir/<book_id>.taletrek`.
-//! Cancellation is cooperative and per-paragraph ([`CancellableRunner`]
-//! checks the flag before every predict; stage boundaries check it too) — a
-//! cancelled or failed job never leaves a partial book behind, because the
-//! bundle is serialized to a same-dir temp file and renamed into place only
-//! when complete.
+//! open same-dir temp → **stream every synthesized segment into it** →
+//! flush + rename). The full variant never materializes the bundle in
+//! memory: the `BundleWriter` on the same-dir temp receives segments as the
+//! sink engine completes them (manifest written last, atomic rename on
+//! finish), so peak memory is one segment's working set regardless of book
+//! length. Cancellation is cooperative and per-paragraph
+//! ([`CancellableRunner`] checks the flag before every predict; stage
+//! boundaries check it too) — a cancelled or failed job never leaves a
+//! partial book behind, because the temp is removed and only a complete
+//! archive is ever renamed into place.
 //!
 //! Threading: the job is `Send + 'static`-spawnable but thread-agnostic —
 //! the FFI layer decides how to host it. Progress flows through
@@ -23,7 +27,8 @@
 //! layer adapts into platform callbacks.
 
 use std::fs;
-use std::io::Cursor;
+use std::fs::File;
+use std::io::{BufWriter, Cursor, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -33,9 +38,9 @@ use thiserror::Error;
 use taletrek_parse::{detect_format, parse_source, SourceFormat};
 use taletrek_synth::bundle::manifest::Generator;
 use taletrek_synth::synth::{PiperRunner, SynthError};
-use taletrek_synth::{write_book_bundle, AudioCodec, BookBundle, Encoder};
+use taletrek_synth::{write_book_bundle, AudioCodec, BookBundle, BundleWriter, Encoder};
 
-use crate::stamp::{synth_and_stamp, StampError};
+use crate::stamp::{synth_and_stamp_streaming, StampError};
 use crate::synth_job::SynthJobError;
 use crate::voices::{
     ensure_espeak_data, resolve_voice, EspeakError, ResolveError, ResolveOpts, VoiceSource,
@@ -374,10 +379,26 @@ impl PipelineJob {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_VOICE_ID.to_string()),
         };
-        let text_only = to_text_only(&book, &voice, &spec.generator_app, &book_id);
+        let text_only_bundle = to_text_only(&book, &voice, &spec.generator_app, &book_id);
+        let bundle_path = spec.books_dir.join(format!("{book_id}.taletrek"));
 
-        let bundle = match spec.variant {
-            PipelineVariant::TextOnly { .. } => text_only,
+        let (segments, was_text_only): (usize, bool) = match spec.variant {
+            // Text-only: tiny by construction — the in-memory write stays.
+            PipelineVariant::TextOnly { .. } => {
+                ensure_not_cancelled(&flag)?;
+                emit(PipelineEvent::Phase(PipelinePhase::Writing));
+                fs::create_dir_all(&spec.books_dir).map_err(|e| PipelineError::Write {
+                    path: spec.books_dir.clone(),
+                    source: e,
+                })?;
+                write_bundle_atomic(&text_only_bundle, &bundle_path)?;
+                (0, true)
+            }
+            // Full: stream. The same-dir temp opens BEFORE the Synthesizing
+            // phase; every synthesized segment flows through the sink stamp
+            // straight into it (peak memory: one segment + text, never the
+            // whole book's audio); the Writing phase is flush + atomic
+            // rename. Nothing accumulates — `segments` is the stamped count.
             PipelineVariant::Full { .. } => {
                 ensure_not_cancelled(&flag)?;
                 emit(PipelineEvent::Phase(PipelinePhase::ResolvingVoice));
@@ -386,15 +407,35 @@ impl PipelineJob {
                 ensure_not_cancelled(&flag)?;
                 ensure_espeak_data(&spec.espeak_root, source, sink_ref)?;
 
-                ensure_not_cancelled(&flag)?;
+                // The temp must live in the destination dir (EXDEV) and the
+                // dir must exist before the temp file can be created — dir
+                // creation moves ahead of synth for this variant.
+                fs::create_dir_all(&spec.books_dir).map_err(|e| PipelineError::Write {
+                    path: spec.books_dir.clone(),
+                    source: e,
+                })?;
+                let tmp = unique_tmp_path(&bundle_path);
+                let discard_tmp = |e: PipelineError| {
+                    let _ = fs::remove_file(&tmp);
+                    e
+                };
+                let file = File::create(&tmp).map_err(|e| PipelineError::Write {
+                    path: bundle_path.clone(),
+                    source: e,
+                })?;
+                let mut bundle = text_only_bundle;
+                let writer = BundleWriter::new(BufWriter::new(file), &bundle.chapters)
+                    .map_err(|e| discard_tmp(StampError::from(e).into()))?;
+
+                ensure_not_cancelled(&flag).map_err(discard_tmp)?;
                 emit(PipelineEvent::Phase(PipelinePhase::Synthesizing));
                 let cancelled_flag = Arc::clone(&flag);
                 let factory = Arc::clone(&spec.make_runner);
                 let make_runner =
                     move || CancellableRunner::new(Arc::clone(&cancelled_flag), factory());
                 let encoder = SharedEncoder(Arc::clone(&spec.encoder));
-                let mut bundle = text_only;
-                synth_and_stamp_cancel_aware(
+
+                let stamped = synth_and_stamp_streaming_cancel_aware(
                     &mut bundle,
                     &voice,
                     &model,
@@ -403,25 +444,29 @@ impl PipelineJob {
                     spec.jobs,
                     &spec.generator_app,
                     sink_ref,
-                )?;
-                bundle
+                    writer,
+                );
+                let (_sink, segment_count) = match stamped {
+                    Ok(ok) => ok,
+                    Err(e) => return Err(discard_tmp(e)),
+                };
+
+                ensure_not_cancelled(&flag).map_err(discard_tmp)?;
+                emit(PipelineEvent::Phase(PipelinePhase::Writing));
+                fs::rename(&tmp, &bundle_path).map_err(|e| {
+                    discard_tmp(PipelineError::Write {
+                        path: bundle_path.clone(),
+                        source: e,
+                    })
+                })?;
+                (segment_count as usize, false)
             }
         };
 
-        ensure_not_cancelled(&flag)?;
-        emit(PipelineEvent::Phase(PipelinePhase::Writing));
-        fs::create_dir_all(&spec.books_dir).map_err(|e| PipelineError::Write {
-            path: spec.books_dir.clone(),
-            source: e,
-        })?;
-        let bundle_path = spec.books_dir.join(format!("{book_id}.taletrek"));
-        write_bundle_atomic(&bundle, &bundle_path)?;
-
-        let segments = bundle.audio.len();
         Ok(PipelineOutcome {
             book_id,
             bundle_path,
-            text_only: !bundle.manifest.audio.present,
+            text_only: was_text_only,
             chapters,
             paragraphs,
             segments,
@@ -439,10 +484,11 @@ fn to_text_only(
     taletrek_parse::to_text_only_bundle_with_id(book, voice, generator(generator_app), book_id)
 }
 
-/// `synth_and_stamp` with cancel-aware error mapping: a cancelled synth
-/// surfaces as [`PipelineError::Cancelled`], not a synth failure.
-#[allow(clippy::too_many_arguments)] // mirrors synth_and_stamp's signature; see stamp.rs
-fn synth_and_stamp_cancel_aware<R, E, F>(
+/// [`synth_and_stamp_streaming`] with cancel-aware error mapping: a cancelled
+/// synth surfaces as [`PipelineError::Cancelled`], everything else keeps its
+/// typed [`StampError`] identity.
+#[allow(clippy::too_many_arguments)] // mirrors synth_and_stamp_streaming's signature; see stamp.rs
+fn synth_and_stamp_streaming_cancel_aware<R, E, F, W>(
     bundle: &mut BookBundle,
     voice_id: &str,
     voice_model: &Path,
@@ -451,13 +497,15 @@ fn synth_and_stamp_cancel_aware<R, E, F>(
     jobs: usize,
     generator_app: &str,
     progress: Option<&dyn ProgressSink>,
-) -> Result<(), PipelineError>
+    writer: BundleWriter<W>,
+) -> Result<(W, u32), PipelineError>
 where
     R: PiperRunner + Send,
     E: Encoder + Sync,
     F: Fn() -> R + Sync,
+    W: Write + Seek + Send + 'static,
 {
-    match synth_and_stamp(
+    match synth_and_stamp_streaming(
         bundle,
         voice_id,
         voice_model,
@@ -466,8 +514,9 @@ where
         jobs,
         generator_app,
         progress,
+        writer,
     ) {
-        Ok(()) => Ok(()),
+        Ok(ok) => Ok(ok),
         Err(StampError::Synth(SynthJobError::Synth(SynthError::Cancelled))) => {
             Err(PipelineError::Cancelled)
         }
@@ -512,23 +561,33 @@ fn generator(app: &str) -> Generator {
     }
 }
 
-/// GOTCHA: atomic bundle write — the temp file MUST live in the destination
-/// directory (rename across filesystems — e.g. /cache → /data — fails with
-/// `EXDEV`), and its name must be unique per attempt so concurrent jobs
-/// writing the same book id can't clobber each other's temp. Last complete
-/// rename wins, and a failed job's temp is removed, never promoted.
-fn write_bundle_atomic(bundle: &BookBundle, path: &Path) -> Result<(), PipelineError> {
+/// Unique same-dir temp path for `path`: `<name>.<pid>.<seq>.tmp`. Shared by
+/// the in-memory atomic write and the streaming full variant — the temp MUST
+/// live in the destination directory (rename across filesystems — e.g.
+/// /cache → /data — fails with `EXDEV`), and the pid+seq suffix keeps
+/// concurrent jobs writing the same book id from clobbering each other's
+/// temp.
+fn unique_tmp_path(path: &Path) -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let mut buffer = Cursor::new(Vec::new());
-    write_book_bundle(bundle, &mut buffer).map_err(StampError::from)?;
-    let tmp = path.with_file_name(format!(
+    path.with_file_name(format!(
         "{}.{}.{}.tmp",
         path.file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed),
-    ));
+    ))
+}
+
+/// GOTCHA: atomic bundle write — the temp file MUST live in the destination
+/// directory (rename across filesystems — e.g. /cache → /data — fails with
+/// `EXDEV`), and its name must be unique per attempt so concurrent jobs
+/// writing the same book id can't clobber each other's temp. Last complete
+/// rename wins, and a failed job's temp is removed, never promoted.
+fn write_bundle_atomic(bundle: &BookBundle, path: &Path) -> Result<(), PipelineError> {
+    let mut buffer = Cursor::new(Vec::new());
+    write_book_bundle(bundle, &mut buffer).map_err(StampError::from)?;
+    let tmp = unique_tmp_path(path);
     let write = || -> Result<(), PipelineError> {
         fs::write(&tmp, buffer.get_ref()).map_err(|e| PipelineError::Write {
             path: path.to_path_buf(),
@@ -808,6 +867,76 @@ mod tests {
         assert!(
             top_level.is_empty(),
             "cancel left artifacts behind: {top_level:?}"
+        );
+    }
+
+    #[test]
+    fn full_variant_failure_after_temp_creation_removes_streaming_temp() {
+        // The full variant must open its temp file BEFORE the Synthesizing
+        // phase (streaming into it as segments complete) and remove it when
+        // the job fails after that point. The runner observes whether a .tmp
+        // sibling exists at synth time (discriminating: the in-memory path
+        // would see none) and fails its first predict to abort the run.
+        struct TempObservingFailingRunner {
+            books_dir: PathBuf,
+            saw_tmp: Arc<std::sync::atomic::AtomicBool>,
+            checked: bool,
+        }
+        impl PiperRunner for TempObservingFailingRunner {
+            fn predict(&mut self, _m: &Path, _t: &str) -> Result<Vec<u8>, SynthError> {
+                if !self.checked {
+                    self.checked = true;
+                    let saw = fs::read_dir(&self.books_dir)
+                        .map(|entries| {
+                            entries
+                                .filter_map(Result::ok)
+                                .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+                        })
+                        .unwrap_or(false);
+                    self.saw_tmp.store(saw, Ordering::Relaxed);
+                }
+                Err(SynthError::EncoderIo(std::io::Error::other(
+                    "stub synth failure",
+                )))
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let saw_tmp = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let books_dir = dir.path().to_path_buf();
+        let observed = Arc::clone(&saw_tmp);
+        let factory: RunnerFactory = Arc::new(move || {
+            Box::new(TempObservingFailingRunner {
+                books_dir: books_dir.clone(),
+                saw_tmp: Arc::clone(&observed),
+                checked: false,
+            }) as Box<dyn PiperRunner + Send>
+        });
+        let err = PipelineJob::new(spec(
+            dir.path(),
+            PipelineVariant::Full { voice_id: None },
+            factory,
+        ))
+        .run(&StubSource::default(), None)
+        .unwrap_err();
+        assert!(
+            matches!(err, PipelineError::Stamp(_)),
+            "expected Stamp, got {err:?}"
+        );
+        assert!(
+            saw_tmp.load(Ordering::Relaxed),
+            "the streaming temp must exist during the Synthesizing phase"
+        );
+
+        let residue: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".taletrek") || n.ends_with(".tmp"))
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "failed job left artifacts behind: {residue:?}"
         );
     }
 
