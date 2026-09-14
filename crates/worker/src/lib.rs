@@ -69,7 +69,7 @@ pub use progress::Progress;
 pub use stamp::{
     refuse_full_input, resynth_and_stamp, synth_and_stamp, FullInputError, StampError,
 };
-pub use synth_job::{synth_all_paragraphs, SynthJobError};
+pub use synth_job::{synth_all_paragraphs, synth_paragraphs_into, SegmentSink, SynthJobError};
 pub use voices::{
     default_cache_dir, ensure_espeak_data, find_curated, resolve_voice, EspeakError, ResolveError,
     ResolveOpts, UreqVoiceSource, Voice, VoiceQuality, VoiceSource, CURATED_VOICES,

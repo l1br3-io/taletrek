@@ -18,19 +18,34 @@
 //! circuits `collect::<Result<..>>`). Continue-on-error (`--keep-going`) is a
 //! follow-up; v1 aborts.
 //!
-//! Re-exported at the crate root ([`synth_all_paragraphs`], [`SynthJobError`]);
-//! hosts reach this through their stamping glue (`bundle_io::synth_and_stamp`
-//! on the desktop).
+//! # Streaming vs. accumulation
+//!
+//! [`synth_paragraphs_into`] is the engine's primary shape: every finished
+//! segment is handed to a shared [`SegmentSink`] **by value** instead of being
+//! accumulated — so a sink that writes straight to disk (the streaming
+//! `BundleWriter`) keeps peak memory at one segment, not the whole book's
+//! audio. Dedup is the **sink's** job: the engine still synthesizes and
+//! delivers every occurrence of an identical paragraph; a collapsing sink
+//! (the streaming writer's written-keys set, or the collecting wrapper below)
+//! keeps one. [`synth_all_paragraphs`] is the legacy accumulating flavor — a
+//! thin wrapper collecting the sink's deliveries into a `HashMap` — kept for
+//! library nesting, tests, and small/compat paths.
+//!
+//! Re-exported at the crate root ([`synth_all_paragraphs`],
+//! [`synth_paragraphs_into`], [`SegmentSink`], [`SynthJobError`]); hosts reach
+//! this through their stamping glue (`bundle_io::synth_and_stamp` on the
+//! desktop).
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
 use thiserror::Error;
 
 use taletrek_synth::synth::{synthesize_paragraph, PiperRunner, SynthError, SynthOptions};
-use taletrek_synth::{AudioSegment, BookBundle, Encoder};
+use taletrek_synth::{AudioSegment, BookBundle, BundleError, Encoder};
 
 use crate::ProgressSink;
 
@@ -54,6 +69,51 @@ pub enum SynthJobError {
     /// text after normalization). v1 aborts on the first such error.
     #[error(transparent)]
     Synth(#[from] SynthError),
+
+    /// The [`SegmentSink`] rejected a completed segment — e.g. the streaming
+    /// bundle writer failed a write. Distinct from [`SynthJobError::Synth`]:
+    /// the synthesis itself succeeded; the *output* write did not.
+    #[error(transparent)]
+    Sink(#[from] BundleError),
+}
+
+/// The boxed delivery closure [`SegmentSink`] wraps: `(key, segment) ->
+/// Result<(), BundleError>`, `Send` so pool chunks share it.
+type SegmentDeliver = Box<dyn FnMut(String, AudioSegment) -> Result<(), BundleError> + Send>;
+
+/// Shared delivery target for [`synth_paragraphs_into`]: pool threads hand
+/// each finished segment to the wrapped closure **by value**, one call per
+/// completed paragraph.
+///
+/// The closure is boxed behind a `Mutex` (interior mutability is what makes
+/// `&SegmentSink` shareable across rayon chunks — `FnMut` cannot be `Sync` on
+/// its own). The sink is **fallible**: an `Err` aborts the run as
+/// [`SynthJobError::Sink`], so a disk-full or corrupt-write unwinds the pool
+/// exactly like a synthesis failure. Dedup is the sink's responsibility — the
+/// engine delivers every occurrence.
+pub struct SegmentSink {
+    deliver: Mutex<SegmentDeliver>,
+}
+
+impl SegmentSink {
+    /// Wrap a delivery closure. `Send + 'static` because the closure may
+    /// capture owned handles (e.g. an `Arc<Mutex<BundleWriter<_>>>`) that the
+    /// caller keeps a clone of to retrieve after the run.
+    pub fn new(
+        f: impl FnMut(String, AudioSegment) -> Result<(), BundleError> + Send + 'static,
+    ) -> Self {
+        Self {
+            deliver: Mutex::new(Box::new(f)),
+        }
+    }
+
+    fn deliver(&self, key: String, seg: AudioSegment) -> Result<(), BundleError> {
+        let mut f = self
+            .deliver
+            .lock()
+            .map_err(|_| BundleError::Io(std::io::Error::other("segment sink mutex poisoned")))?;
+        f(key, seg)
+    }
 }
 
 /// Flatten every chapter's paragraphs into a single borrowed work list, in
@@ -67,33 +127,22 @@ fn collect_paragraphs(bundle: &BookBundle) -> Vec<&str> {
         .collect()
 }
 
-/// Synthesize every paragraph across all chapters of `bundle` into a
-/// content-addressed `HashMap<cache_key, AudioSegment>`.
-///
-/// - `voice_id` is the cache-key namespace (and ends up in the manifest's
-///   `book.voiceId`); `voice_model` is the resolved `.onnx` path on disk.
-/// - `make_runner` is called once **per chunk** to produce a runner owned by
-///   that chunk for its whole lifetime. The work list is split into at most
-///   `jobs` contiguous chunks (ceil(total/jobs) paragraphs each), so at most
-///   `jobs` runner constructions happen per run — the per-thread cost model
-///   model-loaded runners (sherpa) need. Production passes a closure
-///   constructing from the piper binary path or the voice model; tests pass a
-///   closure returning a stub runner.
-/// - `encoder` is shared by `&E` across all tasks (`encode(&self)` is
-///   stateless), matching the spec's "one shared `OpusEncoder`" decision.
-/// - `jobs` bounds the pool (clamped to `>= 1`). The default `num_cpus` is
-///   resolved by the caller.
-///
-/// Aborts on the first paragraph error (rayon short-circuits
-/// `collect::<Result>`) → [`SynthJobError::Synth`]. Identical paragraphs dedup
-/// into one segment (content addressing), matching how the SPA's audio cache
-/// behaves.
-///
-/// `progress`, when `Some`, emits a `synth [done/total] pct%` line after each
-/// successful paragraph. Under parallelism the `done` counter is monotonic but
-/// lines may interleave out of strict order; tests pin `jobs: 1` for
-/// deterministic ordering. `None` is silent.
-pub fn synth_all_paragraphs<R, E, F>(
+/// Synthesize every paragraph across all chapters of `bundle`, handing each
+/// finished segment to `sink` **by value** — the streaming shape. See the
+/// [module docs](self#streaming-vs-accumulation) for the accumulation
+/// contrast; the chunking/pool/cost-model/abort/progress behavior is
+/// identical to [`synth_all_paragraphs`]:
+/// - `voice_id` is the cache-key namespace; `voice_model` is the resolved
+///   `.onnx` path on disk.
+/// - `make_runner` fires once **per chunk** (at most `jobs` constructions).
+/// - `encoder` is shared `&E` across all tasks.
+/// - `jobs` bounds the pool (clamped to `>= 1`).
+/// - aborts on the first paragraph *or sink* error →
+///   [`SynthJobError::Synth`] / [`SynthJobError::Sink`].
+/// - `progress`, when `Some`, emits a `synth [done/total] pct%` line after
+///   each successful paragraph (before delivery).
+#[allow(clippy::too_many_arguments)] // mirrors synth_all_paragraphs + the sink param
+pub fn synth_paragraphs_into<R, E, F>(
     bundle: &BookBundle,
     voice_id: &str,
     voice_model: &Path,
@@ -101,7 +150,8 @@ pub fn synth_all_paragraphs<R, E, F>(
     encoder: &E,
     jobs: usize,
     progress: Option<&dyn ProgressSink>,
-) -> Result<HashMap<String, AudioSegment>, SynthJobError>
+    sink: &SegmentSink,
+) -> Result<(), SynthJobError>
 where
     R: PiperRunner + Send,
     E: Encoder + Sync,
@@ -133,36 +183,105 @@ where
     // Run the chunked map inside our bounded pool. Each chunk constructs one
     // runner (owned for the chunk's lifetime — `&mut R` can't cross threads)
     // and processes its paragraphs sequentially, borrowing the shared `&E`
-    // encoder by ref. `collect::<Result<Vec<_>, _>>` makes rayon short-circuit
-    // on the first chunk error → v1 "abort on first error"; a successful
-    // paragraph reports synth progress before the next.
-    let segments: Result<Vec<Vec<(String, AudioSegment)>>, SynthError> = pool.install(|| {
+    // encoder by ref. Each successful paragraph reports progress, then moves
+    // into the sink — nothing accumulates. `collect::<Result>` makes rayon
+    // short-circuit on the first chunk error → v1 "abort on first error".
+    let results: Result<Vec<()>, SynthJobError> = pool.install(|| {
         paragraphs
             .par_chunks(chunk_size)
             .map(|chunk| {
                 let mut runner = make_runner();
-                let mut out = Vec::with_capacity(chunk.len());
                 for text in chunk {
                     let mut opts = SynthOptions::new(voice_model, &mut runner, encoder);
-                    let synthesized = synthesize_paragraph(voice_id, text, &mut opts)?;
+                    let synthesized = synthesize_paragraph(voice_id, text, &mut opts)
+                        .map_err(SynthJobError::Synth)?;
                     if let Some(p) = progress {
                         let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                         p.synth_step(n, total);
                     }
-                    let key = synthesized.cache_key.clone();
                     let seg = AudioSegment {
-                        key: synthesized.cache_key,
+                        key: synthesized.cache_key.clone(),
                         codec: synthesized.codec,
                         bytes: synthesized.audio,
                     };
-                    out.push((key, seg));
+                    sink.deliver(synthesized.cache_key, seg)
+                        .map_err(SynthJobError::Sink)?;
                 }
-                Ok(out)
+                Ok(())
             })
             .collect()
     });
 
-    Ok(segments?.into_iter().flatten().collect())
+    results.map(|_| ())
+}
+
+/// Synthesize every paragraph across all chapters of `bundle` into a
+/// content-addressed `HashMap<cache_key, AudioSegment>` — the **accumulating**
+/// flavor, now a thin wrapper over [`synth_paragraphs_into`] (a sink that
+/// collects deliveries into the map). Behavior is identical to the
+/// pre-streaming engine: duplicate paragraphs still synthesize and collapse
+/// via `HashMap` insert (last wins, content-identical anyway).
+///
+/// - `voice_id` is the cache-key namespace (and ends up in the manifest's
+///   `book.voiceId`); `voice_model` is the resolved `.onnx` path on disk.
+/// - `make_runner` is called once **per chunk** to produce a runner owned by
+///   that chunk for its whole lifetime. The work list is split into at most
+///   `jobs` contiguous chunks (ceil(total/jobs) paragraphs each), so at most
+///   `jobs` runner constructions happen per run — the per-thread cost model
+///   model-loaded runners (sherpa) need. Production passes a closure
+///   constructing from the piper binary path or the voice model; tests pass a
+///   closure returning a stub runner.
+/// - `encoder` is shared by `&E` across all tasks (`encode(&self)` is
+///   stateless), matching the spec's "one shared `OpusEncoder`" decision.
+/// - `jobs` bounds the pool (clamped to `>= 1`). The default `num_cpus` is
+///   resolved by the caller.
+///
+/// Aborts on the first paragraph error → [`SynthJobError::Synth`]. Prefer
+/// [`synth_paragraphs_into`] + a streaming sink for large documents — this
+/// flavor holds every segment in memory.
+///
+/// `progress`, when `Some`, emits a `synth [done/total] pct%` line after each
+/// successful paragraph. Under parallelism the `done` counter is monotonic but
+/// lines may interleave out of strict order; tests pin `jobs: 1` for
+/// deterministic ordering. `None` is silent.
+pub fn synth_all_paragraphs<R, E, F>(
+    bundle: &BookBundle,
+    voice_id: &str,
+    voice_model: &Path,
+    make_runner: F,
+    encoder: &E,
+    jobs: usize,
+    progress: Option<&dyn ProgressSink>,
+) -> Result<HashMap<String, AudioSegment>, SynthJobError>
+where
+    R: PiperRunner + Send,
+    E: Encoder + Sync,
+    F: Fn() -> R + Sync,
+{
+    let segments = std::sync::Arc::new(Mutex::new(HashMap::new()));
+    let collecting = segments.clone();
+    let sink = SegmentSink::new(move |key, seg| {
+        collecting
+            .lock()
+            .map_err(|_| BundleError::Io(std::io::Error::other("segment map mutex poisoned")))?
+            .insert(key, seg);
+        Ok(())
+    });
+    synth_paragraphs_into(
+        bundle,
+        voice_id,
+        voice_model,
+        make_runner,
+        encoder,
+        jobs,
+        progress,
+        &sink,
+    )?;
+    drop(sink);
+    Ok(Arc::try_unwrap(segments)
+        .expect("collecting sink dropped after the run")
+        .into_inner()
+        .expect("segment map mutex uncontended"))
 }
 
 #[cfg(test)]
@@ -548,6 +667,239 @@ mod tests {
             "",
             "no progress on the errored paragraph (inspect reports Ok only)"
         );
+    }
+
+    // ---- synth_paragraphs_into (sink engine — streaming-synth) ----
+
+    /// A recording sink: captures `(key, bytes-len)` per delivery. Fallibility
+    /// is opt-in via `fail_after` — deliveries beyond that count return a
+    /// `BundleError`, exercising the abort path.
+    type Deliveries = std::sync::Arc<std::sync::Mutex<Vec<(String, usize)>>>;
+
+    struct RecordingSink {
+        deliveries: Deliveries,
+        fail_after: Option<usize>,
+    }
+
+    impl RecordingSink {
+        fn new() -> Self {
+            Self {
+                deliveries: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+                fail_after: None,
+            }
+        }
+
+        fn into_sink(self) -> (SegmentSink, Deliveries) {
+            let deliveries = self.deliveries.clone();
+            let fail_after = self.fail_after;
+            let sink = SegmentSink::new(move |key, seg| {
+                let mut seen = deliveries.lock().unwrap();
+                if let Some(limit) = fail_after {
+                    if seen.len() >= limit {
+                        return Err(taletrek_synth::BundleError::InvalidAudioKey(format!(
+                            "sink-fail-after-{limit}"
+                        )));
+                    }
+                }
+                seen.push((key, seg.bytes.len()));
+                Ok(())
+            });
+            (sink, self.deliveries)
+        }
+    }
+
+    #[test]
+    fn sink_engine_delivers_every_occurrence_dupes_included() {
+        // Dedup is the SINK's job now: the engine synthesizes and delivers
+        // every paragraph occurrence, so two identical paragraphs produce two
+        // deliveries (the recording sink sees both; a HashMap sink collapses
+        // them — pinned by the wrapper tests above).
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec!["Repeat me.".into(), "Repeat me.".into(), "Unique.".into()],
+        )]);
+
+        let (sink, deliveries) = RecordingSink::new().into_sink();
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            2,
+            None,
+            &sink,
+        )
+        .expect("stub runner succeeds");
+
+        let seen = deliveries.lock().unwrap();
+        assert_eq!(seen.len(), 3, "one delivery per paragraph occurrence");
+        let expected_key = cache_key("v", "Repeat me.");
+        assert_eq!(
+            seen[0].0, expected_key,
+            "chapter/paragraph order at jobs=2 is chunked, but single-chunk size 2 keeps order"
+        );
+        assert_eq!(seen[0].1, canonical_wav(&[0x01, 0x02, 0x03, 0x04]).len());
+    }
+
+    #[test]
+    fn sink_engine_runner_fires_once_per_chunk() {
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec![
+                "One.".into(),
+                "Two.".into(),
+                "Three.".into(),
+                "Four.".into(),
+            ],
+        )]);
+
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let (sink, _) = RecordingSink::new().into_sink();
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            move || {
+                seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                StubRunner
+            },
+            &WavPassthrough,
+            2,
+            None,
+            &sink,
+        )
+        .expect("stub runner succeeds");
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "one runner per chunk through the sink engine too"
+        );
+    }
+
+    #[test]
+    fn sink_engine_progress_is_unchanged_at_jobs_one() {
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec!["One.".into(), "Two.".into(), "Three.".into()],
+        )]);
+
+        let captured = Captured::default();
+        let progress = Progress::new(Box::new(captured.clone()));
+        let (sink, _) = RecordingSink::new().into_sink();
+
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+            Some(&progress),
+            &sink,
+        )
+        .expect("synth succeeds");
+
+        assert_eq!(
+            captured.take(),
+            "synth [1/3] 33%\nsynth [2/3] 66%\nsynth [3/3] 100%\n"
+        );
+    }
+
+    #[test]
+    fn sink_engine_aborts_on_first_sink_error() {
+        // A failing sink must unwind the pool exactly like a synth error:
+        // first error aborts, no further paragraphs are synthesized or
+        // delivered, and the error is the typed Sink variant.
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec!["One.".into(), "Two.".into(), "Three.".into()],
+        )]);
+
+        let recorder = RecordingSink {
+            deliveries: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            fail_after: Some(1),
+        };
+        let (sink, deliveries) = recorder.into_sink();
+
+        let err = synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+            None,
+            &sink,
+        )
+        .expect_err("sink error must abort");
+        assert!(
+            matches!(err, SynthJobError::Sink(_)),
+            "expected Sink(_), got {err:?}"
+        );
+        assert_eq!(
+            deliveries.lock().unwrap().len(),
+            1,
+            "the failing delivery is recorded, nothing after it"
+        );
+    }
+
+    #[test]
+    fn sink_engine_aborts_on_synthesis_error_through_sink_path() {
+        // The legacy abort semantic (EmptyText) survives the refactor: same
+        // error, surfaced through the sink engine.
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec!["   \n   ".into()],
+        )]);
+        let (sink, deliveries) = RecordingSink::new().into_sink();
+
+        let err = synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            2,
+            None,
+            &sink,
+        )
+        .expect_err("empty paragraph must error");
+        assert!(
+            matches!(err, SynthJobError::Synth(SynthError::EmptyText)),
+            "expected Synth(EmptyText), got {err:?}"
+        );
+        assert!(deliveries.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn sink_engine_empty_bundle_delivers_nothing() {
+        let bundle = text_only_bundle(vec![]);
+        let (sink, deliveries) = RecordingSink::new().into_sink();
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            2,
+            None,
+            &sink,
+        )
+        .expect("empty bundle should not error");
+        assert!(deliveries.lock().unwrap().is_empty());
     }
 
     /// A clonable `Write` that records into a shared `Arc<Mutex<Vec<u8>>>` so a
