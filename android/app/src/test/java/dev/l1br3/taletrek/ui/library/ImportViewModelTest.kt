@@ -36,7 +36,10 @@ class ImportViewModelTest {
         converting = false
     }
 
-    private fun vm(dispatcher: CoroutineDispatcher) =
+    private fun vm(
+        dispatcher: CoroutineDispatcher,
+        pipelineJobs: () -> Int = { 2 },
+    ): ImportViewModel =
         ImportViewModel(
             io = dispatcher,
             copySource = {
@@ -45,6 +48,7 @@ class ImportViewModelTest {
             },
             isConverting = { converting },
             selectedVoice = { null },
+            pipelineJobs = pipelineJobs,
             startJob = { started += it },
             deleteSource = { deleted += it },
             dirs =
@@ -73,6 +77,17 @@ class ImportViewModelTest {
             assertEquals("taletrek-android", request.generatorApp)
             assertEquals(ImportUiState.Idle, vm.ui.value)
             assertTrue("source lives until the job ends", deleted.isEmpty())
+        }
+
+    @Test
+    fun pickCarriesTheDevicePipelineJobs() =
+        runTest(StandardTestDispatcher()) {
+            val vm =
+                vm(StandardTestDispatcher(testScheduler), pipelineJobs = { 1 })
+            vm.onSourcePicked("content://picked")
+            advanceUntilIdle()
+
+            assertEquals(1, started.single().jobs)
         }
 
     @Test

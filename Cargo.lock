@@ -4503,6 +4503,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "taletrek-memtrack"
+version = "0.1.0"
+
+[[package]]
 name = "taletrek-parse"
 version = "0.1.0"
 dependencies = [
@@ -4552,6 +4556,7 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "rayon",
+ "taletrek-memtrack",
  "taletrek-parse",
  "taletrek-synth",
  "tempfile",

@@ -30,6 +30,25 @@ interface SynthEngine {
 }
 
 /**
+ * Runner count for an on-device full synth. Each sherpa runner holds its
+ * model plus an onnxruntime arena that is sized by the largest chunk it has
+ * ever synthesized and never shrinks — ≈300–420 MB steady-state per runner
+ * (the kernel caps chunks at 120 chars to keep it there). Two runners on a
+ * ≤3 GB device (emulators, entry-level phones) alongside GMS is an LMK kill
+ * mid-convert; constrained devices serialize instead.
+ */
+fun pipelineJobsForDevice(
+    totalMemBytes: Long,
+    isLowRamDevice: Boolean,
+): Int = if (isLowRamDevice || totalMemBytes < LOW_RAM_DEVICE_FLOOR_BYTES) 1 else DEFAULT_PIPELINE_JOBS
+
+/** Above this much RAM, both runners fit. */
+const val LOW_RAM_DEVICE_FLOOR_BYTES: Long = 3L shl 30
+
+/** The unconstrained default (one runner per pool chunk). */
+const val DEFAULT_PIPELINE_JOBS: Int = 2
+
+/**
  * [SynthEngine] over the real [PipelineHandle]. Events stream live through
  * the observer (worker threads — dispatch is the caller's job); the
  * terminal state is polled off-thread because the FFI event stream has no

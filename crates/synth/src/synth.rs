@@ -136,6 +136,20 @@ pub trait PiperRunner {
     /// Synthesize `text` using the voice model at `voice_model`. Returns the
     /// canonical WAV bytes Piper writes to stdout.
     fn predict(&mut self, voice_model: &Path, text: &str) -> Result<Vec<u8>, SynthError>;
+
+    /// The largest chunk this engine should be fed in a single [`Self::predict`]
+    /// call. [`synthesize_paragraph`] lowers its split cap to
+    /// `min(SynthOptions::max_chars, this)` — engines can only tighten, never
+    /// loosen, the host's cap.
+    ///
+    /// The default ([`MAX_SYNTH_CHARS`]) suits subprocess Piper, whose peak
+    /// memory dies with each spawned process. Long-lived in-process engines
+    /// whose inference memory grows superlinearly with input length (VITS via
+    /// onnxruntime: the arena is sized by the largest request ever seen and
+    /// never shrinks) override with a smaller cap to bound steady-state RSS.
+    fn max_synth_chars(&self) -> usize {
+        MAX_SYNTH_CHARS
+    }
 }
 
 /// Run the real `piper` binary as a subprocess.
@@ -289,7 +303,9 @@ pub fn synthesize_paragraph<R: PiperRunner + ?Sized, E: Encoder + ?Sized>(
         return Err(SynthError::EmptyText);
     }
 
-    let chunks = split_for_speech(&cleaned, opts.max_chars);
+    // The engine's cap only ever tightens the host's (module docs on
+    // `PiperRunner::max_synth_chars`) — bounding in-process arena growth.
+    let chunks = split_for_speech(&cleaned, opts.max_chars.min(opts.runner.max_synth_chars()));
     debug_assert!(
         !chunks.is_empty(),
         "split_for_speech returned no chunks for non-empty input"
@@ -378,5 +394,72 @@ mod tests {
         let a = synthesize_paragraph("v", "O'Reilly", &mut opts).unwrap();
         let b = cache_key("v", "O\u{2019}Reilly");
         assert_eq!(a.cache_key, b);
+    }
+
+    /// Records every chunk it was fed.
+    struct RecordingRunner {
+        chunks: Vec<String>,
+        cap: usize,
+    }
+    impl PiperRunner for RecordingRunner {
+        fn predict(&mut self, _voice_model: &Path, text: &str) -> Result<Vec<u8>, SynthError> {
+            self.chunks.push(text.to_string());
+            Ok(canonical_wav(&[0x01, 0x02, 0x03, 0x04]))
+        }
+        fn max_synth_chars(&self) -> usize {
+            self.cap
+        }
+    }
+
+    #[test]
+    fn runner_cap_tightens_the_host_cap() {
+        // A long multi-sentence paragraph under a tightened engine cap must
+        // arrive as more, smaller chunks — the mechanism that bounds
+        // long-lived in-process engines' arena growth (sherpa's ORT arena is
+        // sized by the largest chunk ever fed and never shrinks).
+        let mut runner = RecordingRunner {
+            chunks: Vec::new(),
+            cap: 40,
+        };
+        let encoder = crate::encode::WavPassthrough;
+        let text = "One sentence that is fairly short. Another sentence follows here. \
+                    A third sentence rounds out the paragraph nicely.";
+        let mut opts =
+            SynthOptions::new(Path::new("/dev/null"), &mut runner, &encoder).with_max_chars(400);
+        synthesize_paragraph("v", text, &mut opts).unwrap();
+        assert!(
+            runner.chunks.len() > 1,
+            "tightened cap must split the paragraph, got one chunk"
+        );
+        assert!(
+            runner.chunks.iter().all(|c| c.chars().count() <= 40),
+            "every chunk must respect the engine cap: {:?}",
+            runner.chunks
+        );
+    }
+
+    #[test]
+    fn runner_cap_cannot_loosen_the_host_cap() {
+        // min(): an engine advertising a larger cap than the host's stays
+        // bounded by the host's explicit `with_max_chars`.
+        let mut runner = RecordingRunner {
+            chunks: Vec::new(),
+            cap: 4_000,
+        };
+        let encoder = crate::encode::WavPassthrough;
+        let text = "First sentence here now. Second sentence here as well. Third one too.";
+        let mut opts =
+            SynthOptions::new(Path::new("/dev/null"), &mut runner, &encoder).with_max_chars(24);
+        synthesize_paragraph("v", text, &mut opts).unwrap();
+        assert!(
+            runner.chunks.iter().all(|c| c.chars().count() <= 24),
+            "host cap must win: {:?}",
+            runner.chunks
+        );
+    }
+
+    #[test]
+    fn default_runner_cap_is_max_synth_chars() {
+        assert_eq!(StubRunner.max_synth_chars(), MAX_SYNTH_CHARS);
     }
 }

@@ -14,7 +14,8 @@
 //! the crate's own `unsafe impl Send/Sync for OfflineTts` covers worker-pool
 //! use.
 //!
-//! # Cost model (T1 measurements, feeds `--jobs` guidance in the effort spec)
+//! # Cost model (T1 measurements + the chunk-cap correction, feeds `--jobs`
+//! guidance in the effort spec)
 //!
 //! Each runner loads its own ONNX model at construction (~1 s, ~212 MB
 //! steady-state RSS per additional model; the first model costs ~237 MB incl.
@@ -22,6 +23,17 @@
 //! Hosts wire one runner **per pool chunk**: `synth_all_paragraphs` calls
 //! `make_runner` once per chunk (at most `--jobs` times per run), never per
 //! paragraph.
+//!
+//! **The correction:** those numbers hold only while every inference is
+//! short. onnxruntime's arena is sized by the largest request a runner has
+//! ever seen and never shrinks — measured (en_US-amy-medium, arena probe,
+//! 2026-09): a 400-char chunk (the old [`crate::normalize::MAX_SYNTH_CHARS`]
+//! cap) snaps the arena to ~530 MB–1 GB **per runner**; two runners on a
+//! 2 GB Android device is an LMK kill. RSS scales roughly linearly with the
+//! largest chunk (100 chars ≈ 257 MB, 200 ≈ 324 MB, 400 ≈ 529 MB). Hence
+//! [`SHERPA_MAX_SYNTH_CHARS`] = 120: a runner stays ≈ 300 MB regardless of
+//! paragraph shape, at the cost of denser (still sentence-aligned) splitting
+//! and marginally choppier prosody on >120-char sentences.
 //!
 //! # Bridging cached Piper voices (the T1 gotchas)
 //!
@@ -54,6 +66,12 @@ use crate::synth::{PiperRunner, SynthError};
 /// engine fails at generate time (the subprocess variant puts the binary
 /// path there).
 const ENGINE: &str = "sherpa-onnx";
+
+/// The chunk cap [`SherpaRunner`] advertises via
+/// [`PiperRunner::max_synth_chars`] — see the module docs' cost model: RSS
+/// scales with the largest chunk ever fed (the ORT arena never shrinks), and
+/// 120 chars keeps a runner near ~300 MB steady-state.
+const SHERPA_MAX_SYNTH_CHARS: usize = 120;
 
 /// Piper-json inference defaults, used when the json omits a scale.
 const DEFAULT_NOISE_SCALE: f32 = 0.667;
@@ -225,6 +243,10 @@ impl SherpaRunner {
 }
 
 impl PiperRunner for SherpaRunner {
+    fn max_synth_chars(&self) -> usize {
+        SHERPA_MAX_SYNTH_CHARS
+    }
+
     fn predict(&mut self, voice_model: &Path, text: &str) -> Result<Vec<u8>, SynthError> {
         // The model is fixed at construction (loads once per runner — module
         // docs); the trait's per-call path is a no-op here. Debug builds
@@ -796,6 +818,14 @@ mod tests {
         assert_voice_load(err, "rejected");
     }
 
+    #[test]
+    fn sherpa_cap_is_the_arena_bounded_constant() {
+        // Pins the arena decision (module docs): 120 keeps a runner near
+        // ~300 MB steady-state; raising this needs a new probe + a device
+        // budget check, not an edit.
+        assert_eq!(SHERPA_MAX_SYNTH_CHARS, 120);
+    }
+
     // ---- real-model e2e (needs a seeded voice + espeak-ng-data) ----
 
     const PARAGRAPH: &str = "The quick brown fox jumps over the lazy dog. TaleTrek turns \
@@ -862,6 +892,67 @@ mod tests {
         assert!(
             (d1 / d2 - 1.0).abs() < 0.5,
             "lengths diverged: {d1}s vs {d2}s"
+        );
+    }
+
+    /// `/proc/self/status` VmRSS in kB — the same probe the arena
+    /// measurements used.
+    fn rss_kb() -> u64 {
+        use std::io::BufRead as _;
+        let f = fs::File::open("/proc/self/status").unwrap();
+        for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                return rest.trim().trim_end_matches("kB").trim().parse().unwrap();
+            }
+        }
+        0
+    }
+
+    #[test]
+    #[ignore = "needs a real Piper voice + espeak-ng-data (same env as the e2e above) + Linux /proc; see docs/testing.md"]
+    fn worst_case_paragraph_keeps_arena_under_budget() {
+        // The regression net for the LMK crash (module docs' cost model): a
+        // 2,644-char paragraph — the longest in the crashing 18 MB scanned
+        // PDF — synthesized end to end through the real engine must hold the
+        // process under 450 MB. Before the 120-char cap, 400-char chunks
+        // snapped the ORT arena to 1 GB+ per runner and never gave it back.
+        let Some(voice_model) = std::env::var_os("TALETREK_VOICE_PATH") else {
+            eprintln!("skipped: TALETREK_VOICE_PATH not set");
+            return;
+        };
+        let voice_model = PathBuf::from(voice_model);
+        if !voice_model.is_file() {
+            eprintln!(
+                "skipped: TALETREK_VOICE_PATH `{}` missing",
+                voice_model.display()
+            );
+            return;
+        }
+        let espeak = std::env::var_os("TALETREK_ESPEAK_DATA")
+            .map(PathBuf::from)
+            .or_else(default_espeak_data_dir);
+        let Some(espeak) = espeak.filter(|p| p.is_dir()) else {
+            eprintln!("skipped: no espeak-ng-data dir");
+            return;
+        };
+
+        let sentence = "The reader moved steadily through the chapter, \
+            pausing at each paragraph boundary. ";
+        let text = sentence.repeat(2_644 / sentence.len() + 1);
+
+        let mut runner = SherpaRunner::with_espeak_data(&voice_model, &espeak)
+            .expect("seed-cache voice + espeak data must load");
+        let encoder = crate::encode::WavPassthrough;
+        let mut opts = crate::synth::SynthOptions::new(&voice_model, &mut runner, &encoder);
+        let out = crate::synth::synthesize_paragraph("probe", &text, &mut opts)
+            .expect("worst-case paragraph must synthesize");
+
+        assert!(out.duration_seconds > 60.0, "expected minutes of audio");
+        let rss = rss_kb();
+        eprintln!("post-synth VmRSS: {rss} kB");
+        assert!(
+            rss < 450 * 1_024,
+            "arena blew the budget: {rss} kB ≥ 450 MB (cap regressed?)"
         );
     }
 }

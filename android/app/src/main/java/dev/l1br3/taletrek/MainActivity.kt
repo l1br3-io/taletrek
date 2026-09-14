@@ -1,5 +1,6 @@
 package dev.l1br3.taletrek
 
+import android.app.ActivityManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -26,6 +27,7 @@ import dev.l1br3.taletrek.data.SourceImport
 import dev.l1br3.taletrek.data.VoiceStore
 import dev.l1br3.taletrek.service.SynthJobRequest
 import dev.l1br3.taletrek.service.isRunningPhase
+import dev.l1br3.taletrek.service.pipelineJobsForDevice
 import dev.l1br3.taletrek.ui.library.ImportViewModel
 import dev.l1br3.taletrek.ui.library.LibraryScreen
 import dev.l1br3.taletrek.ui.library.LibraryViewModel
@@ -78,6 +80,12 @@ class MainActivity : ComponentActivity() {
                             ?.isRunningPhase == true
                     },
                     selectedVoice = { voiceStore.selectedSnapshot() },
+                    pipelineJobs = {
+                        val am = getSystemService(ActivityManager::class.java)
+                        val info = ActivityManager.MemoryInfo()
+                        am.getMemoryInfo(info)
+                        pipelineJobsForDevice(info.totalMem, am.isLowRamDevice)
+                    },
                     startJob = { request: SynthJobRequest ->
                         startForegroundService(request.toIntent(this))
                     },

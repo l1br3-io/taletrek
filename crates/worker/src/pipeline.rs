@@ -415,6 +415,9 @@ impl PipelineJob {
                     source: e,
                 })?;
                 let tmp = unique_tmp_path(&bundle_path);
+                if let Some(dir) = bundle_path.parent() {
+                    sweep_orphan_tmp(dir);
+                }
                 let discard_tmp = |e: PipelineError| {
                     let _ = fs::remove_file(&tmp);
                     e
@@ -579,6 +582,48 @@ fn unique_tmp_path(path: &Path) -> PathBuf {
     ))
 }
 
+/// Whether `pid` names a live process. On Linux/Android (procfs mounted —
+/// every TaleTrek target) this is a stat away; anywhere else it conservatively
+/// reports alive so [`sweep_orphan_tmp`] never deletes what it can't judge.
+fn pid_alive(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// Delete streaming-temp leftovers in `dir` — files in the
+/// [`unique_tmp_path`] shape (`<name>.<pid>.<seq>.tmp`) whose pid is dead. A
+/// SIGKILL'd job (OOM/LMK on-device) cannot run its own cleanup, and the
+/// temps are whole-bundle-sized, so they'd silently eat storage. Best-effort:
+/// unparseable names, non-tmp files, and live-pid temps are left alone, and
+/// failures to stat or unlink are ignored.
+fn sweep_orphan_tmp(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(stem) = name.strip_suffix(".tmp") else {
+            continue;
+        };
+        // <base>.<pid>.<seq>: parse the two trailing dot-fields as numbers.
+        let mut fields = stem.rsplit('.');
+        let (Some(seq), Some(pid_field), Some(_base)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        if seq.is_empty() || pid_field.is_empty() {
+            continue;
+        }
+        let (Ok(_seq), Ok(pid)) = (seq.parse::<u32>(), pid_field.parse::<u32>()) else {
+            continue;
+        };
+        if !pid_alive(pid) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// GOTCHA: atomic bundle write — the temp file MUST live in the destination
 /// directory (rename across filesystems — e.g. /cache → /data — fails with
 /// `EXDEV`), and its name must be unique per attempt so concurrent jobs
@@ -588,6 +633,9 @@ fn write_bundle_atomic(bundle: &BookBundle, path: &Path) -> Result<(), PipelineE
     let mut buffer = Cursor::new(Vec::new());
     write_book_bundle(bundle, &mut buffer).map_err(StampError::from)?;
     let tmp = unique_tmp_path(path);
+    if let Some(dir) = path.parent() {
+        sweep_orphan_tmp(dir);
+    }
     let write = || -> Result<(), PipelineError> {
         fs::write(&tmp, buffer.get_ref()).map_err(|e| PipelineError::Write {
             path: path.to_path_buf(),
@@ -614,6 +662,48 @@ mod tests {
     use std::sync::Mutex;
 
     use taletrek_synth::cache_key;
+
+    /// A pid that is not currently alive: scanned down from the top of the
+    /// default-allocated range so it can never collide with a real process.
+    fn dead_pid() -> u32 {
+        (3_000_000..4_000_000)
+            .find(|p| !pid_alive(*p))
+            .expect("a pid in 3M..4M is always unallocated")
+    }
+
+    #[test]
+    fn sweep_removes_only_dead_pid_temps() {
+        let dir = tempfile::tempdir().unwrap();
+        let mk = |name: &str| dir.path().join(name);
+
+        let orphan = mk(&format!("bk_x.taletrek.{}.0.tmp", dead_pid()));
+        let mine = mk(&format!("bk_x.taletrek.{}.0.tmp", std::process::id()));
+        let unrelated = mk("notes.tmp");
+        let malformed = mk("bk_x.taletrek.notapid.0.tmp");
+        let bundle = mk("bk_y.taletrek");
+        for path in [&orphan, &mine, &unrelated, &malformed, &bundle] {
+            fs::write(path, b"bytes").unwrap();
+        }
+
+        sweep_orphan_tmp(dir.path());
+
+        assert!(!orphan.exists(), "dead-pid temp must be swept");
+        assert!(mine.exists(), "live-pid temp must survive");
+        assert!(unrelated.exists(), "non-pid .tmp must survive");
+        assert!(malformed.exists(), "unparseable name must survive");
+        assert!(bundle.exists(), "completed bundles are never touched");
+    }
+
+    #[test]
+    fn sweep_tolerates_missing_dir() {
+        sweep_orphan_tmp(Path::new("/nonexistent-taletrek-sweep"));
+    }
+
+    #[test]
+    fn pid_alive_reports_for_self_and_the_dead() {
+        assert!(pid_alive(std::process::id()));
+        assert!(!pid_alive(dead_pid()));
+    }
 
     /// Canonical mono 16-bit 16 kHz WAV with a little PCM — encoder-shape
     /// only, contents arbitrary (mirrors the desktop's engine tests).
