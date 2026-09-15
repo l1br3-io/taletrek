@@ -206,6 +206,8 @@
 				AA0000000000000000000029 /* KernelSmokeTest.swift */,
 				AA0000000000000000000043 /* PlaybackBridgeTests.swift */,
 				AA0000000000000000000044 /* PlaybackWalkTests.swift */,
+				AA0000000000000000000082 /* PositionStoreTests.swift */,
+				AA0000000000000000000083 /* ReaderViewModelTests.swift */,
 				AA0000000000000000000028 /* book-playable.taletrek */,
 				AA0000000000000000000045 /* book-corrupt.taletrek */,
 			);
