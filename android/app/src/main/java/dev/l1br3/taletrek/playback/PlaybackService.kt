@@ -1,6 +1,9 @@
 package dev.l1br3.taletrek.playback
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioManager
 import android.os.Bundle
 import android.os.Looper
@@ -60,10 +63,11 @@ class PlaybackService : MediaSessionService() {
             ExoPlayer
                 .Builder(this)
                 .setAudioAttributes(
-                    // GOTCHA: audio-focus handling is OFF for now — Media3's
-                    // built-in focus loss pauses the player behind the
-                    // kernel's back (state desync). Hardening (008) maps
-                    // focus loss to a userPause instead.
+                    // Built-in focus handling stays OFF on purpose: Media3's
+                    // would pause the player behind the kernel's back (state
+                    // desync). Interruption is owned here instead — the
+                    // AudioFocusPolicy + NoisyAudioRouter pair below, every
+                    // outcome a kernel-routed userPause.
                     AudioAttributes.DEFAULT,
                     false,
                 ).setWakeMode(C.WAKE_MODE_LOCAL)
@@ -107,6 +111,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         if (focusHeld) abandonFocus()
+        noisyRouter.release() // before the bridge dies — never a dangling receiver
         mediaSession.release()
         persistOnce() // best-effort final write (transport events did the rest)
         bridge?.release()
@@ -241,8 +246,9 @@ class PlaybackService : MediaSessionService() {
     /**
      * One kernel transition, pushed to every connected controller —
      * the reader's highlight + transport ride this (the T3 poll's
-     * replacement). Also the single point where audio focus tracks
-     * playback state (playing holds it; anything else releases it).
+     * replacement). Also the single point where audio focus and the
+     * becoming-noisy receiver track playback state (playing holds
+     * them; anything else releases them).
      */
     private fun broadcastSnapshot(
         bookId: String,
@@ -256,9 +262,10 @@ class PlaybackService : MediaSessionService() {
             )
         }
         syncAudioFocus(snap.status)
+        noisyRouter.sync(snap.status)
     }
 
-    // --- audio focus (the T3 GOTCHA's promised hardening) ----------------
+    // --- audio focus + becoming-noisy (the interruption pair) -------------
 
     private val focusListener =
         AudioManager.OnAudioFocusChangeListener { change ->
@@ -287,6 +294,39 @@ class PlaybackService : MediaSessionService() {
         focusHeld = false
         exo.volume = FULL_VOLUME
     }
+
+    // The unplug trap: Media3 does not pause on BECOMING_NOISY by itself —
+    // route it through the kernel like every other transport surface.
+    // Registration lifecycle mirrors syncAudioFocus: held exactly while
+    // playing, never on a non-playing path.
+    private val noisyRouter =
+        NoisyAudioRouter(
+            register = {
+                // AUDIO_BECOMING_NOISY is a protected system broadcast, so
+                // the plain two-arg registerReceiver is legal on targetSdk
+                // 36 — no RECEIVER_EXPORTED/NOT_EXPORTED flag needed.
+                registerReceiver(noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+            },
+            unregister = { unregisterReceiver(noisyReceiver) },
+            onPause = { bridge?.userPause() },
+        )
+
+    // The function breaks the router/receiver initializer cycle (a
+    // property-initializer reference both ways is a typechecker
+    // recursion; bodies of functions are deferred).
+    private fun routeNoisy(action: String?) {
+        noisyRouter.onReceive(action)
+    }
+
+    private val noisyReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context?,
+                intent: Intent?,
+            ) {
+                routeNoisy(intent?.action)
+            }
+        }
 
     private companion object {
         const val FULL_VOLUME = 1f
@@ -345,4 +385,44 @@ class PlaybackService : MediaSessionService() {
             putString(SessionCommands.STATE_BOOK_ID, bookId)
             putBoolean(SessionCommands.STATE_AUDIO_PRESENT, audioPresent)
         }
+}
+
+/**
+ * The becoming-noisy half of interruption: unplugging headphones must
+ * pause the book the way a focus loss does — through the kernel
+ * ([PlaybackService]'s `bridge.userPause()`, never a behind-its-back
+ * ExoPlayer pause). Pure and lambda-seamed so the JVM gate test covers
+ * the registration boundary without android.jar; no auto-resume on
+ * re-plug (the focus policy's stance, verbatim).
+ */
+internal class NoisyAudioRouter(
+    private val register: () -> Unit,
+    private val unregister: () -> Unit,
+    private val onPause: () -> Unit,
+) {
+    private var held = false
+
+    /** Idempotent playing-boundary gate — the focusHeld shape. */
+    fun sync(status: FfiPlayerStatus) {
+        if (status == FfiPlayerStatus.PLAYING && !held) {
+            register()
+            held = true
+        } else if (status != FfiPlayerStatus.PLAYING && held) {
+            unregister()
+            held = false
+        }
+    }
+
+    /** Maps only the noisy action; anything else (or null) is ignored. */
+    fun onReceive(action: String?) {
+        if (action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) onPause()
+    }
+
+    /** The destroy path — unregisters iff held (idempotent). */
+    fun release() {
+        if (held) {
+            unregister()
+            held = false
+        }
+    }
 }
