@@ -323,11 +323,15 @@ host_dylib := "libtaletrek_ffi." + if os() == "macos" { "dylib" } else { "so" }
 # the host-built cdylib carries the metadata — with `--language swift`.
 # Xcode never invokes Cargo (the Gradle-never-invokes-Cargo doctrine,
 # transposed); compile validation is the Xcode project's (task 003).
+# The modulemap rename is load-bearing: clang auto-discovers only
+# `module.modulemap` in SWIFT_INCLUDE_PATHS dirs — the generated
+# `<module>FFI.modulemap` name is invisible to `import` (the CI trap).
 # One-time prerequisite: cargo install uniffi --features cli --version 0.32.0 --locked
 ios-bindings:
     cargo build -p taletrek-ffi --lib
     uniffi-bindgen generate --library target/debug/{{host_dylib}} --language swift \
         --config crates/ffi/uniffi.toml --no-format --out-dir ios/TaleTrek/FFI
+    mv ios/TaleTrek/FFI/taletrek_ffiFFI.modulemap ios/TaleTrek/FFI/module.modulemap
 
 # iOS kernel static libs (device + simulator) + the sherpa xcframework, into
 # ios/TaleTrek/Vendor/ (gitignored — populated per machine, like jniLibs).

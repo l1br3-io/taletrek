@@ -17,7 +17,7 @@ dependency — API checksums are verified at load.)
 | --- | --- |
 | `taletrek_ffi.swift` | The Swift API: `openBook`, `readSegment`, `decodeSegment`, `TrekPlayer`, `PipelineHandle`, voices/espeak |
 | `taletrek_ffiFFI.h` | The C header for the static lib's extern surface |
-| `taletrek_ffiFFI.modulemap` | Clang module for the header (linked against `libtaletrek_ffi.a` from `just ios-kernel`) |
+| `module.modulemap` | Clang module for the header (linked against `libtaletrek_ffi.a` from `just ios-kernel`). The recipe renames the generated `taletrek_ffiFFI.modulemap` to `module.modulemap` — load-bearing: clang auto-discovers only `module.modulemap` in `SWIFT_INCLUDE_PATHS` dirs, so the generated name is invisible to `import taletrek_ffiFFI` (the CI-found trap) |
 
 Compile validation is the Xcode project's (task 003); this directory only
 claims generation is stable and committed.

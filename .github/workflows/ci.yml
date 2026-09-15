@@ -143,9 +143,17 @@ jobs:
           sdkmanager --install "platforms;android-37" > /dev/null \
             || sdkmanager --install "platforms;android-37.0" > /dev/null
 
-      # `just` ships on the ubuntu runner image; cargo-ndk is pinned via
-      # --locked at the version the dev machines use (recorded in the
-      # task-009 Outcome).
+      # `just` no longer ships on the ubuntu image (2026-09 drift — it broke
+      # the same rollout that took cmdline-tools off PATH); the official
+      # installer drops a prebuilt binary, pinned to the dev-machine version.
+      - name: Install just (pinned)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+            | sudo bash -s -- --to /usr/local/bin --tag 1.42.4
+          just --version
+
+      # `cargo-ndk` is pinned via --locked at the version the dev machines
+      # use (recorded in the task-009 Outcome).
       - name: Install cargo-ndk (pinned)
         run: cargo install cargo-ndk --version 4.1.2 --locked
 
@@ -179,8 +187,8 @@ jobs:
     # the justfile's IOS_SIM_DEST default matches; override env if the image
     # moves). Record the exact runner/Xcode pin on the first green run
     # (ios/README.md Environment). cmake ships on the image (the libopus
-    # cross-build via the cmake crate); `just` does NOT — brew installs it
-    # (ubuntu ships it, macOS doesn't: the 2026-09-15 first-run trap).
+    # cross-build via the cmake crate); `just` does NOT on either runner
+    # image (2026-09 drift) — brew installs it here.
     runs-on: macos-15
     # Two Apple-target cross-builds + the sherpa xcframework download
     # (~200 MB zip, cached under target/ by rust-cache) + simulator boot
