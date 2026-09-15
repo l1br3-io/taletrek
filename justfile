@@ -110,7 +110,15 @@ android-kernel:
     NDK="$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)"
     SHERPA=target/sherpa-onnx-prebuilt
     STEM="sherpa-onnx-v{{sherpa_ver}}-android"
-    if [ ! -d "$SHERPA/$STEM/jniLibs/arm64-v8a" ]; then
+    # Payload check, not dir check: a warm rust-cache restore can bring back
+    # a hollow prebuilt tree (fingerprints + dirs, no .so payload) while the
+    # cached build-script output still injects the -L — the relink then
+    # dangles (the 2026-09 CI trap). Any missing .so → clean re-extract.
+    if ! { [ -f "$SHERPA/$STEM/jniLibs/arm64-v8a/libsherpa-onnx-c-api.so" ] &&
+           [ -f "$SHERPA/$STEM/jniLibs/arm64-v8a/libonnxruntime.so" ] &&
+           [ -f "$SHERPA/$STEM/jniLibs/x86_64/libsherpa-onnx-c-api.so" ] &&
+           [ -f "$SHERPA/$STEM/jniLibs/x86_64/libonnxruntime.so" ]; }; then
+        rm -rf "$SHERPA/$STEM"
         mkdir -p "$SHERPA/$STEM"
         if [ ! -f "$SHERPA/$STEM.tar.bz2" ]; then
             curl -fL -o "$SHERPA/$STEM.tar.bz2" \
