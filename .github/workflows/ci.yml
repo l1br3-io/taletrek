@@ -121,9 +121,12 @@ jobs:
 
       # Runner images ship an SDK, but the packages are pinned explicitly
       # for reproducibility (docs/developing.md § Android pins; NDK r28c is
-      # also AGP 9's default). ANDROID_HOME is preset on the runner image.
+      # also AGP 9's default). ANDROID_HOME is preset on the runner image,
+      # but ubuntu-24.04 image drift took cmdline-tools off the default
+      # PATH — sdkmanager must be re-exported (2026-09 drift fix).
       - name: Install pinned Android SDK packages
         run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager --install "platform-tools" "platforms;android-37" "build-tools;36.0.0" "ndk;28.2.13676358" > /dev/null
 
@@ -162,8 +165,9 @@ jobs:
     # macos-15 = arm64 + Xcode 16.x default (iPhone 16 simulators present —
     # the justfile's IOS_SIM_DEST default matches; override env if the image
     # moves). Record the exact runner/Xcode pin on the first green run
-    # (ios/README.md Environment). `just` and `cmake` ship on the image
-    # (cmake = the libopus cross-build via the cmake crate).
+    # (ios/README.md Environment). cmake ships on the image (the libopus
+    # cross-build via the cmake crate); `just` does NOT — brew installs it
+    # (ubuntu ships it, macOS doesn't: the 2026-09-15 first-run trap).
     runs-on: macos-15
     # Two Apple-target cross-builds + the sherpa xcframework download
     # (~200 MB zip, cached under target/ by rust-cache) + simulator boot
@@ -176,6 +180,9 @@ jobs:
           toolchain: "1.97.0"
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@v2
+
+      - name: Install just (not on the macOS image)
+        run: brew install just
 
       - name: Cross-build the kernel (.a for both targets + xcframework → Vendor/)
         run: just ios-kernel
