@@ -57,6 +57,24 @@ class ReaderScreenTest {
     }
 
     @Test
+    fun outlineKnowsWhereYouAre() {
+        openSampleBook()
+
+        rule.onNodeWithContentDescription("Chapters").performClick()
+        // The locked outline design: honest header line + the marker on
+        // the current chapter only (fixture restores at chapter one).
+        rule.onNodeWithText("Chapter 1 of 2").assertIsDisplayed()
+        rule.onNodeWithText("Now reading").assertIsDisplayed()
+
+        // Jumping via the current row leaves the stored position where
+        // the class's order-independence expects it.
+        rule.onNodeWithText("Chapter One").performClick()
+        rule.waitUntil(TIMEOUT_MS) {
+            rule.onAllNodesWithText("Hello world.", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    @Test
     fun aTextOnlyBundleRendersADisabledTransportWithTheHint() {
         openSampleBook()
 
