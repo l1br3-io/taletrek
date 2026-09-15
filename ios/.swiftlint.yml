@@ -3,6 +3,7 @@
 included:
   - TaleTrek
   - TaleTrekTests
+  - TaleTrekUITests
 excluded:
   - TaleTrek/FFI
 line_length:

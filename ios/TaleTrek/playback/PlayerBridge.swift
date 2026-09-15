@@ -40,6 +40,18 @@ final class PlayerBridge {
     /// (layer 2 of the closure above).
     private var pendingKey: String?
 
+    /// The last durable position reported to `onPositionChanged` — the
+    /// save cadence's dedup (Android's shape: the kernel's position
+    /// moves only on transport events, so dedup is the debounce).
+    private var lastReportedPosition: FfiPosition?
+
+    /// Snapshot changes, pushed after every executed transition — the
+    /// reader's HUD and highlight ride this. Set by the view model.
+    var onSnapshotChanged: ((FfiStateSnapshot) -> Void)?
+
+    /// Durable-position changes, deduped — one report per actual move.
+    var onPositionChanged: ((FfiPosition?) -> Void)?
+
     init(kernel: TrekPlayer, port: AudioPort, session: PlaybackSession = AudioSession()) {
         self.kernel = kernel
         self.port = port
@@ -96,6 +108,16 @@ final class PlayerBridge {
 
     private func dispatch(_ event: FfiPlayerEvent) {
         execute(kernel.tick(event: event))
+        reportPosition()
+        onSnapshotChanged?(kernel.stateSnapshot())
+    }
+
+    private func reportPosition() {
+        guard let onPositionChanged else { return }
+        let pos = kernel.position()
+        guard pos != lastReportedPosition else { return }
+        lastReportedPosition = pos
+        onPositionChanged(pos)
     }
 
     private func execute(_ action: FfiPlayerAction) {

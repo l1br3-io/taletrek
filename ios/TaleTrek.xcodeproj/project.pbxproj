@@ -20,6 +20,17 @@
 		AA0000000000000000000053 /* PlaybackBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000043 /* PlaybackBridgeTests.swift */; };
 		AA0000000000000000000054 /* PlaybackWalkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000044 /* PlaybackWalkTests.swift */; };
 		AA0000000000000000000055 /* book-corrupt.taletrek in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000045 /* book-corrupt.taletrek */; };
+		AA0000000000000000000070 /* ReaderViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000060 /* ReaderViewModel.swift */; };
+		AA0000000000000000000071 /* ReaderScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000061 /* ReaderScreen.swift */; };
+		AA0000000000000000000072 /* TransportBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000062 /* TransportBar.swift */; };
+		AA0000000000000000000073 /* OutlineSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000063 /* OutlineSheet.swift */; };
+		AA0000000000000000000074 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000064 /* Theme.swift */; };
+		AA0000000000000000000075 /* PositionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000065 /* PositionStore.swift */; };
+		AA0000000000000000000076 /* book-playable.taletrek in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000028 /* book-playable.taletrek */; };
+		AA0000000000000000000077 /* book-text-only.taletrek in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000078 /* book-text-only.taletrek */; };
+		AA0000000000000000000080 /* PositionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000082 /* PositionStoreTests.swift */; };
+		AA0000000000000000000081 /* ReaderViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000083 /* ReaderViewModelTests.swift */; };
+		AA00000000000000000000A0 /* ReaderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000099 /* ReaderUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -51,6 +62,17 @@
 		AA0000000000000000000043 /* PlaybackBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackBridgeTests.swift; sourceTree = "<group>"; };
 		AA0000000000000000000044 /* PlaybackWalkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackWalkTests.swift; sourceTree = "<group>"; };
 		AA0000000000000000000045 /* book-corrupt.taletrek */ = {isa = PBXFileReference; lastKnownFileType = file; name = book-corrupt.taletrek; path = ../crates/synth/tests/fixtures/book-corrupt.taletrek; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000060 /* ReaderViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderViewModel.swift; sourceTree = "<group>"; };
+		AA0000000000000000000061 /* ReaderScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderScreen.swift; sourceTree = "<group>"; };
+		AA0000000000000000000062 /* TransportBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportBar.swift; sourceTree = "<group>"; };
+		AA0000000000000000000063 /* OutlineSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSheet.swift; sourceTree = "<group>"; };
+		AA0000000000000000000064 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		AA0000000000000000000065 /* PositionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionStore.swift; sourceTree = "<group>"; };
+		AA0000000000000000000078 /* book-text-only.taletrek */ = {isa = PBXFileReference; lastKnownFileType = file; name = book-text-only.taletrek; path = ../crates/synth/tests/fixtures/book-text-only.taletrek; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000082 /* PositionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionStoreTests.swift; sourceTree = "<group>"; };
+		AA0000000000000000000083 /* ReaderViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderViewModelTests.swift; sourceTree = "<group>"; };
+		AA0000000000000000000096 /* TaleTrekUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TaleTrekUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000000099 /* ReaderUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderUITests.swift; sourceTree = "<group>"; };
 		AA000000000000000000002A /* TaleTrek.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TaleTrek.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA000000000000000000002B /* TaleTrekTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TaleTrekTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -77,6 +99,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA0000000000000000000095 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -85,6 +114,7 @@
 			children = (
 				AA000000000000000000000D /* TaleTrek */,
 				AA000000000000000000000F /* TaleTrekTests */,
+				AA00000000000000000000A4 /* TaleTrekUITests */,
 				AA0000000000000000000010 /* Frameworks */,
 				AA000000000000000000000C /* Products */,
 			);
@@ -95,11 +125,59 @@
 			children = (
 				AA0000000000000000000024 /* TaleTrekApp.swift */,
 				AA0000000000000000000025 /* ContentView.swift */,
+				AA0000000000000000000066 /* ui */,
+				AA0000000000000000000069 /* data */,
 				AA0000000000000000000046 /* playback */,
 				AA000000000000000000000E /* FFI */,
 				AA0000000000000000000027 /* SherpaOnnxC.xcframework */,
 			);
 			path = TaleTrek;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000066 /* ui */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000067 /* reader */,
+				AA0000000000000000000068 /* theme */,
+			);
+			path = ui;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000067 /* reader */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000060 /* ReaderViewModel.swift */,
+				AA0000000000000000000061 /* ReaderScreen.swift */,
+				AA0000000000000000000062 /* TransportBar.swift */,
+				AA0000000000000000000063 /* OutlineSheet.swift */,
+			);
+			path = reader;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000068 /* theme */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000064 /* Theme.swift */,
+			);
+			path = theme;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000069 /* data */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000065 /* PositionStore.swift */,
+			);
+			path = data;
+			sourceTree = "<group>";
+		};
+		AA00000000000000000000A4 /* TaleTrekUITests */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000099 /* ReaderUITests.swift */,
+				AA0000000000000000000028 /* book-playable.taletrek */,
+				AA0000000000000000000078 /* book-text-only.taletrek */,
+			);
+			path = TaleTrekUITests;
 			sourceTree = "<group>";
 		};
 		AA0000000000000000000046 /* playback */ = {
@@ -146,6 +224,7 @@
 			children = (
 				AA000000000000000000002A /* TaleTrek.app */,
 				AA000000000000000000002B /* TaleTrekTests.xctest */,
+				AA0000000000000000000096 /* TaleTrekUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -188,6 +267,24 @@
 			productReference = AA000000000000000000002B /* TaleTrekTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		AA0000000000000000000090 /* TaleTrekUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000000091 /* Build configuration list for PBXNativeTarget "TaleTrekUITests" */;
+			buildPhases = (
+				AA0000000000000000000094 /* Sources */,
+				AA0000000000000000000095 /* Frameworks */,
+				AA00000000000000000000A1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA0000000000000000000098 /* PBXTargetDependency */,
+			);
+			name = TaleTrekUITests;
+			productName = TaleTrekUITests;
+			productReference = AA0000000000000000000096 /* TaleTrekUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -197,14 +294,18 @@
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1500;
 				LastUpgradeCheck = 1500;
-				TargetAttributes = {
-					AA0000000000000000000011 = {
-						CreatedOnToolsVersion = 15.0;
-					};
-					AA0000000000000000000012 = {
-						CreatedOnToolsVersion = 15.0;
-					};
+			TargetAttributes = {
+				AA0000000000000000000011 = {
+					CreatedOnToolsVersion = 15.0;
 				};
+				AA0000000000000000000012 = {
+					CreatedOnToolsVersion = 15.0;
+				};
+				AA0000000000000000000090 = {
+					CreatedOnToolsVersion = 15.0;
+					TestTargetID = AA0000000000000000000011;
+				};
+			};
 			};
 			buildConfigurationList = AA000000000000000000001B /* Build configuration list for PBXProject "TaleTrek" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -221,6 +322,7 @@
 			targets = (
 				AA0000000000000000000011 /* TaleTrek */,
 				AA0000000000000000000012 /* TaleTrekTests */,
+				AA0000000000000000000090 /* TaleTrekUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -232,6 +334,15 @@
 			files = (
 				AA0000000000000000000036 /* book-playable.taletrek in Resources */,
 				AA0000000000000000000055 /* book-corrupt.taletrek in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA00000000000000000000A1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA0000000000000000000076 /* book-playable.taletrek in Resources */,
+				AA0000000000000000000077 /* book-text-only.taletrek in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -248,6 +359,12 @@
 				AA0000000000000000000050 /* PlayerBridge.swift in Sources */,
 				AA0000000000000000000051 /* AudioEngine.swift in Sources */,
 				AA0000000000000000000052 /* AudioSession.swift in Sources */,
+				AA0000000000000000000070 /* ReaderViewModel.swift in Sources */,
+				AA0000000000000000000071 /* ReaderScreen.swift in Sources */,
+				AA0000000000000000000072 /* TransportBar.swift in Sources */,
+				AA0000000000000000000073 /* OutlineSheet.swift in Sources */,
+				AA0000000000000000000074 /* Theme.swift in Sources */,
+				AA0000000000000000000075 /* PositionStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -258,6 +375,16 @@
 				AA0000000000000000000035 /* KernelSmokeTest.swift in Sources */,
 				AA0000000000000000000053 /* PlaybackBridgeTests.swift in Sources */,
 				AA0000000000000000000054 /* PlaybackWalkTests.swift in Sources */,
+				AA0000000000000000000080 /* PositionStoreTests.swift in Sources */,
+				AA0000000000000000000081 /* ReaderViewModelTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000094 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA00000000000000000000A0 /* ReaderUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -271,6 +398,13 @@
 			remoteGlobalIDString = AA0000000000000000000011;
 			remoteInfo = TaleTrek;
 		};
+		AA0000000000000000000097 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA000000000000000000000A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000000000000000000011;
+			remoteInfo = TaleTrek;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXTargetDependency section */
@@ -278,6 +412,11 @@
 			isa = PBXTargetDependency;
 			target = AA0000000000000000000011 /* TaleTrek */;
 			targetProxy = AA0000000000000000000019 /* PBXContainerItemProxy */;
+		};
+		AA0000000000000000000098 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000000000000000000011 /* TaleTrek */;
+			targetProxy = AA0000000000000000000097 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -454,6 +593,42 @@
 			};
 			name = Release;
 		};
+		AA0000000000000000000092 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.l1br3.taletrek.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = TaleTrek;
+			};
+			name = Debug;
+		};
+		AA0000000000000000000093 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.l1br3.taletrek.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = TaleTrek;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -480,6 +655,15 @@
 			buildConfigurations = (
 				AA0000000000000000000022 /* Debug */,
 				AA0000000000000000000023 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000000091 /* Build configuration list for PBXNativeTarget "TaleTrekUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000092 /* Debug */,
+				AA0000000000000000000093 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
