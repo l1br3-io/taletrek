@@ -353,9 +353,28 @@ ios-bindings:
 #   -ltaletrek_ffi -lc++ and embeds the framework (pbxproj settings).
 # - libopus (the `opus` crate) cross-builds via cmake; the cmake crate maps
 #   Apple triples — unverified on a real Mac until task 003's run.
+# - Payload check, not dir check (the android 2026-09 trap, iOS edition): a
+#   warm rust-cache restore can bring back a hollow prebuilt tree (dirs +
+#   fingerprints, no dylib payload) while the cached build-script output
+#   keeps the sys crate from re-extracting (`lib/` dir exists → short-
+#   circuit) — the Vendor copy then ships a shell Xcode rejects with "no
+#   Info.plist found". Any missing payload → clean re-extract from the
+#   cached zip (download-free when rust-cache kept the ~200 MB zip).
 ios-kernel:
     #!/usr/bin/env bash
     set -euo pipefail
+    PREBUILT=target/sherpa-onnx-prebuilt
+    STEM="sherpa-onnx-v{{sherpa_ver}}-ios-shared-onnxruntime-static"
+    XCF="$PREBUILT/$STEM/SherpaOnnxC.xcframework"
+    if ! { [ -f "$XCF/Info.plist" ] && find "$XCF" -name '*.dylib' -print -quit | grep -q .; }; then
+        rm -rf "$PREBUILT/$STEM"
+        mkdir -p "$PREBUILT/$STEM"
+        if [ ! -f "$PREBUILT/$STEM.xcframework.zip" ]; then
+            curl -fL -o "$PREBUILT/$STEM.xcframework.zip" \
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/xcframework/$STEM.xcframework.zip"
+        fi
+        unzip -q "$PREBUILT/$STEM.xcframework.zip" -d "$PREBUILT/$STEM"
+    fi
     for t in aarch64-apple-ios aarch64-apple-ios-sim; do
         cargo rustc -p taletrek-ffi --lib --crate-type staticlib --release --target "$t"
     done
@@ -363,7 +382,6 @@ ios-kernel:
     mkdir -p "$VENDOR/iphoneos" "$VENDOR/iphonesimulator"
     cp target/aarch64-apple-ios/release/libtaletrek_ffi.a "$VENDOR/iphoneos/"
     cp target/aarch64-apple-ios-sim/release/libtaletrek_ffi.a "$VENDOR/iphonesimulator/"
-    XCF="target/sherpa-onnx-prebuilt/sherpa-onnx-v{{sherpa_ver}}-ios-shared-onnxruntime-static/SherpaOnnxC.xcframework"
     rm -rf "$VENDOR/SherpaOnnxC.xcframework"
     cp -R "$XCF" "$VENDOR/"
 
