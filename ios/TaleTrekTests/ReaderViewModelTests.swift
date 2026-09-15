@@ -58,7 +58,7 @@ final class ReaderViewModelTests: XCTestCase {
         // lands asynchronously, hence the box.
         let box = BridgeBox()
         let viewModel = ReaderViewModel(
-            openBook: { book },
+            opener: { book },
             store: store,
             host: { book, _ in
                 let bridge = PlayerBridge(kernel: TrekPlayer(book: book), port: port)
@@ -224,7 +224,7 @@ final class ReaderViewModelTests: XCTestCase {
 
     func testAMissingBookSurfacesTheMissingState() {
         let viewModel = ReaderViewModel(
-            openBook: { throw NSError(domain: "test", code: 1) },
+            opener: { throw NSError(domain: "test", code: 1) },
             store: tempStore(),
             host: { book, _ in
                 PlayerBridge(kernel: TrekPlayer(book: book), port: RecordingPort())

@@ -9,7 +9,7 @@ enum Theme {
     private static func color(_ dark: UInt32, _ sepia: UInt32) -> Color {
         Color(UIColor { traits in
             let hex = traits.userInterfaceStyle == .dark ? dark : sepia
-            Theme.rgb(hex)
+            return Theme.rgb(hex)
         })
     }
 

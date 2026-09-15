@@ -53,7 +53,7 @@ typealias PlayerHost = (_ book: FfiBook, _ saved: StoredPosition?) -> PlayerBrid
 final class ReaderViewModel: ObservableObject {
     @Published private(set) var state = ReaderUiState()
 
-    private let openBook: () throws -> FfiBook
+    private let opener: () throws -> FfiBook
     private let store: PositionStore
     private let host: PlayerHost
 
@@ -62,11 +62,11 @@ final class ReaderViewModel: ObservableObject {
     private var landingClearTask: Task<Void, Never>?
 
     init(
-        openBook: @escaping () throws -> FfiBook,
+        opener: @escaping () throws -> FfiBook,
         store: PositionStore = .standard,
         host: @escaping PlayerHost
     ) {
-        self.openBook = openBook
+        self.opener = opener
         self.store = store
         self.host = host
         open()
@@ -75,7 +75,7 @@ final class ReaderViewModel: ObservableObject {
     /// Production convenience: open the bundle at `path`.
     convenience init(path: String, store: PositionStore = .standard) {
         self.init(
-            openBook: { try openBook(path: path) },
+            opener: { try openBook(path: path) },
             store: store,
             host: ReaderViewModel.productionHost(path: path)
         )
@@ -96,7 +96,7 @@ final class ReaderViewModel: ObservableObject {
 
     private func open() {
         Task { @MainActor in
-            guard let book = try? openBook() else {
+            guard let book = try? opener() else {
                 state.loading = false
                 state.missing = true
                 return
