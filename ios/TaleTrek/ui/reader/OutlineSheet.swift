@@ -73,6 +73,5 @@ struct OutlineSheet: View {
         .buttonStyle(.plain)
         .id(index)
         .accessibilityIdentifier("chapter-row-\(index)")
-        .accessibilityLabel("Chapter \(index + 1): \(chapters[index].title)")
     }
 }

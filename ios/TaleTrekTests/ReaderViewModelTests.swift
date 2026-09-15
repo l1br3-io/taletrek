@@ -60,8 +60,12 @@ final class ReaderViewModelTests: XCTestCase {
         let viewModel = ReaderViewModel(
             opener: { book },
             store: store,
-            host: { book, _ in
-                let bridge = PlayerBridge(kernel: TrekPlayer(book: book), port: port)
+            host: { book, saved in
+                // Mirrors the production host: a surviving position
+                // restores paused; none starts fresh.
+                let kernel = saved.map { TrekPlayer.restore(book: book, position: $0.asFfi) }
+                    ?? TrekPlayer(book: book)
+                let bridge = PlayerBridge(kernel: kernel, port: port)
                 box.bridge = bridge
                 return bridge
             }

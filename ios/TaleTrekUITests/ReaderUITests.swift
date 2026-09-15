@@ -42,7 +42,7 @@ final class ReaderUITests: XCTestCase {
         let header = app.staticTexts["outline-header"]
         XCTAssertTrue(header.waitForExistence(timeout: 5))
         XCTAssertEqual(header.label, "Chapter 1 of 2")
-        app.staticTexts["chapter-row-1"].tap()
+        app.buttons["chapter-row-1"].tap()
 
         // Jump dismissed the sheet and rendered chapter two's title.
         XCTAssertEqual(app.staticTexts["chapter-title"].label, "Chapter Two")
@@ -53,12 +53,15 @@ final class ReaderUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["chapter-title"].waitForExistence(timeout: 15))
 
         app.buttons["Chapters"].tap()
-        let row = app.staticTexts["chapter-row-0"]
+        let row = app.buttons["chapter-row-0"]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
-        XCTAssertEqual(row.label, "Chapter 1: Chapter One")
         XCTAssertTrue(
-            app.staticTexts["Now reading"].waitForExistence(timeout: 5),
-            "the current chapter carries the marker"
+            row.label.contains("Now reading"),
+            "the current chapter carries the marker (label: \(row.label))"
+        )
+        XCTAssertFalse(
+            app.buttons["chapter-row-1"].label.contains("Now reading"),
+            "only the current chapter is marked"
         )
     }
 
