@@ -169,7 +169,7 @@ final class PlaybackBridgeTests: XCTestCase {
         XCTAssertEqual(port.loads.map(\.key), ["k-One.", "k-Two."], "playback continues")
     }
 
-    func testASessionActivationFailureRidesTheSkipPath() {
+    func testASessionActivationFailureDrainsThroughTheSkipPathToBookEnd() {
         let book = book(texts: ["One.", "Two."])
         let port = RecordingPort()
         let session = StubSession()
@@ -179,8 +179,12 @@ final class PlaybackBridgeTests: XCTestCase {
         bridge.userPlay()
 
         XCTAssertTrue(port.loads.isEmpty, "nothing schedules without a session")
-        XCTAssertEqual(bridge.snapshot.para?.index, 1, "the kernel skips and continues")
-        XCTAssertEqual(bridge.snapshot.failures.skipped, 1)
+        XCTAssertEqual(
+            bridge.snapshot.status,
+            .idle,
+            "every segment fails to load — the kernel fail-skips to book end"
+        )
+        XCTAssertEqual(bridge.snapshot.failures.skipped, 2, "both paragraphs rode the skip path")
         XCTAssertNotNil(bridge.snapshot.failures.lastError)
     }
 
@@ -236,10 +240,6 @@ final class AudioEngineEpochTests: XCTestCase {
         }
     }
 
-    private nonisolated func audio() -> FfiDecodedAudio {
-        FfiDecodedAudio(samples: [0, 0, 0, 0], sampleRate: 24_000, channels: 1)
-    }
-
     private func waitUntil(
         timeout: TimeInterval = 5, _ message: String, _ condition: @escaping () -> Bool
     ) {
@@ -284,24 +284,43 @@ final class AudioEngineEpochTests: XCTestCase {
         XCTAssertEqual(sink.events[0], "failed:k0:segment missing from bundle")
     }
 
-    func testASupersededLoadDeliversNothingForTheOldKey() {
+    /// A full second of PCM — long enough that its natural drain cannot
+    /// race the superseding command in the test window.
+    private nonisolated func longAudio() -> FfiDecodedAudio {
+        FfiDecodedAudio(samples: Array(repeating: 0, count: 24_000), sampleRate: 24_000, channels: 1)
+    }
+
+    /// The epoch invariant that is constructible through the public API:
+    /// a scheduled buffer's completion is orphaned by the next command
+    /// (`node.stop()` fires pending `.dataPlayedBack` handlers) and must
+    /// never surface for the superseded schedule. Commands themselves are
+    /// FIFO on the engine queue — mid-decode supersession is
+    /// unrepresentable by construction, which is the point of the serial
+    /// queue.
+    func testAnOrphanedCompletionFromASupersededScheduleNeverSurfaces() {
         let sink = RecordingSink()
-        let pcm = audio()
-        let engine = AudioEngine(path: "/dev/null") { [pcm] _, key in
-            if key == "slow" {
-                Thread.sleep(forTimeInterval: 0.2) // still decoding when superseded
-            }
-            return pcm
-        }
+        let pcm = longAudio()
+        let engine = AudioEngine(path: "/dev/null") { [pcm] _, _ in pcm }
         engine.attach(sink)
 
-        engine.playSegment(key: "slow", offset: 0)
+        engine.playSegment(key: "long", offset: 0)
+        waitUntil("the long segment is armed") { sink.events.contains("ready:long") }
         engine.stopOutput()
-        engine.playSegment(key: "next", offset: 0)
-
-        waitUntil("the surviving load reports") { sink.events.contains("ready:next") }
         spinRunLoop(for: 0.5)
-        XCTAssertEqual(sink.events, ["ready:next"], "the superseded decode reports nothing")
-        XCTAssertEqual(engine.loadedSegments.map(\.key), ["next"])
+        XCTAssertEqual(
+            sink.events,
+            ["ready:long"],
+            "the orphaned completion of the stopped schedule is dropped at the epoch"
+        )
+
+        engine.playSegment(key: "next", offset: 0)
+        waitUntil("the next schedule arms") { sink.events.contains("ready:next") }
+        spinRunLoop(for: 0.5)
+        XCTAssertEqual(
+            sink.events,
+            ["ready:long", "ready:next"],
+            "still no drain for the superseded schedule; the new one reports normally"
+        )
+        XCTAssertEqual(engine.loadedSegments.map(\.key), ["long", "next"])
     }
 }
