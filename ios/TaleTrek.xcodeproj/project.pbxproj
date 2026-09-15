@@ -36,7 +36,7 @@
 		AA0000000000000000000026 /* taletrek_ffi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = taletrek_ffi.swift; sourceTree = "<group>"; };
 		AA0000000000000000000037 /* taletrek_ffiFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = taletrek_ffiFFI.h; sourceTree = "<group>"; };
 		AA0000000000000000000038 /* taletrek_ffiFFI.modulemap */ = {isa = PBXFileReference; lastKnownFileType = text; path = taletrek_ffiFFI.modulemap; sourceTree = "<group>"; };
-		AA0000000000000000000027 /* SherpaOnnxC.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = SherpaOnnxC.xcframework; path = TaleTrek/Vendor/SherpaOnnxC.xcframework; sourceTree = "<group>"; };
+		AA0000000000000000000027 /* SherpaOnnxC.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = SherpaOnnxC.xcframework; path = Vendor/SherpaOnnxC.xcframework; sourceTree = "<group>"; };
 		AA0000000000000000000028 /* book-playable.taletrek */ = {isa = PBXFileReference; lastKnownFileType = file; name = book-playable.taletrek; path = ../../crates/synth/tests/fixtures/book-playable.taletrek; sourceTree = SOURCE_ROOT; };
 		AA0000000000000000000029 /* KernelSmokeTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KernelSmokeTest.swift; sourceTree = "<group>"; };
 		AA000000000000000000002A /* TaleTrek.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TaleTrek.app; sourceTree = BUILT_PRODUCTS_DIR; };
