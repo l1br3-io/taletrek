@@ -151,3 +151,51 @@ jobs:
           cargo install uniffi --features cli --version 0.32.0 --locked
           just android-bindings
           git diff --exit-code -- android/app/src/main/java/dev/l1br3/taletrek/ffi/
+
+  # iOS app: kernel cross-build (static lib per Apple target + sherpa
+  # xcframework via `just ios-kernel`) + xcodebuild build + simulator unit
+  # tests + SwiftLint. Gates the two-machine loop (ios-app plan risk table):
+  # pushes from the Linux box must prove the Mac side still builds. NO CDN
+  # voice/espeak suites and NO hardware — the fresh-run e2e and Jog pass stay
+  # Mac-local by design (android precedent: no emulator either).
+  ios:
+    # macos-15 = arm64 + Xcode 16.x default (iPhone 16 simulators present —
+    # the justfile's IOS_SIM_DEST default matches; override env if the image
+    # moves). Record the exact runner/Xcode pin on the first green run
+    # (ios/README.md Environment). `just` and `cmake` ship on the image
+    # (cmake = the libopus cross-build via the cmake crate).
+    runs-on: macos-15
+    # Two Apple-target cross-builds + the sherpa xcframework download
+    # (~200 MB zip, cached under target/ by rust-cache) + simulator boot
+    # and test — 30 mirrors android's headroom over the ~15 min lean target.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.0"
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cross-build the kernel (.a for both targets + xcframework → Vendor/)
+        run: just ios-kernel
+
+      - name: Build the app (simulator)
+        run: just ios
+
+      - name: Swift unit tests (app-hosted on the simulator; non-CDN suites)
+        run: just ios-test
+
+      - name: SwiftLint
+        run: |
+          brew install swiftlint
+          swiftlint --config ios/.swiftlint.yml
+
+      # Bindings drift guard — the Swift twin of android's step: regenerate
+      # the checked-in UniFFI Swift and fail if it differs (same uniffi CLI
+      # pin; the host cdylib is macOS-built here, .dylib per the justfile).
+      - name: Bindings drift guard
+        run: |
+          cargo install uniffi --features cli --version 0.32.0 --locked
+          just ios-bindings
+          git diff --exit-code -- ios/TaleTrek/FFI/
