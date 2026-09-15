@@ -95,7 +95,7 @@ final class PositionStore {
         entries[storageKey] = [
             "chapter": Int(position.chapter),
             "index": Int(position.index),
-            "offset": position.offset,
+            "offset": position.offset
         ]
         persist()
     }

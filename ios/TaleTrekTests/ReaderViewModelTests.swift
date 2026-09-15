@@ -49,9 +49,22 @@ final class ReaderViewModelTests: XCTestCase {
         )
     }
 
+    /// The wired harness: view model + recording port + the bridge once
+    /// the open lands (SwiftLint keeps tuples at two members; this is
+    /// three facts).
+    private struct Harness {
+        let viewModel: ReaderViewModel
+        let port: RecordingPort
+        var box: BridgeBox
+    }
+
+    private final class BridgeBox {
+        var bridge: PlayerBridge?
+    }
+
     private func makeViewModel(
         _ book: FfiBook, store: PositionStore
-    ) -> (viewModel: ReaderViewModel, port: RecordingPort, box: BridgeBox) {
+    ) -> Harness {
         let port = RecordingPort()
         // The test keeps a handle on the bridge so platform reports can
         // be driven the way the engine would (ready, drained) — it
@@ -70,11 +83,7 @@ final class ReaderViewModelTests: XCTestCase {
                 return bridge
             }
         )
-        return (viewModel, port, box)
-    }
-
-    private final class BridgeBox {
-        var bridge: PlayerBridge?
+        return Harness(viewModel: viewModel, port: port, box: box)
     }
 
     private func waitUntil(
@@ -93,10 +102,10 @@ final class ReaderViewModelTests: XCTestCase {
 
     private func openAndHold(
         _ book: FfiBook, store: PositionStore
-    ) -> (viewModel: ReaderViewModel, port: RecordingPort, bridge: PlayerBridge) {
-        let (viewModel, port, box) = makeViewModel(book, store: store)
-        waitUntil("the book opens") { !viewModel.state.loading }
-        return (viewModel, port, box.bridge!)
+    ) -> Harness {
+        let harness = makeViewModel(book, store: store)
+        waitUntil("the book opens") { !harness.viewModel.state.loading }
+        return harness
     }
 
     func testOpeningRendersChaptersAndDerivesAnIdleTransport() {

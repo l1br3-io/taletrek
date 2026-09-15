@@ -38,9 +38,9 @@ final class PositionStoreTests: XCTestCase {
         )
     }
 
-    func testACorruptFileReadsAsFreshAndTheNextSaveHeals() {
+    func testACorruptFileReadsAsFreshAndTheNextSaveHeals() throws {
         let url = tempFile()
-        try! Data("not json at all".utf8).write(to: url)
+        try Data("not json at all".utf8).write(to: url)
         let store = PositionStore(fileURL: url)
 
         XCTAssertNil(store.load(storageKey: "taletrek.reader.position.bk_a"))
@@ -53,12 +53,12 @@ final class PositionStoreTests: XCTestCase {
         )
     }
 
-    func testAWrongTypedFieldReadsTheEntryAsAbsent() {
+    func testAWrongTypedFieldReadsTheEntryAsAbsent() throws {
         let url = tempFile()
         let hostile = """
         {"taletrek.reader.position.bk_a": {"chapter": "two", "index": 0, "offset": 0.0}}
         """
-        try! Data(hostile.utf8).write(to: url)
+        try Data(hostile.utf8).write(to: url)
         let store = PositionStore(fileURL: url)
 
         XCTAssertNil(store.load(storageKey: "taletrek.reader.position.bk_a"))
