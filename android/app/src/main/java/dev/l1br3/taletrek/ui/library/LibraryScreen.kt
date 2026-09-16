@@ -17,8 +17,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -31,6 +33,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -81,6 +84,7 @@ fun LibraryScreen(
     val importUi by importViewModel.ui.collectAsState()
     val synthState by SynthService.active.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    var searchOpen by remember { mutableStateOf(false) }
 
     // Terminal convert feedback (Done/Failed/Cancelled) lingers as a
     // dismissible card; the flag resets when the next job starts.
@@ -168,6 +172,20 @@ fun LibraryScreen(
                 title = { Text("Library") },
                 actions = {
                     IconButton(
+                        onClick = {
+                            // Collapsing the search restores the full shelf.
+                            if (searchOpen) viewModel.onQueryChange("")
+                            searchOpen = !searchOpen
+                        },
+                        modifier =
+                            Modifier.semantics { contentDescription = "Search your books" },
+                    ) {
+                        Icon(
+                            if (searchOpen) Icons.Default.Close else Icons.Default.Search,
+                            contentDescription = null,
+                        )
+                    }
+                    IconButton(
                         onClick = onOpenVoices,
                         modifier =
                             Modifier.semantics { contentDescription = "Manage voices" },
@@ -183,6 +201,23 @@ fun LibraryScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // The live search row — pinned under the bar, ephemeral state.
+            if (searchOpen) {
+                OutlinedTextField(
+                    value = ui.query,
+                    onValueChange = viewModel::onQueryChange,
+                    singleLine = true,
+                    placeholder = { Text("Search your books") },
+                    trailingIcon = {
+                        if (ui.query.isNotEmpty()) {
+                            IconButton(onClick = { viewModel.onQueryChange("") }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear search")
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             // The in-page convert surface — pinned above the body in
             // EVERY state (empty first-run library included), not just
             // the notification's shade. Running phases always show;
@@ -232,6 +267,20 @@ fun LibraryScreen(
                         }
                     }
                 }
+                ui.visible.isEmpty() -> {
+                    // A full shelf filtered down to nothing — distinct from
+                    // the first-run state above.
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "No books match \"${ui.query.trim()}\".",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 else -> {
                     LazyColumn(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -247,7 +296,7 @@ fun LibraryScreen(
                                 )
                             }
                         }
-                        items(ui.books, key = { it.bookId }) { book ->
+                        items(ui.visible, key = { it.bookId }) { book ->
                             BookRow(
                                 book = book,
                                 onOpen = { onOpenBook(book) },

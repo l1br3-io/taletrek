@@ -22,7 +22,23 @@ data class LibraryUiState(
     val skipped: Int = 0,
     val importError: String? = null,
     val pendingDelete: BookShelf? = null,
-)
+    val query: String = "",
+) {
+    /**
+     * The shelf through the search filter — blank query = everything;
+     * otherwise a case-insensitive substring match on title + author.
+     * Ephemeral by design: derived from [books], never persisted.
+     */
+    val visible: List<BookShelf>
+        get() {
+            val q = query.trim()
+            if (q.isEmpty()) return books
+            return books.filter { book ->
+                book.title.contains(q, ignoreCase = true) ||
+                    book.author?.contains(q, ignoreCase = true) == true
+            }
+        }
+}
 
 /**
  * List-state owner: scans on start, drives import/delete through the
@@ -62,6 +78,11 @@ class LibraryViewModel(
 
     fun dismissImportError() {
         _ui.update { it.copy(importError = null) }
+    }
+
+    /** The search text changed — the visible list re-derives live. */
+    fun onQueryChange(query: String) {
+        _ui.update { it.copy(query = query) }
     }
 
     /**

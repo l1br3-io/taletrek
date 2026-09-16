@@ -117,6 +117,90 @@ class LibraryViewModelTest {
             assertEquals(listOf(book), repo.deleted)
         }
 
+    @Test
+    fun blankQueryShowsEverything() =
+        runTest(dispatcher) {
+            repo.emit(LibraryState(books = listOf(shelf("bk_a"), shelf("bk_b"))))
+            advanceUntilIdle()
+            assertEquals(2, vm.ui.value.visible.size)
+        }
+
+    @Test
+    fun queryFiltersByTitleCaseInsensitively() =
+        runTest(dispatcher) {
+            repo.emit(LibraryState(books = listOf(shelf("bk_a"), shelf("bk_b"))))
+            advanceUntilIdle()
+
+            vm.onQueryChange("TITLE BK_B")
+            advanceUntilIdle()
+            assertEquals(listOf(shelf("bk_b")), vm.ui.value.visible)
+            // The shelf itself is untouched — the filter is derived.
+            assertEquals(2, vm.ui.value.books.size)
+        }
+
+    @Test
+    fun queryFiltersByAuthorCaseInsensitively() =
+        runTest(dispatcher) {
+            val byAusten = shelf("bk_a").copy(author = "Jane Austen")
+            val byJoyce = shelf("bk_b").copy(author = "James Joyce")
+            repo.emit(LibraryState(books = listOf(byAusten, byJoyce)))
+            advanceUntilIdle()
+
+            vm.onQueryChange("austen")
+            advanceUntilIdle()
+            assertEquals(listOf(byAusten), vm.ui.value.visible)
+        }
+
+    @Test
+    fun clearingTheQueryRestoresTheFullShelf() =
+        runTest(dispatcher) {
+            repo.emit(LibraryState(books = listOf(shelf("bk_a"), shelf("bk_b"))))
+            advanceUntilIdle()
+
+            vm.onQueryChange("bk_a")
+            advanceUntilIdle()
+            assertEquals(1, vm.ui.value.visible.size)
+
+            vm.onQueryChange("")
+            advanceUntilIdle()
+            assertEquals(2, vm.ui.value.visible.size)
+        }
+
+    @Test
+    fun aQueryMatchingNothingLeavesAnEmptyVisibleListOnAFullShelf() =
+        runTest(dispatcher) {
+            repo.emit(LibraryState(books = listOf(shelf("bk_a"))))
+            advanceUntilIdle()
+
+            vm.onQueryChange("zzz-no-match")
+            advanceUntilIdle()
+            val ui = vm.ui.value
+            assertTrue(ui.visible.isEmpty())
+            assertFalse(ui.books.isEmpty())
+        }
+
+    @Test
+    fun retypingReDerivesTheVisibleListLive() =
+        runTest(dispatcher) {
+            val a = shelf("bk_alpha")
+            val b = shelf("bk_beta")
+            val c = shelf("bk_gamma")
+            repo.emit(LibraryState(books = listOf(a, b, c)))
+            advanceUntilIdle()
+
+            vm.onQueryChange("a")
+            advanceUntilIdle()
+            assertEquals(3, vm.ui.value.visible.size)
+
+            vm.onQueryChange("al")
+            advanceUntilIdle()
+            assertEquals(listOf(a), vm.ui.value.visible)
+
+            vm.onQueryChange("gam")
+            advanceUntilIdle()
+            assertEquals(listOf(c), vm.ui.value.visible)
+        }
+
     private fun shelf(id: String) =
         BookShelf(
             bookId = id,
