@@ -18,6 +18,7 @@
 mod book;
 mod decode;
 mod error;
+mod export;
 mod pipeline;
 mod player;
 mod voices;
@@ -25,6 +26,7 @@ mod voices;
 pub use book::{open_book, read_segment, FfiBook, FfiChapter, FfiParagraph};
 pub use decode::{decode_segment, FfiDecodedAudio};
 pub use error::FfiError;
+pub use export::export_merged_audio;
 pub use pipeline::{
     FfiPipelineConfig, FfiPipelineEvent, FfiPipelineOutcome, FfiPipelinePhase,
     FfiPipelineSetupError, FfiPipelineState, PipelineHandle, PipelineObserver,

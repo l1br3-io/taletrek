@@ -723,6 +723,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_decode_segment(
     ): Int
+    external fun uniffi_taletrek_ffi_checksum_func_export_merged_audio(
+    ): Int
     external fun uniffi_taletrek_ffi_checksum_func_position_storage_key(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_cached_voice_ids(
@@ -813,6 +815,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_decode_segment(`path`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_taletrek_ffi_fn_func_export_merged_audio(`bundlePath`: RustBuffer.ByValue,`destPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
     external fun uniffi_taletrek_ffi_fn_func_position_storage_key(`bookId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_cached_voice_ids(`cacheDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -951,6 +955,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_func_decode_segment() != 39744) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_func_export_merged_audio() != 4283) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_func_position_storage_key() != 1146) {
@@ -2110,6 +2117,11 @@ data class FfiBook (
     var `title`: kotlin.String
     , 
     /**
+     * Author, when the manifest knows one (library search matches on it).
+     */
+    var `author`: kotlin.String?
+    , 
+    /**
      * The voice the manifest advertises (`book.voiceId`) — what a later
      * re-voice would replace; the pipeline's import flow surfaces it.
      */
@@ -2142,6 +2154,7 @@ public object FfiConverterTypeFfiBook: FfiConverterRustBuffer<FfiBook> {
         return FfiBook(
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterSequenceTypeFfiChapter.read(buf),
@@ -2151,6 +2164,7 @@ public object FfiConverterTypeFfiBook: FfiConverterRustBuffer<FfiBook> {
     override fun allocationSize(value: FfiBook) = (
             FfiConverterString.allocationSize(value.`bookId`) +
             FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterOptionalString.allocationSize(value.`author`) +
             FfiConverterString.allocationSize(value.`voiceId`) +
             FfiConverterBoolean.allocationSize(value.`audioPresent`) +
             FfiConverterSequenceTypeFfiChapter.allocationSize(value.`chapters`)
@@ -2159,6 +2173,7 @@ public object FfiConverterTypeFfiBook: FfiConverterRustBuffer<FfiBook> {
     override fun write(value: FfiBook, buf: ByteBuffer) {
             FfiConverterString.write(value.`bookId`, buf)
             FfiConverterString.write(value.`title`, buf)
+            FfiConverterOptionalString.write(value.`author`, buf)
             FfiConverterString.write(value.`voiceId`, buf)
             FfiConverterBoolean.write(value.`audioPresent`, buf)
             FfiConverterSequenceTypeFfiChapter.write(value.`chapters`, buf)
@@ -2956,6 +2971,22 @@ sealed class FfiException: kotlin.Exception() {
             get() = "detail=${ `detail` }"
     }
     
+    /**
+     * A whole-book audio merge (export) failed: the bundle is text-only,
+     * its codec is not Opus, or a segment's OGG payload is malformed —
+     * the host surfaces this as "export failed" copy, never a crash.
+     */
+    class MergeFailed(
+        
+        /**
+         * The underlying merge failure, one sentence.
+         */
+        val `detail`: kotlin.String
+        ) : FfiException() {
+        override val message
+            get() = "detail=${ `detail` }"
+    }
+    
 
     
 
@@ -3002,6 +3033,9 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 FfiConverterULong.read(buf),
                 )
             9 -> FfiException.DecodeFailed(
+                FfiConverterString.read(buf),
+                )
+            10 -> FfiException.MergeFailed(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
@@ -3057,6 +3091,11 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 4UL
                 + FfiConverterString.allocationSize(value.`detail`)
             )
+            is FfiException.MergeFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`detail`)
+            )
         }
     }
 
@@ -3106,6 +3145,11 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
             }
             is FfiException.DecodeFailed -> {
                 buf.putInt(9)
+                FfiConverterString.write(value.`detail`, buf)
+                Unit
+            }
+            is FfiException.MergeFailed -> {
+                buf.putInt(10)
                 FfiConverterString.write(value.`detail`, buf)
                 Unit
             }
@@ -4615,6 +4659,26 @@ public object FfiConverterSequenceTypeFfiVoice: FfiConverterRustBuffer<List<FfiV
         
         FfiConverterString.lower(`path`),
         FfiConverterString.lower(`key`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Merge the whole book's audio at `bundle_path` into one gapless OGG
+         * Opus file at `dest_path` (created/truncated by the call — hosts own
+         * choosing a location under their cache dir). Returns the number of
+         * distinct segments merged. A text-only bundle, a non-Opus codec, or a
+         * corrupt segment fails as [`FfiError::MergeFailed`], never a panic.
+         */
+    @Throws(FfiException::class) fun `exportMergedAudio`(`bundlePath`: kotlin.String, `destPath`: kotlin.String): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_export_merged_audio(
+    
+        
+        FfiConverterString.lower(`bundlePath`),
+        FfiConverterString.lower(`destPath`),_status)
 }
     )
     }

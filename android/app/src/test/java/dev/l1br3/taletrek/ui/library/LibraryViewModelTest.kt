@@ -20,6 +20,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.File
 
 /**
  * The library's list-state logic over a faked repo seam — the JVM half
@@ -120,6 +121,7 @@ class LibraryViewModelTest {
         BookShelf(
             bookId = id,
             title = "Title $id",
+            author = null,
             chapterCount = 2,
             audioPresent = true,
             path = "/books/$id.taletrek",
@@ -130,7 +132,7 @@ class LibraryViewModelTest {
         override val state = _state.asStateFlow()
 
         var nextImport: ImportOutcome =
-            ImportOutcome.Imported(BookShelf("bk_x", "X", 1, false, "/books/bk_x.taletrek"))
+            ImportOutcome.Imported(BookShelf("bk_x", "X", null, 1, false, "/books/bk_x.taletrek"))
         val deleted = mutableListOf<BookShelf>()
 
         fun emit(state: LibraryState) {
@@ -144,5 +146,7 @@ class LibraryViewModelTest {
         override suspend fun delete(book: BookShelf) {
             deleted += book
         }
+
+        override suspend fun exportAudio(book: BookShelf): File = File("/cache/exports/${book.bookId}.opus")
     }
 }

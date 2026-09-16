@@ -66,6 +66,13 @@ pub enum FfiError {
         /// The underlying decode failure, one sentence.
         detail: String,
     },
+    /// A whole-book audio merge (export) failed: the bundle is text-only,
+    /// its codec is not Opus, or a segment's OGG payload is malformed —
+    /// the host surfaces this as "export failed" copy, never a crash.
+    MergeFailed {
+        /// The underlying merge failure, one sentence.
+        detail: String,
+    },
 }
 
 impl From<BundleError> for FfiError {
@@ -117,6 +124,7 @@ impl fmt::Display for FfiError {
                 "bundle contents decompress beyond the total budget of {limit} bytes"
             ),
             Self::DecodeFailed { detail } => write!(f, "segment decode failed: {detail}"),
+            Self::MergeFailed { detail } => write!(f, "audio merge failed: {detail}"),
         }
     }
 }

@@ -42,6 +42,8 @@ pub struct FfiBook {
     pub book_id: String,
     /// Book title.
     pub title: String,
+    /// Author, when the manifest knows one (library search matches on it).
+    pub author: Option<String>,
     /// The voice the manifest advertises (`book.voiceId`) — what a later
     /// re-voice would replace; the pipeline's import flow surfaces it.
     pub voice_id: String,
@@ -58,6 +60,7 @@ pub struct FfiBook {
 pub fn open_book(path: String) -> Result<FfiBook, FfiError> {
     let (manifest, chapters) = read_book_metadata(Path::new(&path))?;
     let mut book: FfiBook = BookIndex::new(&manifest, &chapters).into();
+    book.author = manifest.book.author;
     book.voice_id = manifest.book.voice_id;
     Ok(book)
 }
@@ -104,7 +107,8 @@ impl From<BookIndex> for FfiBook {
             book_id: index.book_id,
             title: index.title,
             // Filled by `open_book` from the manifest — `BookIndex` (the
-            // reader core) doesn't carry voice identity.
+            // reader core) doesn't carry voice or author identity.
+            author: None,
             voice_id: String::new(),
             audio_present: index.audio_present,
             chapters: index.chapters.iter().map(flat_chapter).collect(),

@@ -51,12 +51,14 @@ fn err(reason: impl Into<String>) -> SynthError {
 
 /// Merge every audio segment of the `.taletrek` bundle at `bundle_path`,
 /// in reading order, into one gapless OGG Opus file at `dest_path`.
+/// Returns the number of distinct segments merged (the reading-order walk,
+/// post-dedup) — hosts surface it as progress proof, tests as a sanity count.
 ///
 /// `TITLE` (and `ARTIST`, when the manifest knows the author) are stamped
 /// into the `OpusTags` so external players label the file. Fails with
 /// [`SynthError::Merge`] for text-only bundles, non-Opus codecs, missing
 /// segments, and malformed/truncated segment payloads.
-pub fn merge_bundle_audio(bundle_path: &Path, dest_path: &Path) -> Result<(), SynthError> {
+pub fn merge_bundle_audio(bundle_path: &Path, dest_path: &Path) -> Result<u32, SynthError> {
     let (manifest, chapters) =
         read_book_metadata(bundle_path).map_err(|e| err(format!("read bundle: {e}")))?;
     if !manifest.audio.present {
@@ -135,7 +137,7 @@ pub fn merge_bundle_audio(bundle_path: &Path, dest_path: &Path) -> Result<(), Sy
     wtr.into_inner()
         .flush()
         .map_err(|e| err(format!("flush output: {e}")))?;
-    Ok(())
+    Ok(u32::try_from(keys.len()).unwrap_or(u32::MAX))
 }
 
 /// One demuxed segment: `(OpusHead bytes, preskip, (payload, page-granule) audio packets)`.

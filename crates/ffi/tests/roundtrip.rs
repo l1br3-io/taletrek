@@ -77,6 +77,12 @@ fn open_book_flags_a_text_only_bundle() {
 }
 
 #[test]
+fn open_book_round_trips_the_author() {
+    let book = open_book(FULL.to_owned()).expect("fixture opens");
+    assert_eq!(book.author.as_deref(), Some("Fixture Generator"));
+}
+
+#[test]
 fn open_book_maps_a_missing_file_to_the_io_error() {
     let err = open_book("/nonexistent-taletrek-ffi-test/bundle.taletrek".to_owned())
         .expect_err("missing file must fail");
