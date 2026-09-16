@@ -126,6 +126,7 @@ Full detail lives in [`docs/gotchas.md`](docs/gotchas.md) — **read the relevan
 27. **Bundle import loads whole archive into memory (jszip)** — [`G27`](docs/gotchas.md#g27)
 28. **`sourceFormat: "unknown"` maps to `'txt'` on import** — [`G28`](docs/gotchas.md#g28)
 30. **Clean-idempotence is a cross-app invariant — parse output must survive the reader's `cleanChapters` unchanged** — [`G30`](docs/gotchas.md#g30)
+31. **CDN-dependent instrumented tests need the emulator booted with `-dns-server`** — [`G31`](docs/gotchas.md#g31)
 
 ## How to resume (in a new session)
 
