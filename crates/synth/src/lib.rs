@@ -17,6 +17,8 @@
 pub mod bundle;
 pub mod cache_key;
 pub mod encode;
+#[cfg(feature = "native-encode")]
+pub mod merge;
 pub mod normalize;
 #[cfg(feature = "native-encode")]
 pub mod opus_native;
@@ -52,6 +54,8 @@ pub use synth::{
     synthesize_paragraph, PiperRunner, SubprocessPiperRunner, SynthError, SynthOptions, SynthOutput,
 };
 
+#[cfg(feature = "native-encode")]
+pub use merge::merge_bundle_audio;
 #[cfg(feature = "native-encode")]
 pub use opus_native::NativeOpusEncoder;
 #[cfg(feature = "sherpa")]

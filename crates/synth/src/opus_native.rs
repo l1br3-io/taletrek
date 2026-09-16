@@ -242,7 +242,7 @@ impl Encoder for NativeOpusEncoder {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::f64::consts::PI;
     use std::process::{Command, Stdio};
 
@@ -254,7 +254,7 @@ mod tests {
 
     /// Canonical 44-byte mono-16-bit WAV around raw PCM at `rate` (the Piper
     /// shape; pcm.rs's test helper is hardcoded to 16 kHz, this one isn't).
-    fn wav_bytes(pcm: &[i16], rate: u32) -> Vec<u8> {
+    pub(crate) fn wav_bytes(pcm: &[i16], rate: u32) -> Vec<u8> {
         let data_len = u32::try_from(pcm.len() * 2).unwrap();
         let mut out = Vec::with_capacity(44 + data_len as usize);
         out.extend_from_slice(b"RIFF");
@@ -278,7 +278,7 @@ mod tests {
 
     /// `secs` of a `freq` Hz sine at `rate`, amplitude 0.4 — deterministic
     /// signal the round-trip can verify by zero-crossing count.
-    fn sine(rate: u32, secs: f64, freq: f64) -> Vec<i16> {
+    pub(crate) fn sine(rate: u32, secs: f64, freq: f64) -> Vec<i16> {
         let total = (f64::from(rate) * secs).round() as usize;
         (0..total)
             .map(|i| {
@@ -290,7 +290,7 @@ mod tests {
 
     /// Demux + decode OGG/Opus back to PCM at `rate` (mono). Skips headers;
     /// asserts the first packet really is an OpusHead. Returns the samples.
-    fn decode_ogg(bytes: &[u8], rate: u32) -> Vec<i16> {
+    pub(crate) fn decode_ogg(bytes: &[u8], rate: u32) -> Vec<i16> {
         let mut rdr = PacketReader::new(std::io::Cursor::new(bytes));
         let mut dec = opus::Decoder::new(rate, Channels::Mono).expect("decoder create");
         let mut pcm = Vec::new();
