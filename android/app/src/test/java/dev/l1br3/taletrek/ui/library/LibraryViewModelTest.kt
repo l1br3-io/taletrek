@@ -4,6 +4,7 @@ import dev.l1br3.taletrek.data.BookShelf
 import dev.l1br3.taletrek.data.BooksRepo
 import dev.l1br3.taletrek.data.ImportOutcome
 import dev.l1br3.taletrek.data.LibraryState
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.io.IOException
 
 /**
  * The library's list-state logic over a faked repo seam — the JVM half
@@ -201,6 +203,52 @@ class LibraryViewModelTest {
             assertEquals(listOf(c), vm.ui.value.visible)
         }
 
+    @Test
+    fun aFinishedExportHandsTheFileToTheScreenAndClearsTheTransientState() =
+        runTest(dispatcher) {
+            var handed: File? = null
+            vm.onExportAudio(shelf("bk_a")) { handed = it }
+            advanceUntilIdle()
+            assertEquals("/cache/exports/bk_a.opus", handed?.path)
+            assertNull(vm.ui.value.exporting)
+        }
+
+    @Test
+    fun preparingAudioBlocksDoubleTaps() =
+        runTest(dispatcher) {
+            val book = shelf("bk_a")
+            val gate = CompletableDeferred<Unit>()
+            repo.exportDelay = gate
+            var ready = 0
+
+            vm.onExportAudio(book) { ready++ }
+            vm.onExportAudio(book) { ready++ }
+            advanceUntilIdle()
+            assertEquals(1, repo.exports.size)
+            assertEquals(book, vm.ui.value.exporting)
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(1, ready)
+            assertNull(vm.ui.value.exporting)
+        }
+
+    @Test
+    fun aFailedExportSurfacesAnErrorAndClearsTheTransientState() =
+        runTest(dispatcher) {
+            repo.exportResult = Result.failure(IOException("merge failed: text-only"))
+            var ready = 0
+
+            vm.onExportAudio(shelf("bk_a")) { ready++ }
+            advanceUntilIdle()
+            assertEquals(0, ready)
+            assertEquals("merge failed: text-only", vm.ui.value.exportError)
+            assertNull(vm.ui.value.exporting)
+
+            vm.dismissExportError()
+            assertNull(vm.ui.value.exportError)
+        }
+
     private fun shelf(id: String) =
         BookShelf(
             bookId = id,
@@ -219,6 +267,12 @@ class LibraryViewModelTest {
             ImportOutcome.Imported(BookShelf("bk_x", "X", null, 1, false, "/books/bk_x.taletrek"))
         val deleted = mutableListOf<BookShelf>()
 
+        // Export controls: a gate for determinism, an override result
+        // (unset = the canonical exports/ path for the book).
+        var exportDelay: CompletableDeferred<Unit>? = null
+        var exportResult: Result<File>? = null
+        val exports = mutableListOf<BookShelf>()
+
         fun emit(state: LibraryState) {
             _state.value = state
         }
@@ -231,6 +285,11 @@ class LibraryViewModelTest {
             deleted += book
         }
 
-        override suspend fun exportAudio(book: BookShelf): File = File("/cache/exports/${book.bookId}.opus")
+        override suspend fun exportAudio(book: BookShelf): File {
+            exports += book
+            exportDelay?.await()
+            return exportResult?.getOrElse { throw it }
+                ?: File("/cache/exports/${book.bookId}.opus")
+        }
     }
 }

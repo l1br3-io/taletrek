@@ -55,12 +55,16 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.l1br3.taletrek.data.BookShelf
+import dev.l1br3.taletrek.data.ExportFiles
+import dev.l1br3.taletrek.data.ExportKind
 import dev.l1br3.taletrek.data.PickedLane
 import dev.l1br3.taletrek.data.SourceImport
 import dev.l1br3.taletrek.service.SynthService
 import dev.l1br3.taletrek.service.SynthUiState
 import dev.l1br3.taletrek.service.isRunningPhase
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.IOException
 
 /**
  * The app's front door: every book the kernel can read out of
@@ -128,6 +132,47 @@ fun LibraryScreen(
         }
     }
 
+    // Save flows: CreateDocument pickers registered once; the pending
+    // target is remembered so the callback knows what to stream where.
+    var saveBundleTarget by remember { mutableStateOf<BookShelf?>(null) }
+    var saveAudioTarget by remember { mutableStateOf<Pair<BookShelf, File>?>(null) }
+
+    val saveBundleLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ExportKind.BUNDLE.mime)) { uri ->
+            val book = saveBundleTarget
+            saveBundleTarget = null
+            if (uri != null && book != null) {
+                scope.launch {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            File(book.path).inputStream().use { it.copyTo(out) }
+                        } ?: throw IOException("could not open the chosen location")
+                    } catch (e: Exception) {
+                        viewModel.onExportFailed(e.message ?: e.javaClass.simpleName)
+                    }
+                }
+            }
+        }
+    val saveAudioLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ExportKind.AUDIO.mime)) { uri ->
+            val target = saveAudioTarget
+            saveAudioTarget = null
+            if (uri != null && target != null) {
+                val (_, temp) = target
+                scope.launch {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            temp.inputStream().use { it.copyTo(out) }
+                        } ?: throw IOException("could not open the chosen location")
+                        temp.delete()
+                    } catch (e: Exception) {
+                        temp.delete()
+                        viewModel.onExportFailed(e.message ?: e.javaClass.simpleName)
+                    }
+                }
+            }
+        }
+
     // Convert-from-open: a source-document VIEW/OPEN_WITH intent.
     LaunchedEffect(pendingSourceUri) {
         pendingSourceUri?.let {
@@ -141,6 +186,14 @@ fun LibraryScreen(
         ui.importError?.let {
             snackbarHostState.showSnackbar("Couldn't import: $it")
             viewModel.dismissImportError()
+        }
+    }
+
+    // Export failures (merge or save-copy) surface the same way.
+    LaunchedEffect(ui.exportError) {
+        ui.exportError?.let {
+            snackbarHostState.showSnackbar("Couldn't export: $it")
+            viewModel.dismissExportError()
         }
     }
 
@@ -299,8 +352,45 @@ fun LibraryScreen(
                         items(ui.visible, key = { it.bookId }) { book ->
                             BookRow(
                                 book = book,
+                                preparingAudio = ui.exporting == book,
                                 onOpen = { onOpenBook(book) },
                                 onRequestDelete = { viewModel.requestDelete(book) },
+                                onShareBundle = {
+                                    context.startActivity(
+                                        ExportFiles.shareIntent(
+                                            context,
+                                            File(book.path),
+                                            ExportKind.BUNDLE.mime,
+                                            "Share \"${book.title}\"",
+                                        ),
+                                    )
+                                },
+                                onSaveBundle = {
+                                    saveBundleTarget = book
+                                    saveBundleLauncher.launch(
+                                        ExportFiles.suggestedFileName(book.bookId, book.title, ExportKind.BUNDLE),
+                                    )
+                                },
+                                onShareAudio = {
+                                    viewModel.onExportAudio(book) { file ->
+                                        context.startActivity(
+                                            ExportFiles.shareIntent(
+                                                context,
+                                                file,
+                                                ExportKind.AUDIO.mime,
+                                                "Share \"${book.title}\" (audio)",
+                                            ),
+                                        )
+                                    }
+                                },
+                                onSaveAudio = {
+                                    viewModel.onExportAudio(book) { file ->
+                                        saveAudioTarget = book to file
+                                        saveAudioLauncher.launch(
+                                            ExportFiles.suggestedFileName(book.bookId, book.title, ExportKind.AUDIO),
+                                        )
+                                    }
+                                },
                             )
                         }
                     }
@@ -408,8 +498,13 @@ private fun ConvertProgressCard(
 @Composable
 private fun BookRow(
     book: BookShelf,
+    preparingAudio: Boolean,
     onOpen: () -> Unit,
     onRequestDelete: () -> Unit,
+    onShareBundle: () -> Unit,
+    onSaveBundle: () -> Unit,
+    onShareAudio: () -> Unit,
+    onSaveAudio: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     ListItem(
@@ -426,6 +521,50 @@ private fun BookRow(
                     Icon(Icons.Default.MoreVert, contentDescription = "Book actions")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Share bundle") },
+                        onClick = {
+                            menuOpen = false
+                            onShareBundle()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Save bundle") },
+                        onClick = {
+                            menuOpen = false
+                            onSaveBundle()
+                        },
+                    )
+                    if (book.audioPresent) {
+                        if (preparingAudio) {
+                            // Transient merge state — visible but inert.
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "Preparing audio…",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                },
+                                onClick = {},
+                                enabled = false,
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text("Share audio") },
+                                onClick = {
+                                    menuOpen = false
+                                    onShareAudio()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Save audio") },
+                                onClick = {
+                                    menuOpen = false
+                                    onSaveAudio()
+                                },
+                            )
+                        }
+                    }
                     DropdownMenuItem(
                         text = { Text("Delete") },
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },

@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 
 /** The library screen's render state — Compose renders this, nothing else. */
 data class LibraryUiState(
@@ -23,6 +24,8 @@ data class LibraryUiState(
     val importError: String? = null,
     val pendingDelete: BookShelf? = null,
     val query: String = "",
+    val exporting: BookShelf? = null,
+    val exportError: String? = null,
 ) {
     /**
      * The shelf through the search filter — blank query = everything;
@@ -83,6 +86,38 @@ class LibraryViewModel(
     /** The search text changed — the visible list re-derives live. */
     fun onQueryChange(query: String) {
         _ui.update { it.copy(query = query) }
+    }
+
+    /**
+     * Prepare the merged whole-book audio (I/O-bound, seconds) and hand
+     * the finished file to the screen for share/save. While preparing,
+     * [LibraryUiState.exporting] names the book — further export calls
+     * are dropped, so double-taps can't stack merges.
+     */
+    fun onExportAudio(
+        book: BookShelf,
+        onReady: (File) -> Unit,
+    ) {
+        if (_ui.value.exporting != null) return
+        _ui.update { it.copy(exporting = book, exportError = null) }
+        viewModelScope.launch {
+            try {
+                val file = repo.exportAudio(book)
+                _ui.update { it.copy(exporting = null) }
+                onReady(file)
+            } catch (e: Exception) {
+                onExportFailed(e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    /** An export failure (merge or save-copy) — surfaces via the snackbar. */
+    fun onExportFailed(message: String) {
+        _ui.update { it.copy(exporting = null, exportError = message) }
+    }
+
+    fun dismissExportError() {
+        _ui.update { it.copy(exportError = null) }
     }
 
     /**

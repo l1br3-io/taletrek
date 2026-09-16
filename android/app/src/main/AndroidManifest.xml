@@ -72,6 +72,20 @@
             android:name=".service.SynthService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Export sharing: content:// URIs over filesDir/books (share a
+             .taletrek bundle in place) and cacheDir/exports (merged audio).
+             Receivers get a runtime grant via FLAG_GRANT_READ_URI_PERMISSION
+             — no storage permissions involved. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="dev.l1br3.taletrek.export"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
     </application>
 
 </manifest>
