@@ -24,16 +24,16 @@ mod player;
 mod voices;
 
 pub use book::{
-    open_book, read_segment, read_segment_progressive, FfiBook, FfiChapter, FfiParagraph,
-    FfiSegmentStatus,
+    open_book, read_segment, read_segment_progressive, set_segment_store, FfiBook, FfiChapter,
+    FfiParagraph, FfiSegmentStatus,
 };
 pub use decode::{decode_segment, FfiDecodedAudio};
 pub use error::FfiError;
 pub use export::export_merged_audio;
 pub use pipeline::{
-    FfiAnchor, FfiProgressiveConfig,
-    FfiPipelineConfig, FfiPipelineEvent, FfiPipelineOutcome, FfiPipelinePhase,
-    FfiPipelineSetupError, FfiPipelineState, PipelineHandle, PipelineObserver,
+    FfiAnchor, FfiPipelineConfig, FfiPipelineEvent, FfiPipelineOutcome, FfiPipelinePhase,
+    FfiPipelineSetupError, FfiPipelineState, FfiProgressiveConfig, PipelineHandle,
+    PipelineObserver,
 };
 pub use player::{
     position_storage_key, FfiFailureLog, FfiParagraphPos, FfiPlayerAction, FfiPlayerEvent,

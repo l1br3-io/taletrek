@@ -765,6 +765,10 @@ mod tests {
 
     // ---- progressive surface (progressive-synth task 008) ----
 
+    /// The store-registration tests mutate a process global — serialize
+    /// them against each other (std Mutex guard, no new deps).
+    static STORE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// A slow stub: 31 s of PCM per segment with a 10 ms predict delay —
     /// long enough to trip PLAYABLE_SECONDS, slow enough for the test to
     /// catch the text bundle mid-run.
@@ -841,6 +845,7 @@ mod tests {
 
     #[test]
     fn read_segment_progressive_distinguishes_not_ready_ready_and_missing() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         seed_voice_cache(dir.path());
 
@@ -913,6 +918,133 @@ mod tests {
             .unwrap(),
             crate::FfiSegmentStatus::Missing
         );
+    }
+
+    #[test]
+    fn read_segment_progressive_serves_landed_segments_from_a_registered_store() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        seed_voice_cache(dir.path());
+
+        // A text-only bundle: the filling book, made deterministically.
+        let text_handle = Arc::new(PipelineHandle::new(config(dir.path(), true)));
+        let state = {
+            let observer = Arc::new(RecordingObserver::default());
+            Arc::clone(&text_handle)
+                .start_with_factory(Box::new(ArcObserver(Arc::clone(&observer))), stub_factory())
+                .expect("start");
+            wait_for_terminal(&text_handle)
+        };
+        let FfiPipelineState::Finished(outcome) = state else {
+            panic!("expected Finished, got {state:?}");
+        };
+        assert!(outcome.text_only);
+
+        let bundle_path = std::path::PathBuf::from(&outcome.bundle_path);
+        let (manifest, chapters) = taletrek_synth::read_book_metadata(&bundle_path).unwrap();
+        assert!(!manifest.audio.present);
+        let key = taletrek_synth::cache_key(&manifest.book.voice_id, &chapters[0].paragraphs[0]);
+
+        // No registered store (and a text-only bundle): expected → NotReady.
+        crate::set_segment_store(None);
+        assert_eq!(
+            crate::read_segment_progressive(bundle_path.display().to_string(), key.clone())
+                .unwrap(),
+            crate::FfiSegmentStatus::NotReady
+        );
+
+        // A registered store holding the key serves it: Ready, verbatim.
+        let store_dir = dir.path().join("segments");
+        let store = taletrek_worker::store::SegmentStore::open(&store_dir).unwrap();
+        store
+            .put(&taletrek_synth::bundle::AudioSegment {
+                key: key.clone(),
+                codec: taletrek_synth::bundle::AudioCodec::Wav,
+                bytes: b"RIFF-store".to_vec(),
+            })
+            .unwrap();
+        crate::set_segment_store(Some(store_dir.display().to_string()));
+        match crate::read_segment_progressive(bundle_path.display().to_string(), key.clone()) {
+            Ok(crate::FfiSegmentStatus::Ready { bytes, codec }) => {
+                assert_eq!(bytes, b"RIFF-store");
+                assert_eq!(codec, "wav");
+            }
+            other => panic!("expected Ready from the store, got {other:?}"),
+        }
+
+        // A registered store WITHOUT the key is still NotReady — and the
+        // registration resets cleanly.
+        let empty = dir.path().join("empty-store");
+        std::fs::create_dir_all(&empty).unwrap();
+        crate::set_segment_store(Some(empty.display().to_string()));
+        assert_eq!(
+            crate::read_segment_progressive(bundle_path.display().to_string(), key).unwrap(),
+            crate::FfiSegmentStatus::NotReady
+        );
+        crate::set_segment_store(None);
+    }
+
+    #[test]
+    fn text_only_books_become_playable_when_a_store_is_registered() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        seed_voice_cache(dir.path());
+
+        let text_handle = Arc::new(PipelineHandle::new(config(dir.path(), true)));
+        let state = {
+            let observer = Arc::new(RecordingObserver::default());
+            Arc::clone(&text_handle)
+                .start_with_factory(Box::new(ArcObserver(Arc::clone(&observer))), stub_factory())
+                .expect("start");
+            wait_for_terminal(&text_handle)
+        };
+        let FfiPipelineState::Finished(outcome) = state else {
+            panic!("expected Finished, got {state:?}");
+        };
+
+        let book = crate::open_book(outcome.bundle_path.clone()).unwrap();
+        assert!(!book.audio_present);
+
+        // Without a registered store the sequencer rests: text-only
+        // absorbs every event (the desktop-import contract).
+        crate::set_segment_store(None);
+        let resting = crate::TrekPlayer::new(book.clone());
+        assert_eq!(
+            resting.tick(crate::FfiPlayerEvent::Play),
+            crate::FfiPlayerAction::None
+        );
+
+        // A registered store upgrades the book to playable — the store
+        // supplies the audio the manifest doesn't (filling books).
+        let store_dir = dir.path().join("segments");
+        std::fs::create_dir_all(&store_dir).unwrap();
+        crate::set_segment_store(Some(store_dir.display().to_string()));
+        let playing = crate::TrekPlayer::new(book.clone());
+        let expected = book.chapters[0].paragraphs[0].segment_key.clone();
+        assert_eq!(
+            playing.tick(crate::FfiPlayerEvent::Play),
+            crate::FfiPlayerAction::LoadSegment {
+                key: expected,
+                offset: 0.0
+            }
+        );
+
+        // The restore constructor upgrades the same way (a filling
+        // session resumes where it left off).
+        let restored = crate::TrekPlayer::restore(
+            book,
+            crate::FfiPosition {
+                chapter: 0,
+                index: 1,
+                offset: 0.0,
+            },
+        );
+        assert!(matches!(
+            restored.tick(crate::FfiPlayerEvent::Play),
+            crate::FfiPlayerAction::LoadSegment { .. }
+        ));
+
+        crate::set_segment_store(None);
     }
 
     #[test]

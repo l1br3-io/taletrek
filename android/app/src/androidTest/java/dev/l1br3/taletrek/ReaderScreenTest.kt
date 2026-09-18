@@ -67,8 +67,10 @@ class ReaderScreenTest {
         rule.onNodeWithText("Now reading").assertIsDisplayed()
 
         // Jumping via the current row leaves the stored position where
-        // the class's order-independence expects it.
-        rule.onNodeWithText("Chapter One").performClick()
+        // the class's order-independence expects it. The marker text is
+        // the unambiguous handle — the chapter title itself matches the
+        // pane header behind the sheet too.
+        rule.onNodeWithText("Now reading").performClick()
         rule.waitUntil(TIMEOUT_MS) {
             rule.onAllNodesWithText("Hello world.", substring = true).fetchSemanticsNodes().isNotEmpty()
         }

@@ -150,7 +150,7 @@ impl TrekPlayer {
     #[uniffi::constructor]
     pub fn new(book: FfiBook) -> Self {
         Self {
-            book: book_index_from(&book),
+            book: playable_index(&book),
             state: Mutex::new(PlayerState::idle()),
         }
     }
@@ -161,7 +161,7 @@ impl TrekPlayer {
     /// the book seeds fresh idle — no phantom resume.
     #[uniffi::constructor]
     pub fn restore(book: FfiBook, position: FfiPosition) -> Self {
-        let index = book_index_from(&book);
+        let index = playable_index(&book);
         let pos = Position::from(position);
         // The one sanctioned branch (restore-validation glue —
         // `position.rs`'s callers-validate contract).
@@ -194,6 +194,18 @@ impl TrekPlayer {
     pub fn position(&self) -> Option<FfiPosition> {
         Position::capture(&self.state.lock().expect("player state lock poisoned")).map(Into::into)
     }
+}
+
+/// The player's view of a book. A text-only bundle whose host registered
+/// a segment store upgrades to playable: the manifest lacks the audio,
+/// the store supplies it (progressive fill). Everything else maps
+/// verbatim.
+fn playable_index(book: &FfiBook) -> BookIndex {
+    let mut index = book_index_from(book);
+    if !index.audio_present && crate::book::segment_store_registered() {
+        index.audio_present = true;
+    }
+    index
 }
 
 /// The per-book storage key for a durable position:

@@ -74,6 +74,12 @@ class HandleSynthEngine(
     ) {
         val h = makeHandle(config)
         handle = h
+        // The progressive read seam serves landed segments from the
+        // store the job fills — registered per process before any read.
+        config.progressive?.let { progressive ->
+            dev.l1br3.taletrek.ffi
+                .setSegmentStore(progressive.storeDir)
+        }
         try {
             h.start(observer)
         } catch (e: FfiPipelineSetupException) {

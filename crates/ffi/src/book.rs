@@ -3,12 +3,33 @@
 //! budgets more than anywhere): segments stream per paragraph via
 //! [`read_segment`].
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use taletrek_reader::{BookIndex, ChapterIndex, ParagraphIndex};
 use taletrek_synth::{read_audio_segment, read_book_metadata};
 
 use crate::error::FfiError;
+
+/// The process-global segment store root — where [`read_segment_progressive`]
+/// serves landed segments for filling (text-only) bundles. The host app
+/// registers the store its pipeline jobs synth into (one store is the
+/// design: content-addressed, shared across books); `None` until then.
+static SEGMENT_STORE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Register (or clear) the segment store the progressive read seam serves
+/// filling books from. Call with the same directory the pipeline's
+/// progressive config carries; `None` unregisters.
+#[uniffi::export]
+pub fn set_segment_store(dir: Option<String>) {
+    *SEGMENT_STORE.lock().expect("segment store mutex") = dir.map(PathBuf::from);
+}
+
+/// Whether a segment store is registered — the host's statement that
+/// filling-book playback is available (the player honors it).
+pub(crate) fn segment_store_registered() -> bool {
+    SEGMENT_STORE.lock().expect("segment store mutex").is_some()
+}
 
 /// One paragraph as foreign callers see it — the reader's
 /// [`ParagraphIndex`] flattened.
@@ -113,14 +134,27 @@ pub fn read_segment_progressive(path: String, key: String) -> Result<FfiSegmentS
         });
     }
     // Text-only (filling): the key is NotReady exactly when the book's own
-    // chapters reference it — the manifest voice namespaces the key.
+    // chapters reference it — the manifest voice namespaces the key. A
+    // landed store segment upgrades the answer to Ready: the reader plays
+    // while the book fills.
     let expected = chapters.iter().any(|ch| {
         ch.paragraphs
             .iter()
             .any(|p| taletrek_synth::cache_key(&manifest.book.voice_id, p) == key)
     });
     Ok(if expected {
-        FfiSegmentStatus::NotReady
+        let store_dir = SEGMENT_STORE.lock().expect("segment store mutex").clone();
+        store_dir
+            .and_then(|dir| {
+                taletrek_worker::SegmentStore::open(&dir)
+                    .ok()
+                    .and_then(|store| store.get(&key).ok().flatten())
+            })
+            .map(|seg| FfiSegmentStatus::Ready {
+                bytes: seg.bytes,
+                codec: seg.codec.ext().to_string(),
+            })
+            .unwrap_or(FfiSegmentStatus::NotReady)
     } else {
         FfiSegmentStatus::Missing
     })

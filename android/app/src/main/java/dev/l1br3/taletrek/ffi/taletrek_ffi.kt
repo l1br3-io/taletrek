@@ -723,6 +723,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_read_segment_progressive(
     ): Int
+    external fun uniffi_taletrek_ffi_checksum_func_set_segment_store(
+    ): Int
     external fun uniffi_taletrek_ffi_checksum_func_decode_segment(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_export_merged_audio(
@@ -821,6 +823,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_read_segment_progressive(`path`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_taletrek_ffi_fn_func_set_segment_store(`dir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_taletrek_ffi_fn_func_decode_segment(`path`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_export_merged_audio(`bundlePath`: RustBuffer.ByValue,`destPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -963,6 +967,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_func_read_segment_progressive() != 64574) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_func_set_segment_store() != 44961) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_func_decode_segment() != 39744) {
@@ -5042,6 +5049,21 @@ public object FfiConverterSequenceTypeFfiVoice: FfiConverterRustBuffer<List<FfiV
 }
     )
     }
+    
+
+        /**
+         * Register (or clear) the segment store the progressive read seam serves
+         * filling books from. Call with the same directory the pipeline's
+         * progressive config carries; `None` unregisters.
+         */ fun `setSegmentStore`(`dir`: kotlin.String?)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_set_segment_store(
+    
+        
+        FfiConverterOptionalString.lower(`dir`),_status)
+}
+    
     
 
         /**

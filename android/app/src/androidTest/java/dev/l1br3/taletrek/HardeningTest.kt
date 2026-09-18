@@ -4,6 +4,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.l1br3.taletrek.ffi.deleteCachedVoice
+import dev.l1br3.taletrek.ffi.openBook
 import dev.l1br3.taletrek.ffi.voiceCatalog
 import dev.l1br3.taletrek.service.SynthJobRequest
 import dev.l1br3.taletrek.service.SynthService
@@ -33,6 +34,13 @@ class HardeningTest {
 
     private fun shelf(name: String): File = File(files, "books/$name").apply { mkdirs() }
 
+    /** A wiped-then-recreated store root (cancel runs must not full-hit). */
+    private fun freshShelf(name: String): File =
+        File(files, "segments/$name").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+
     private fun source(
         name: String,
         paragraphs: Int,
@@ -53,6 +61,7 @@ class HardeningTest {
     private fun request(
         src: File,
         books: File,
+        store: File = File(books, "../segments/${books.name}"),
     ) = SynthJobRequest(
         sourcePath = src.absolutePath,
         hint = src.name,
@@ -60,7 +69,7 @@ class HardeningTest {
         voiceCacheDir = File(files, "voices").path,
         espeakDir = File(files, "espeak-ng-data").path,
         booksDir = books.path,
-        storeDir = File(books, "../segments/${books.name}").path,
+        storeDir = store.path,
         jobs = 2,
         generatorApp = "taletrek-android",
     )
@@ -149,7 +158,10 @@ class HardeningTest {
         runBlocking {
             // Voice must be present so the cancel lands inside synth, not
             // download: warm the cache by a full run first (cache-or-
-            // download; espeak is ensured in-job — no prerequisite).
+            // download; espeak is ensured in-job — no prerequisite). The
+            // cancel run gets a FRESH store — the warmup filled the
+            // shared one, and a full-hit run would seal before the
+            // test ever observes early synth.
             val books = shelf("cancel-synth")
             val src = source("cancel-synth.txt", 12)
             val warmup = startAndAwaitTerminal(request(src, books = books))
@@ -157,7 +169,9 @@ class HardeningTest {
             books.listFiles()!!.forEach { it.delete() }
 
             val before = SynthService.active.value
-            context.startForegroundService(request(src, books = books).toIntent(context))
+            context.startForegroundService(
+                request(src, books = books, store = freshShelf("cancel-synth-store")).toIntent(context),
+            )
             withTimeout(120_000) {
                 SynthService.active.first { it is SynthUiState.Synthesizing && it.done < 6 }
             }
@@ -168,14 +182,19 @@ class HardeningTest {
                         it is SynthUiState.Done || it is SynthUiState.Failed || it is SynthUiState.Cancelled
                     }!!
                 }
-            // A fast emulator may race to Done; the invariant is: no
-            // .tmp, and either a complete book or none at all.
+            // Progressive semantics: the text bundle lands early and a
+            // cancel KEEPS it (plus the reusable store) — the invariant
+            // is no temp files and no book that isn't a valid bundle.
             val listing = books.listFiles()!!.map { it.name }
             assertFalse("orphaned temp files: $listing", listing.any { it.endsWith(".tmp") })
-            if (terminal is SynthUiState.Cancelled) {
-                assertTrue("partial book after mid-synth cancel: $listing", listing.isEmpty())
-            } else {
-                assertEquals(1, listing.size)
+            listing.forEach { name ->
+                val book = openBook(File(books, name).absolutePath)
+                if (terminal is SynthUiState.Cancelled) {
+                    assertFalse(
+                        "a cancelled run keeps at most the text-only bundle: $listing",
+                        book.audioPresent,
+                    )
+                }
             }
         }
 
