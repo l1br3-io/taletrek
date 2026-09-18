@@ -31,12 +31,13 @@ use std::fs::File;
 use std::io::{BufWriter, Cursor, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
 
 use taletrek_parse::{detect_format, parse_source, SourceFormat};
 use taletrek_synth::bundle::manifest::Generator;
+use taletrek_synth::cache_key;
 use taletrek_synth::synth::{PiperRunner, SynthError};
 use taletrek_synth::{write_book_bundle, AudioCodec, BookBundle, BundleWriter, Encoder};
 
@@ -69,7 +70,29 @@ pub enum PipelineVariant {
         /// Curated voice id to resolve and synthesize with.
         voice_id: Option<String>,
     },
+    /// Progressive (progressive-synth): the text-only bundle lands
+    /// **immediately** (playable/importable), synth streams segments into
+    /// the content-addressed [`crate::store::SegmentStore`] at
+    /// `store_dir`, and on drain the book **seals** — segments merge back
+    /// into a standard full bundle that atomically replaces the text one.
+    /// Cancel/crash at any point leaves a valid text bundle + a reusable
+    /// store; re-runs synthesize only missing keys (task 006).
+    Progressive {
+        /// Curated voice id to resolve and synthesize with.
+        voice_id: Option<String>,
+        /// Root dir of the segment store (hosts pass
+        /// `<cache>/taletrek/segments`). Created on demand.
+        store_dir: PathBuf,
+    },
 }
+
+/// Seconds of audio (at the reading-order anchor — book start until task
+/// 007 makes the anchor dynamic) that must exist before the pipeline
+/// reports [`PipelineEvent::Playable`]. Calibrated by the `bench-synth`
+/// baseline (`docs/specs/progressive-synth/bench.md`); 30 s keeps
+/// first-listen well under the spec's ≤ 30 s success bar on warm-voice
+/// hardware.
+pub const PLAYABLE_SECONDS: f64 = 30.0;
 
 /// Everything a job needs, supplied by the host. Paths are explicit — the
 /// job never calls `default_cache_dir()` (Android's `dirs` resolves nothing
@@ -121,12 +144,15 @@ pub type RunnerFactory = Arc<dyn Fn() -> Box<dyn PiperRunner + Send> + Send + Sy
 pub enum PipelinePhase {
     /// Detecting format + parsing source bytes.
     Parsing,
-    /// Resolving/downloading the voice (full variant only).
+    /// Resolving/downloading the voice (full + progressive variants).
     ResolvingVoice,
-    /// Synthesizing paragraphs (full variant only).
+    /// Synthesizing paragraphs (full + progressive variants).
     Synthesizing,
     /// Serializing + atomically writing the bundle.
     Writing,
+    /// Merging store segments into the final full bundle (progressive
+    /// only): the queue drained, the book is sealing.
+    Sealing,
 }
 
 /// What actually happened in a job, for the host's completion UI.
@@ -144,6 +170,9 @@ pub struct PipelineOutcome {
     pub paragraphs: usize,
     /// Distinct audio segments (0 for text-only).
     pub segments: usize,
+    /// `true` when the progressive variant sealed (text bundle replaced by
+    /// the full one). Always `false` for text-only/full.
+    pub sealed: bool,
 }
 
 /// Progress events a job reports. Phase transitions plus the two step
@@ -175,6 +204,14 @@ pub enum PipelineEvent {
         /// Total paragraphs.
         total: usize,
     },
+    /// Progressive only: ≥ [`PLAYABLE_SECONDS`] of audio now exists at the
+    /// anchor (book start) — the host may surface "start listening" now
+    /// while synthesis continues.
+    Playable,
+    /// Progressive only: the queue drained and the sealed full bundle
+    /// atomically replaced the text-only one. Terminal-adjacent (the job
+    /// returns `Ok` immediately after).
+    Sealed,
 }
 
 /// Consumer of [`PipelineEvent`]s. Implemented by hosts (the FFI layer
@@ -205,6 +242,11 @@ pub enum PipelineError {
     /// Acquiring espeak-ng-data failed (download, size band, extraction).
     #[error(transparent)]
     Espeak(#[from] EspeakError),
+    /// The progressive segment store failed (I/O, invalid key, tampered
+    /// file). Text-bundle-early means this never loses the book itself —
+    /// only the reusable audio cache is affected.
+    #[error(transparent)]
+    Store(#[from] crate::store::StoreError),
     /// Synthesis or stamping failed (non-cancel).
     #[error(transparent)]
     Stamp(#[from] StampError),
@@ -375,14 +417,25 @@ impl PipelineJob {
         // Id is derived and fixed BEFORE bundle build — chapter ids embed it.
         let book_id = taletrek_parse::deterministic_book_id(&book);
         let voice = match &spec.variant {
-            PipelineVariant::TextOnly { voice_id } | PipelineVariant::Full { voice_id } => voice_id
+            PipelineVariant::TextOnly { voice_id }
+            | PipelineVariant::Full { voice_id }
+            | PipelineVariant::Progressive { voice_id, .. } => voice_id
                 .clone()
                 .unwrap_or_else(|| DEFAULT_VOICE_ID.to_string()),
         };
         let text_only_bundle = to_text_only(&book, &voice, &spec.generator_app, &book_id);
         let bundle_path = spec.books_dir.join(format!("{book_id}.taletrek"));
 
-        let (segments, was_text_only): (usize, bool) = match spec.variant {
+        // Captured before the consuming variant match (the Progressive arm
+        // needs the store dir plus the spec by reference afterwards).
+        let progressive_cfg = match &spec.variant {
+            PipelineVariant::Progressive { store_dir, .. } => Some(ProgressiveCfg {
+                store_dir: store_dir.clone(),
+            }),
+            _ => None,
+        };
+
+        let (segments, was_text_only, sealed): (usize, bool, bool) = match spec.variant {
             // Text-only: tiny by construction — the in-memory write stays.
             PipelineVariant::TextOnly { .. } => {
                 ensure_not_cancelled(&flag)?;
@@ -392,7 +445,7 @@ impl PipelineJob {
                     source: e,
                 })?;
                 write_bundle_atomic(&text_only_bundle, &bundle_path)?;
-                (0, true)
+                (0, true, false)
             }
             // Full: stream. The same-dir temp opens BEFORE the Synthesizing
             // phase; every synthesized segment flows through the sink stamp
@@ -462,7 +515,26 @@ impl PipelineJob {
                         source: e,
                     })
                 })?;
-                (segment_count as usize, false)
+                (segment_count as usize, false, false)
+            }
+            // Progressive: the text-only bundle lands NOW (importable +
+            // the reader can open it), synth streams into the segment
+            // store, and drain seals a full bundle over the text one.
+            PipelineVariant::Progressive { .. } => {
+                let ProgressiveCfg { store_dir } =
+                    progressive_cfg.expect("progressive cfg captured before the variant match");
+                let sealed = run_progressive(
+                    &spec,
+                    flag,
+                    source,
+                    sink_ref,
+                    reporter,
+                    &voice,
+                    text_only_bundle.clone(),
+                    &bundle_path,
+                    store_dir,
+                )?;
+                (sealed as usize, false, true)
             }
         };
 
@@ -473,6 +545,7 @@ impl PipelineJob {
             chapters,
             paragraphs,
             segments,
+            sealed,
         })
     }
 }
@@ -485,6 +558,291 @@ fn to_text_only(
     book_id: &str,
 ) -> BookBundle {
     taletrek_parse::to_text_only_bundle_with_id(book, voice, generator(generator_app), book_id)
+}
+
+/// The Progressive arm's pre-captured config (store dir), taken before the
+/// consuming variant match.
+struct ProgressiveCfg {
+    store_dir: PathBuf,
+}
+
+/// The reading-order anchor tracker for [`PipelineEvent::Playable`]: how
+/// much audio exists along the book-start prefix of the reading order.
+struct PlayableTracker {
+    order: Vec<String>,
+    next: usize,
+    delivered: std::collections::HashSet<String>,
+    durations: std::collections::HashMap<String, f64>,
+    prefix_total: f64,
+    emitted: bool,
+}
+
+impl PlayableTracker {
+    fn new(order: Vec<String>) -> Self {
+        Self {
+            order,
+            next: 0,
+            delivered: std::collections::HashSet::new(),
+            durations: std::collections::HashMap::new(),
+            prefix_total: 0.0,
+            emitted: false,
+        }
+    }
+
+    /// Record a delivery; advance the reading-order prefix over contiguous
+    /// delivered keys. Returns `true` when the prefix grew (the caller
+    /// re-checks the [`PLAYABLE_SECONDS`] threshold).
+    fn deliver(&mut self, key: &str, seconds: f64) -> bool {
+        self.delivered.insert(key.to_string());
+        self.durations.insert(key.to_string(), seconds);
+        let mut advanced = false;
+        while self.next < self.order.len() && self.delivered.contains(&self.order[self.next]) {
+            self.prefix_total += self.durations[&self.order[self.next]];
+            self.next += 1;
+            advanced = true;
+        }
+        advanced
+    }
+}
+
+/// Recorded `(encoded bytes, wav seconds)` pairs from the encoder wrapper.
+type RecordedDurations = Vec<(Vec<u8>, f64)>;
+
+/// Encoder wrapper recording each encode's `(output bytes, input-WAV
+/// seconds)` so the store sink can learn a delivered segment's audio
+/// duration without parsing the encoded bytes — the map matches deliveries
+/// by their encoded bytes (byte-identical outputs belong to deduped keys,
+/// and equal-bytes duplicates pop FIFO).
+struct DurationRecordingEncoder {
+    inner: Arc<dyn Encoder + Send + Sync>,
+    durations: Arc<Mutex<RecordedDurations>>,
+}
+
+impl Encoder for DurationRecordingEncoder {
+    fn encode(&self, wav: &[u8]) -> Result<Vec<u8>, SynthError> {
+        let out = self.inner.encode(wav)?;
+        self.durations
+            .lock()
+            .expect("duration recorder mutex")
+            .push((out.clone(), taletrek_synth::pcm::wav_duration(wav)));
+        Ok(out)
+    }
+
+    fn codec(&self) -> AudioCodec {
+        self.inner.codec()
+    }
+}
+
+/// Pop the first duration recorded for `bytes` (0.0 when unmatched — the
+/// playable heuristic degrades gracefully, never blocks delivery).
+fn pop_duration(durations: &mut RecordedDurations, bytes: &[u8]) -> f64 {
+    durations
+        .iter()
+        .position(|(b, _)| b == bytes)
+        .map(|i| durations.remove(i).1)
+        .unwrap_or(0.0)
+}
+
+/// Reading-order distinct keys for `chapters` under `voice` — the same
+/// first-occurrence walk the bundle writer dedups by.
+fn reading_order_keys(voice: &str, chapters: &[taletrek_synth::ChapterText]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut keys = Vec::new();
+    for chapter in chapters {
+        for para in &chapter.paragraphs {
+            let key = cache_key(voice, para);
+            if seen.insert(key.clone()) {
+                keys.push(key);
+            }
+        }
+    }
+    keys
+}
+
+/// The Progressive variant: text bundle early → store-driven synth → seal.
+/// Returns the sealed segment count (the full bundle is already in place at
+/// `bundle_path`).
+///
+/// Lifecycle: resolve voice + ensure espeak (unchanged seams) → **write the
+/// text-only bundle atomically, immediately** (importable + resumable
+/// before any synth) → synth with the segment store as the sink
+/// ([`PipelineEvent::Playable`] fires once the reading-order prefix holds
+/// [`PLAYABLE_SECONDS`] of audio) → on drain, **seal**: stream store
+/// segments through a [`BundleWriter`] over a same-dir temp and atomically
+/// replace the text bundle ([`PipelineEvent::Sealed`]). Cancel or failure
+/// at any stage leaves a valid text bundle + a reusable store — never a
+/// corrupt book, never a partial full bundle (the temp is discarded).
+#[allow(clippy::too_many_arguments)] // one cohesive variant stage; the spec seam set
+fn run_progressive(
+    spec: &PipelineSpec,
+    flag: CancelFlag,
+    source: &dyn VoiceSource,
+    sink_ref: Option<&dyn ProgressSink>,
+    reporter: Option<&dyn PipelineReporter>,
+    voice: &str,
+    text_bundle: BookBundle,
+    bundle_path: &Path,
+    store_dir: PathBuf,
+) -> Result<u32, PipelineError> {
+    let emit = |event: PipelineEvent| {
+        if let Some(r) = reporter {
+            r.pipeline_event(event);
+        }
+    };
+
+    ensure_not_cancelled(&flag)?;
+    emit(PipelineEvent::Phase(PipelinePhase::ResolvingVoice));
+    let model = resolve_voice(Some(voice), &spec.resolve, source, sink_ref)?;
+
+    ensure_not_cancelled(&flag)?;
+    ensure_espeak_data(&spec.espeak_root, source, sink_ref)?;
+
+    // The book lands NOW: a text-only bundle is small, valid, and the
+    // resume anchor for every later stage (including crashes).
+    fs::create_dir_all(&spec.books_dir).map_err(|e| PipelineError::Write {
+        path: spec.books_dir.clone(),
+        source: e,
+    })?;
+    write_bundle_atomic(&text_bundle, bundle_path)?;
+
+    // Synth drains into the store; the playable tracker watches the
+    // reading-order prefix.
+    let store = crate::store::SegmentStore::open(&store_dir)?;
+    let reading_order = reading_order_keys(voice, &text_bundle.chapters);
+    let durations: Arc<Mutex<RecordedDurations>> = Arc::new(Mutex::new(Vec::new()));
+    let tracker = Arc::new(Mutex::new(PlayableTracker::new(reading_order.clone())));
+
+    let encoder = DurationRecordingEncoder {
+        inner: Arc::clone(&spec.encoder),
+        durations: Arc::clone(&durations),
+    };
+
+    let sink_store = store.clone();
+    let sink = crate::synth_job::SegmentSink::new(move |key, seg| {
+        sink_store
+            .put(&seg)
+            .map_err(|e| taletrek_synth::BundleError::Io(std::io::Error::other(e.to_string())))?;
+        let seconds = {
+            let mut recorded = durations.lock().expect("duration recorder mutex");
+            pop_duration(&mut recorded, &seg.bytes)
+        };
+        let mut t = tracker.lock().expect("playable tracker mutex");
+        let advanced = t.deliver(&key, seconds);
+        if advanced && !t.emitted && t.prefix_total >= PLAYABLE_SECONDS {
+            t.emitted = true;
+            drop(t);
+            if let Some(r) = reporter {
+                r.pipeline_event(PipelineEvent::Playable);
+            }
+        }
+        Ok(())
+    });
+
+    ensure_not_cancelled(&flag)?;
+    emit(PipelineEvent::Phase(PipelinePhase::Synthesizing));
+    let cancelled_flag = Arc::clone(&flag);
+    let factory = Arc::clone(&spec.make_runner);
+    let make_runner = move || CancellableRunner::new(Arc::clone(&cancelled_flag), factory());
+    let synth = crate::synth_paragraphs_into(
+        &text_bundle,
+        voice,
+        &model,
+        make_runner,
+        &encoder,
+        spec.jobs,
+        sink_ref,
+        &sink,
+    );
+    drop(sink);
+    match synth {
+        Ok(()) => {}
+        Err(SynthJobError::Synth(SynthError::Cancelled)) => {
+            return Err(PipelineError::Cancelled);
+        }
+        Err(e) => return Err(PipelineError::Stamp(StampError::Synth(e))),
+    }
+
+    // Drain reached: seal the store's segments over the text bundle.
+    ensure_not_cancelled(&flag)?;
+    emit(PipelineEvent::Phase(PipelinePhase::Sealing));
+    let count = seal_progressive(
+        &text_bundle,
+        bundle_path,
+        &store,
+        &reading_order,
+        spec.encoder.codec(),
+        &spec.generator_app,
+    )?;
+    emit(PipelineEvent::Sealed);
+    Ok(count)
+}
+
+/// Seal: stream every reading-order segment from the store through a
+/// [`BundleWriter`] onto a same-dir temp, stamp the manifest through the
+/// same single stamping path the batch flavors use, and atomically replace
+/// the text-only bundle. Output is byte-compatible with a batch `Full` run
+/// over the same input (same writer, same stamp, same keys).
+#[allow(clippy::too_many_arguments)] // mirrors the seal's inputs; cohesive
+fn seal_progressive(
+    text_bundle: &BookBundle,
+    bundle_path: &Path,
+    store: &crate::store::SegmentStore,
+    reading_order: &[String],
+    codec: AudioCodec,
+    generator_app: &str,
+) -> Result<u32, PipelineError> {
+    let tmp = unique_tmp_path(bundle_path);
+    let discard_tmp = |e: PipelineError| {
+        let _ = fs::remove_file(&tmp);
+        e
+    };
+
+    let file = File::create(&tmp).map_err(|e| {
+        discard_tmp(PipelineError::Write {
+            path: bundle_path.to_path_buf(),
+            source: e,
+        })
+    })?;
+    let writer = BundleWriter::new(BufWriter::new(file), &text_bundle.chapters)
+        .map_err(|e| discard_tmp(StampError::from(e).into()))?;
+    let writer = Arc::new(Mutex::new(writer));
+
+    for key in reading_order {
+        let seg = store
+            .get(key)
+            .map_err(|e| discard_tmp(PipelineError::Store(e)))?
+            .ok_or_else(|| {
+                discard_tmp(PipelineError::Stamp(StampError::from(
+                    taletrek_synth::BundleError::InvalidAudioKey(format!(
+                        "segment {key} missing from the store at seal time"
+                    )),
+                )))
+            })?;
+        writer
+            .lock()
+            .expect("seal writer mutex")
+            .add_segment(key, &seg)
+            .map_err(|e| discard_tmp(StampError::from(e).into()))?;
+    }
+
+    let writer = match Arc::try_unwrap(writer) {
+        Ok(mutex) => mutex.into_inner().expect("seal writer mutex unpoisoned"),
+        Err(_) => unreachable!("seal writer arc unique after the loop"),
+    };
+    let segment_count = writer.segment_count();
+    let mut manifest = text_bundle.manifest.clone();
+    crate::stamp::stamp_manifest_fields(&mut manifest, codec, segment_count, generator_app);
+    writer
+        .finish(manifest)
+        .map_err(|e| discard_tmp(StampError::from(e).into()))?;
+
+    fs::rename(&tmp, bundle_path).map_err(|e| {
+        discard_tmp(PipelineError::Write {
+            path: bundle_path.to_path_buf(),
+            source: e,
+        })
+    })?;
+    Ok(segment_count)
 }
 
 /// [`synth_and_stamp_streaming`] with cancel-aware error mapping: a cancelled
@@ -1317,5 +1675,285 @@ mod tests {
                 .unwrap();
         assert!(bundle.manifest.audio.present);
         assert_eq!(bundle.manifest.audio.codec, AudioCodec::Wav);
+    }
+
+    // ---- Progressive variant (progressive-synth task 005) ----
+
+    /// Spec for a progressive run: same source as the shared `spec()`, with
+    /// the segment store rooted at `<books>/segments`.
+    fn progressive_spec(books_dir: &Path, runner: RunnerFactory) -> PipelineSpec {
+        let mut s = spec(
+            books_dir,
+            PipelineVariant::Progressive {
+                voice_id: None,
+                store_dir: books_dir.join("segments"),
+            },
+            runner,
+        );
+        s.encoder = Arc::new(taletrek_synth::WavPassthrough);
+        s
+    }
+
+    /// A stub WAV carrying `secs` of silence (16 kHz mono 16-bit) — long
+    /// enough to trip PLAYABLE_SECONDS without real synthesis.
+    fn long_wav(secs: f64) -> Vec<u8> {
+        let pcm_len = (16_000.0 * 2.0 * secs) as u32;
+        let mut wav = canonical_wav_header(pcm_len);
+        wav.resize(44 + pcm_len as usize, 0x00);
+        wav
+    }
+
+    fn canonical_wav_header(data_len: u32) -> Vec<u8> {
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&16_000u32.to_le_bytes());
+        wav.extend_from_slice(&32_000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        wav
+    }
+
+    #[test]
+    fn progressive_writes_text_bundle_before_any_synth_then_seals() {
+        let dir = tempfile::tempdir().unwrap();
+        // The runner factory records whether the text bundle already exists
+        // at the moment the FIRST runner is constructed (i.e. before any
+        // predict could run).
+        let text_bundle_seen_at_first_runner: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+        let seen = Arc::clone(&text_bundle_seen_at_first_runner);
+        let books = dir.path().to_path_buf();
+        let factory: RunnerFactory = Arc::new(move || {
+            let mut slot = seen.lock().unwrap();
+            if slot.is_none() {
+                // Any bundle-ish file at the top level proves the early
+                // write: the runner is constructed only during synth.
+                let exists = std::fs::read_dir(&books)
+                    .map(|entries| {
+                        entries.filter_map(|e| e.ok()).any(|e| {
+                            let name = e.file_name();
+                            let name = name.to_string_lossy();
+                            name.ends_with(".taletrek") || name.contains(".tmp")
+                        })
+                    })
+                    .unwrap_or(false);
+                *slot = Some(exists);
+            }
+            Box::new(StubRunner) as Box<dyn PiperRunner + Send>
+        });
+
+        let outcome = PipelineJob::new(progressive_spec(dir.path(), factory))
+            .run(&StubSource::default(), None)
+            .expect("progressive run");
+
+        assert_eq!(
+            *text_bundle_seen_at_first_runner.lock().unwrap(),
+            Some(true),
+            "the text-only bundle must exist on disk before any runner is constructed"
+        );
+        assert!(outcome.sealed);
+        assert!(!outcome.text_only);
+        assert_eq!(outcome.segments, 3, "distinct paragraphs");
+        assert!(!outcome.book_id.is_empty());
+
+        let bundle =
+            taletrek_synth::read_book_bundle(&std::fs::read(&outcome.bundle_path).unwrap())
+                .unwrap();
+        assert!(bundle.manifest.audio.present, "sealed bundle is full");
+        assert_eq!(bundle.manifest.audio.segment_count, 3);
+        for paragraph in ["alpha beta gamma", "delta epsilon", "zeta eta theta"] {
+            let key = cache_key(DEFAULT_VOICE_ID, paragraph);
+            assert!(bundle.audio.contains_key(&key));
+        }
+
+        // The store still holds the segments (re-convert stays near-free).
+        let store = crate::store::SegmentStore::open(&dir.path().join("segments")).unwrap();
+        assert_eq!(store.keys().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn progressive_sealed_bundle_matches_a_batch_full_run() {
+        let full_dir = tempfile::tempdir().unwrap();
+        let prog_dir = tempfile::tempdir().unwrap();
+
+        let full = run_full(full_dir.path());
+        let prog = PipelineJob::new(progressive_spec(prog_dir.path(), stub_factory()))
+            .run(&StubSource::default(), None)
+            .expect("progressive run");
+        assert_eq!(full.book_id, prog.book_id, "same source ⇒ same id");
+
+        let full_bundle =
+            taletrek_synth::read_book_bundle(&std::fs::read(&full.bundle_path).unwrap()).unwrap();
+        let prog_bundle =
+            taletrek_synth::read_book_bundle(&std::fs::read(&prog.bundle_path).unwrap()).unwrap();
+
+        // Manifest parity, timestamp fields excepted (parse stamps wall
+        // clock at bundle build).
+        let f = &full_bundle.manifest;
+        let p = &prog_bundle.manifest;
+        assert_eq!(f.schema_version, p.schema_version);
+        assert_eq!(f.kind, p.kind);
+        assert_eq!(f.book.id, p.book.id);
+        assert_eq!(f.book.title, p.book.title);
+        assert_eq!(f.book.author, p.book.author);
+        assert_eq!(f.book.source_format, p.book.source_format);
+        assert_eq!(f.book.chapter_count, p.book.chapter_count);
+        assert_eq!(f.book.voice_id, p.book.voice_id);
+        assert_eq!(f.book.progress_fraction, p.book.progress_fraction);
+        assert_eq!(f.audio.present, p.audio.present);
+        assert_eq!(f.audio.codec, p.audio.codec);
+        assert_eq!(f.audio.norm_version, p.audio.norm_version);
+        assert_eq!(f.audio.segment_count, p.audio.segment_count);
+        assert_eq!(f.generator.app, p.generator.app);
+        assert_eq!(f.generator.version, p.generator.version);
+        assert_eq!(
+            full_bundle.chapters.len(),
+            prog_bundle.chapters.len(),
+            "same chapter shape"
+        );
+        for (fc, pc) in full_bundle.chapters.iter().zip(&prog_bundle.chapters) {
+            assert_eq!(fc.id, pc.id);
+            assert_eq!(fc.title, pc.title);
+            assert_eq!(fc.paragraphs, pc.paragraphs);
+        }
+
+        // Audio byte-parity: same keys, same bytes.
+        assert_eq!(full_bundle.audio.len(), prog_bundle.audio.len());
+        for (key, seg) in &full_bundle.audio {
+            assert_eq!(
+                prog_bundle.audio.get(key).expect("same keys").bytes,
+                seg.bytes,
+                "segment bytes must be byte-identical to the batch run"
+            );
+        }
+    }
+
+    #[test]
+    fn progressive_cancel_mid_synth_keeps_text_bundle_and_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let slot: Arc<Mutex<Option<CancelFlag>>> = Arc::new(Mutex::new(None));
+        let cancelling: RunnerFactory = {
+            let slot = Arc::clone(&slot);
+            Arc::new(move || {
+                let flag = slot
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("test stores the flag before run");
+                Box::new(CancelAfterFirstRunner { flag, seen: 0 }) as Box<dyn PiperRunner + Send>
+            })
+        };
+        let job = PipelineJob::new(progressive_spec(dir.path(), cancelling));
+        slot.lock().unwrap().replace(job.cancel_flag());
+        let err = job.run(&StubSource::default(), None).unwrap_err();
+        assert!(
+            matches!(err, PipelineError::Cancelled),
+            "expected Cancelled, got {err:?}"
+        );
+
+        // The text-only bundle survives, valid + openable.
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        let bundles: Vec<_> = entries
+            .iter()
+            .filter(|n| n.ends_with(".taletrek"))
+            .collect();
+        assert_eq!(
+            bundles.len(),
+            1,
+            "exactly the early text bundle: {entries:?}"
+        );
+        let path = dir.path().join(bundles[0].as_str());
+        let (manifest, _) = taletrek_synth::read_book_metadata(&path).unwrap();
+        assert!(!manifest.audio.present, "still text-only after cancel");
+
+        // No orphan temps from the (never-reached) seal.
+        assert!(
+            entries.iter().all(|n| !n.ends_with(".tmp")),
+            "no temp leftovers: {entries:?}"
+        );
+
+        // The store holds the segments completed before the cancel.
+        let store = crate::store::SegmentStore::open(&dir.path().join("segments")).unwrap();
+        assert!(
+            !store.keys().unwrap().is_empty(),
+            "completed segments persist for resume"
+        );
+    }
+
+    #[test]
+    fn progressive_emits_playable_then_sealed_in_order() {
+        // Each stub segment carries 31 s of audio, so the first delivery
+        // pushes the reading-order prefix over PLAYABLE_SECONDS.
+        struct LongRunner;
+        impl PiperRunner for LongRunner {
+            fn predict(&mut self, _m: &Path, _t: &str) -> Result<Vec<u8>, SynthError> {
+                Ok(long_wav(31.0))
+            }
+        }
+        let long_factory: RunnerFactory =
+            Arc::new(|| Box::new(LongRunner) as Box<dyn PiperRunner + Send>);
+
+        #[derive(Default, Clone)]
+        struct Recorder {
+            events: Arc<Mutex<Vec<PipelineEvent>>>,
+        }
+        impl PipelineReporter for Recorder {
+            fn pipeline_event(&self, event: PipelineEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+        }
+        let recorder = Recorder::default();
+
+        let dir = tempfile::tempdir().unwrap();
+        let outcome = PipelineJob::new(progressive_spec(dir.path(), long_factory))
+            .run(&StubSource::default(), Some(&recorder))
+            .expect("progressive run");
+        assert!(outcome.sealed);
+
+        let events = recorder.events.lock().unwrap();
+        let position = |target: PipelineEvent| {
+            events
+                .iter()
+                .position(|e| *e == target)
+                .unwrap_or_else(|| panic!("{target:?} missing from {events:?}"))
+        };
+        let playable = position(PipelineEvent::Playable);
+        let sealed = position(PipelineEvent::Sealed);
+        let first_step = events
+            .iter()
+            .position(|e| matches!(e, PipelineEvent::SynthStep { .. }))
+            .expect("a synth step");
+        assert!(
+            playable > first_step,
+            "Playable fires after audio exists, not before synth: {events:?}"
+        );
+        assert!(playable < sealed, "Playable precedes Sealed: {events:?}");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| **e == PipelineEvent::Playable)
+                .count(),
+            1,
+            "Playable is emitted exactly once: {events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| **e == PipelineEvent::Sealed)
+                .count(),
+            1,
+            "Sealed is emitted exactly once: {events:?}"
+        );
     }
 }

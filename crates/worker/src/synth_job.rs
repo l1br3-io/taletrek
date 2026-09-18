@@ -101,7 +101,8 @@ pub enum SynthJobError {
 
 /// The boxed delivery closure [`SegmentSink`] wraps: `(key, segment) ->
 /// Result<(), BundleError>`, `Send` so pool chunks share it.
-type SegmentDeliver = Box<dyn FnMut(String, AudioSegment) -> Result<(), BundleError> + Send>;
+type SegmentDeliver<'a> =
+    Box<dyn FnMut(String, AudioSegment) -> Result<(), BundleError> + Send + 'a>;
 
 /// Shared delivery target for [`synth_paragraphs_into`]: pool threads hand
 /// each finished segment to the wrapped closure **by value**, one call per
@@ -114,19 +115,23 @@ type SegmentDeliver = Box<dyn FnMut(String, AudioSegment) -> Result<(), BundleEr
 /// exactly like a synthesis failure. The engine's planning stage already
 /// dedups — each distinct key arrives exactly once (a sink may still keep
 /// its own written-keys guard defensively).
-pub struct SegmentSink {
-    deliver: Mutex<SegmentDeliver>,
+///
+/// The lifetime parameter lets a sink borrow host context (a progress
+/// reporter, a shared tracker) instead of cloning it behind `Arc` —
+/// `SegmentSink::new` accepts any closure bounded by `'a`, and `'static`
+/// closures (the common case) infer as before.
+pub struct SegmentSink<'a> {
+    deliver: Mutex<SegmentDeliver<'a>>,
+    _borrow: std::marker::PhantomData<&'a ()>,
 }
 
-impl SegmentSink {
-    /// Wrap a delivery closure. `Send + 'static` because the closure may
-    /// capture owned handles (e.g. an `Arc<Mutex<BundleWriter<_>>>`) that the
-    /// caller keeps a clone of to retrieve after the run.
-    pub fn new(
-        f: impl FnMut(String, AudioSegment) -> Result<(), BundleError> + Send + 'static,
-    ) -> Self {
+impl<'a> SegmentSink<'a> {
+    /// Wrap a delivery closure. `Send` so pool threads share it; the
+    /// lifetime bound (not `'static`) lets the closure borrow host context.
+    pub fn new(f: impl FnMut(String, AudioSegment) -> Result<(), BundleError> + Send + 'a) -> Self {
         Self {
             deliver: Mutex::new(Box::new(f)),
+            _borrow: std::marker::PhantomData,
         }
     }
 
@@ -1081,7 +1086,7 @@ mod tests {
             }
         }
 
-        fn into_sink(self) -> (SegmentSink, Deliveries) {
+        fn into_sink(self) -> (SegmentSink<'static>, Deliveries) {
             let deliveries = self.deliveries.clone();
             let fail_after = self.fail_after;
             let sink = SegmentSink::new(move |key, seg| {

@@ -212,6 +212,7 @@ fn error_kind(err: &taletrek_worker::PipelineError) -> &'static str {
         taletrek_worker::PipelineError::Resolve(_) => "resolve",
         taletrek_worker::PipelineError::Espeak(_) => "espeak",
         taletrek_worker::PipelineError::Stamp(_) => "stamp",
+        taletrek_worker::PipelineError::Store(_) => "store",
         taletrek_worker::PipelineError::Cancelled => "cancelled",
         taletrek_worker::PipelineError::Write { .. } => "write",
     }
@@ -246,6 +247,12 @@ impl taletrek_worker::PipelineReporter for ObserverReporter {
             PipelineEvent::Phase(taletrek_worker::PipelinePhase::Writing) => {
                 FfiPipelineEvent::Phase(FfiPipelinePhase::Writing)
             }
+            // Progressive-only lifecycle (progressive-synth): no FFI caller
+            // can trigger the Progressive variant yet — these surface when
+            // the FFI grows the progressive submit surface (task 008).
+            PipelineEvent::Phase(taletrek_worker::PipelinePhase::Sealing)
+            | PipelineEvent::Playable
+            | PipelineEvent::Sealed => return,
             PipelineEvent::Parsed {
                 chapters,
                 paragraphs,
