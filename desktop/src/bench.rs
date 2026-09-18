@@ -530,14 +530,21 @@ mod tests {
         // multiple chunks), sequential: the thread-local close is exact at
         // jobs=1 — one paragraph sample per delivery, chunk count equals
         // the pipeline's own split planning, and the paragraph samples sum
-        // to predict_total exactly.
+        // to predict_total exactly. The engine's dedup pre-pass skips the
+        // duplicate occurrence, so deliveries/chunks count DISTINCT keys.
         let long = "Alpha beta gamma delta. ".repeat(60);
         let paragraphs = vec![
             "Short one.".to_string(),
-            long,
+            long.clone(),
             "Short two.".to_string(),
             "Short one.".to_string(),
             "Short three.".to_string(),
+        ];
+        let distinct: Vec<&String> = vec![
+            &paragraphs[0],
+            &paragraphs[1],
+            &paragraphs[2],
+            &paragraphs[4],
         ];
         let bundle = text_only_bundle(paragraphs.clone());
 
@@ -552,26 +559,29 @@ mod tests {
         )
         .expect("stub bench run succeeds");
 
-        assert_eq!(stats.deliveries, 5, "one delivery per paragraph occurrence");
+        assert_eq!(
+            stats.deliveries, 4,
+            "one delivery per DISTINCT paragraph key"
+        );
         assert_eq!(
             stats.paragraphs.len(),
-            5,
+            4,
             "sequential close must yield one paragraph sample per delivery"
         );
         let sum: Duration = stats.paragraphs.iter().sum();
         assert_eq!(sum, stats.predict_total);
-        let expected_chunks: usize = paragraphs
+        let expected_chunks: usize = distinct
             .iter()
             .map(|p| split_for_speech(&normalize_for_speech(p), MAX_SYNTH_CHARS).len())
             .sum();
         assert!(
-            expected_chunks > 5,
+            expected_chunks > 4,
             "fixture must contain a split paragraph"
         );
         assert_eq!(
             stats.chunks.len(),
             expected_chunks,
-            "one chunk sample per predict call"
+            "one chunk sample per predict call over distinct keys"
         );
         let expected_audio = expected_chunks as f64 * 2.0 / 16_000.0;
         assert!(
@@ -584,16 +594,22 @@ mod tests {
     #[test]
     fn run_bench_parallel_pass_keeps_scheduling_free_invariants() {
         // At jobs=2 chunks may span workers, so only the scheduling-free
-        // facts hold: delivery count, chunk count, audio total (per-predict
-        // accounting). The per-paragraph rows come from the jobs=1 profile
-        // pass in run_bench_cmd (two-pass protocol).
+        // facts hold: distinct delivery count, chunk count, audio total
+        // (per-predict accounting). The per-paragraph rows come from the
+        // jobs=1 profile pass in run_bench_cmd (two-pass protocol).
         let long = "Alpha beta gamma delta. ".repeat(60);
         let paragraphs = vec![
             "Short one.".to_string(),
-            long,
+            long.clone(),
             "Short two.".to_string(),
             "Short one.".to_string(),
             "Short three.".to_string(),
+        ];
+        let distinct: Vec<&String> = vec![
+            &paragraphs[0],
+            &paragraphs[1],
+            &paragraphs[2],
+            &paragraphs[4],
         ];
         let bundle = text_only_bundle(paragraphs.clone());
 
@@ -608,8 +624,8 @@ mod tests {
         )
         .expect("stub bench run succeeds");
 
-        assert_eq!(stats.deliveries, 5);
-        let expected_chunks: usize = paragraphs
+        assert_eq!(stats.deliveries, 4);
+        let expected_chunks: usize = distinct
             .iter()
             .map(|p| split_for_speech(&normalize_for_speech(p), MAX_SYNTH_CHARS).len())
             .sum();

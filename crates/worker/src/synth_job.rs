@@ -42,12 +42,12 @@
 //! segment is handed to a shared [`SegmentSink`] **by value** instead of being
 //! accumulated — so a sink that writes straight to disk (the streaming
 //! `BundleWriter`) keeps peak memory at one segment, not the whole book's
-//! audio. Dedup is the **sink's** job: the engine still synthesizes and
-//! delivers every occurrence of an identical paragraph; a collapsing sink
-//! (the streaming writer's written-keys set, or the collecting wrapper below)
-//! keeps one. [`synth_all_paragraphs`] is the legacy accumulating flavor — a
-//! thin wrapper collecting the sink's deliveries into a `HashMap` — kept for
-//! library nesting, tests, and small/compat paths.
+//! audio. The engine's planning stage dedups by cache key: each distinct key
+//! is synthesized and delivered **exactly once** (identical paragraphs are a
+//! free skip, not a re-synthesis), so a repetitive book pays for its
+//! distinct text only. [`synth_all_paragraphs`] is the legacy accumulating
+//! flavor — a thin wrapper collecting the sink's deliveries into a `HashMap`
+//! — kept for library nesting, tests, and small/compat paths.
 //!
 //! Re-exported at the crate root ([`synth_all_paragraphs`],
 //! [`synth_paragraphs_into`], [`SegmentSink`], [`SynthJobError`]); hosts reach
@@ -105,14 +105,15 @@ type SegmentDeliver = Box<dyn FnMut(String, AudioSegment) -> Result<(), BundleEr
 
 /// Shared delivery target for [`synth_paragraphs_into`]: pool threads hand
 /// each finished segment to the wrapped closure **by value**, one call per
-/// completed paragraph.
+/// distinct key.
 ///
 /// The closure is boxed behind a `Mutex` (interior mutability is what makes
 /// `&SegmentSink` shareable across rayon chunks — `FnMut` cannot be `Sync` on
 /// its own). The sink is **fallible**: an `Err` aborts the run as
 /// [`SynthJobError::Sink`], so a disk-full or corrupt-write unwinds the pool
-/// exactly like a synthesis failure. Dedup is the sink's responsibility — the
-/// engine delivers every occurrence.
+/// exactly like a synthesis failure. The engine's planning stage already
+/// dedups — each distinct key arrives exactly once (a sink may still keep
+/// its own written-keys guard defensively).
 pub struct SegmentSink {
     deliver: Mutex<SegmentDeliver>,
 }
@@ -265,18 +266,27 @@ where
     let probe = make_runner();
     let cap = MAX_SYNTH_CHARS.min(probe.max_synth_chars());
 
-    // Plan every paragraph occurrence up front, in book order. This mirrors
+    // Plan every paragraph occurrence up front, in book order, DEDUPING by
+    // cache key: each distinct key is synthesized exactly once (identical
+    // paragraphs — refrains, boilerplate — used to re-synthesize per
+    // occurrence and left collapsing to the sink). Planning mirrors
     // synthesize_paragraph's own key/normalize/split steps over the same
     // crate functions, so planned chunks are byte-identical to what the
     // per-paragraph pipeline would have split (pinned by test).
     let mut planned: Vec<PlannedParagraph> = Vec::with_capacity(paragraphs.len());
+    let mut seen_keys: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(paragraphs.len());
     for text in &paragraphs {
         let cleaned = normalize_for_speech(text);
         if cleaned.is_empty() {
             return Err(SynthJobError::Synth(SynthError::EmptyText));
         }
+        let key = cache_key(voice_id, text);
+        if !seen_keys.insert(key.clone()) {
+            continue;
+        }
         planned.push(PlannedParagraph {
-            key: cache_key(voice_id, text),
+            key,
             chunks: split_for_speech(&cleaned, cap),
             weight: cleaned.chars().count(),
         });
@@ -320,7 +330,9 @@ where
     // Progress counter shared across worker threads. Relaxed ordering is
     // enough: each fetch_add yields a unique monotonic index; no other memory
     // needs synchronizing with it.
-    let total = paragraphs.len();
+    // Progress totals the DISTINCT segment count (planned paragraphs), so
+    // host percentage rendering needs no change under the dedup pre-pass.
+    let total = planned.len();
     let done = AtomicUsize::new(0);
 
     // Drain the task queue inside our bounded pool: any worker may predict
@@ -1089,11 +1101,10 @@ mod tests {
     }
 
     #[test]
-    fn sink_engine_delivers_every_occurrence_dupes_included() {
-        // Dedup is the SINK's job now: the engine synthesizes and delivers
-        // every paragraph occurrence, so two identical paragraphs produce two
-        // deliveries (the recording sink sees both; a HashMap sink collapses
-        // them — pinned by the wrapper tests above).
+    fn sink_engine_delivers_each_distinct_key_exactly_once() {
+        // Dedup pre-pass (task 003): the engine synthesizes each distinct
+        // cache key once — two identical paragraphs produce ONE delivery
+        // (previously one per occurrence, with the sink left to collapse).
         let bundle = text_only_bundle(vec![ChapterText::new(
             "bk_test",
             0,
@@ -1115,16 +1126,17 @@ mod tests {
         .expect("stub runner succeeds");
 
         let seen = deliveries.lock().unwrap();
-        assert_eq!(seen.len(), 3, "one delivery per paragraph occurrence");
-        // Delivery ORDER across parallel chunks is nondeterministic (the sink
-        // serializes but does not order) — assert the delivery multiset: the
-        // repeated paragraph delivered twice, the unique one once.
+        assert_eq!(
+            seen.len(),
+            2,
+            "one delivery per DISTINCT key (dupes pre-collapsed by the engine)"
+        );
         let repeat_key = cache_key("v", "Repeat me.");
         let unique_key = cache_key("v", "Unique.");
         assert_eq!(
             seen.iter().filter(|(k, _)| *k == repeat_key).count(),
-            2,
-            "identical paragraphs deliver every occurrence (dedup is the sink's)"
+            1,
+            "the repeated paragraph delivers once"
         );
         assert_eq!(
             seen.iter().filter(|(k, _)| *k == unique_key).count(),
@@ -1136,6 +1148,80 @@ mod tests {
             canonical_wav(&[0x01, 0x02, 0x03, 0x04]).len(),
             "segments carry the synthesized bytes"
         );
+    }
+
+    #[test]
+    fn duplicates_synthesize_one_predict_set_per_distinct_chunk_set() {
+        // The predict-level proof: [A, B, A, A] with a recording runner →
+        // predicts exactly == A's chunks + B's chunks (A's set once, not
+        // three times), whatever the cap splits them into.
+        let a = format!("{} ", "The repeated paragraph says this. ".repeat(20));
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec![a.clone(), "Tiny one.".into(), a.clone(), a.clone()],
+        )]);
+
+        let predicts: std::sync::Arc<std::sync::Mutex<Vec<(String, std::thread::ThreadId)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = predicts.clone();
+        let (sink, deliveries) = RecordingSink::new().into_sink();
+
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            move || SchedulingRecorder {
+                predicts: seen.clone(),
+                cap: 60,
+            },
+            &WavPassthrough,
+            2,
+            None,
+            &sink,
+        )
+        .expect("stub runner succeeds");
+
+        let a_chunks = split_for_speech(&normalize_for_speech(&a), 60).len();
+        let records = predicts.lock().unwrap();
+        assert_eq!(
+            records.len(),
+            a_chunks + 1,
+            "A's chunk set once ({a_chunks}) + B's single chunk"
+        );
+        assert_eq!(deliveries.lock().unwrap().len(), 2, "one delivery per key");
+    }
+
+    #[test]
+    fn progress_total_is_the_distinct_segment_count() {
+        // Progress semantics (task 003): total = distinct keys, so hosts'
+        // percentage rendering stays correct with no change. [A, B, A] →
+        // two synth steps over total 2.
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec!["One.".into(), "Two.".into(), "One.".into()],
+        )]);
+
+        let captured = Captured::default();
+        let progress = Progress::new(Box::new(captured.clone()));
+        let (sink, _) = RecordingSink::new().into_sink();
+
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1, // deterministic step order
+            Some(&progress),
+            &sink,
+        )
+        .expect("synth succeeds");
+
+        assert_eq!(captured.take(), "synth [1/2] 50%\nsynth [2/2] 100%\n");
     }
 
     #[test]
