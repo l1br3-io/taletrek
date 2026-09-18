@@ -172,6 +172,7 @@ fn full_convert_peak_memory_stays_bounded() {
         books_dir: dir.path().to_path_buf(),
         make_runner: factory,
         encoder: Arc::new(taletrek_synth::WavPassthrough),
+        initial_anchor: None,
     };
 
     let outcome = PipelineJob::new(spec)

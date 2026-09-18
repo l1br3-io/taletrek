@@ -72,7 +72,10 @@ pub use stamp::{
     FullInputError, StampError,
 };
 pub use store::{SegmentStore, StoreError};
-pub use synth_job::{synth_all_paragraphs, synth_paragraphs_into, SegmentSink, SynthJobError};
+pub use synth_job::{
+    synth_all_paragraphs, synth_paragraphs_into, synth_paragraphs_into_dynamic,
+    ParagraphOrderPolicy, ParagraphPlanView, SegmentSink, SynthJobError,
+};
 pub use voices::{
     default_cache_dir, ensure_espeak_data, find_curated, resolve_voice, EspeakError, ResolveError,
     ResolveOpts, UreqVoiceSource, Voice, VoiceQuality, VoiceSource, CURATED_VOICES,

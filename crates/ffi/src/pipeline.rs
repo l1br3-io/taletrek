@@ -315,6 +315,9 @@ impl PipelineHandle {
             books_dir: PathBuf::from(&config.books_dir),
             make_runner,
             encoder: Arc::new(taletrek_synth::NativeOpusEncoder::new()),
+            // The FFI surface gains the progressive anchor in the
+            // progressive-synth FFI task; batch jobs anchor at book start.
+            initial_anchor: None,
         })
     }
 

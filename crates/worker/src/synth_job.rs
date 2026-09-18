@@ -56,7 +56,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use rayon::prelude::*;
@@ -165,13 +165,21 @@ struct PlannedParagraph {
     weight: usize,
 }
 
+/// One chunk's assembly slot: the predicted WAV lands in `data`; `claimed`
+/// marks the chunk as dispatched (pop or rescore) so a re-anchored queue
+/// rebuild never double-dispatches an in-flight or filled chunk.
+struct ChunkSlot {
+    data: Mutex<Option<Vec<u8>>>,
+    claimed: AtomicBool,
+}
+
 /// The shared assembly state for one paragraph occurrence: one slot per
 /// planned chunk (filled by whichever worker predicts it) plus a countdown
 /// of unfinished chunks. The worker that takes the countdown to zero
 /// assembles the segment (concat → encode → deliver + progress).
 struct PartialParagraph {
     key: String,
-    slots: Vec<Mutex<Option<Vec<u8>>>>,
+    slots: Vec<ChunkSlot>,
     remaining: AtomicUsize,
 }
 
@@ -179,6 +187,36 @@ struct PartialParagraph {
 struct ChunkTask {
     para: usize,
     chunk: usize,
+}
+
+/// A host-supplied view of the planned work for scheduling policy: where
+/// the paragraph sits in reading order and how much text it carries. Built
+/// by the engine; consumed by [`ParagraphOrderPolicy`].
+#[derive(Debug, Clone, Copy)]
+pub struct ParagraphPlanView {
+    /// Index of the paragraph's first occurrence in book order over the
+    /// DEDUPED plan (0-based; reading order).
+    pub reading_index: usize,
+    /// Normalized character count — the work/size proxy.
+    pub normalized_chars: usize,
+}
+
+/// Scheduling policy: a total order over planned paragraph indices. The
+/// engine applies it before dispatch and again whenever the paired epoch
+/// counter changes (a host seek re-scores the pending queue; in-flight
+/// chunks always finish — cancellation is the only preemption). `None`
+/// everywhere means the engine's LPT default.
+pub type ParagraphOrderPolicy = Arc<dyn Fn(&[ParagraphPlanView]) -> Vec<usize> + Send + Sync>;
+
+/// How the engine orders paragraph dispatch.
+enum EngineOrdering {
+    /// Longest-processing-time-first (the batch default).
+    Lpt,
+    /// A host policy + the epoch that signals re-scoring.
+    Policy {
+        policy: ParagraphOrderPolicy,
+        epoch: Arc<AtomicU64>,
+    },
 }
 
 /// The lazily-matched runner fleet: `min(jobs, tasks)` runners constructed
@@ -253,6 +291,53 @@ where
     E: Encoder + Sync,
     F: Fn() -> R + Sync,
 {
+    synth_paragraphs_into_dynamic(
+        bundle,
+        voice_id,
+        voice_model,
+        make_runner,
+        encoder,
+        jobs,
+        progress,
+        None,
+        None,
+        sink,
+    )
+}
+
+/// [`synth_paragraphs_into`] with a host scheduling policy: when
+/// `(policy, epoch)` is `Some`, paragraph dispatch order comes from
+/// `policy` (initially and again after every epoch change — the host bumps
+/// the counter to re-score the pending queue; in-flight chunks finish,
+/// cancellation remains the only preemption). The engine's LPT default
+/// applies otherwise. Both must be `Some` together or `None` together.
+#[allow(clippy::too_many_arguments)] // the dynamic seam adds the policy pair
+pub fn synth_paragraphs_into_dynamic<R, E, F>(
+    bundle: &BookBundle,
+    voice_id: &str,
+    voice_model: &Path,
+    make_runner: F,
+    encoder: &E,
+    jobs: usize,
+    progress: Option<&dyn ProgressSink>,
+    policy: Option<ParagraphOrderPolicy>,
+    epoch: Option<Arc<AtomicU64>>,
+    sink: &SegmentSink,
+) -> Result<(), SynthJobError>
+where
+    R: PiperRunner + Send,
+    E: Encoder + Sync,
+    F: Fn() -> R + Sync,
+{
+    let ordering = match (policy, epoch) {
+        (None, None) => EngineOrdering::Lpt,
+        (Some(policy), Some(epoch)) => EngineOrdering::Policy { policy, epoch },
+        (None, Some(_)) | (Some(_), None) => {
+            // Pairing bug on the host side; LPT is the safe fallback.
+            EngineOrdering::Lpt
+        }
+    };
+
     let paragraphs = collect_paragraphs(bundle);
     if paragraphs.is_empty() {
         // Degenerate empty work list (also: the progressive resume path
@@ -303,23 +388,45 @@ where
         });
     }
 
-    // LPT (longest-processing-time-first): dispatch paragraphs by normalized
-    // char count descending — the classic makespan heuristic for the batch
-    // path. Stable sort keeps book order among ties, so jobs=1 runs stay
-    // deterministic.
-    let mut order: Vec<usize> = (0..planned.len()).collect();
-    order.sort_unstable_by(|&a, &b| planned[b].weight.cmp(&planned[a].weight));
+    // Dispatch order: the host policy when one is supplied (the pipeline's
+    // anchor/horizon tiering), else LPT (longest-processing-time-first —
+    // the classic batch makespan heuristic; stable ties keep book order so
+    // jobs=1 stays deterministic). `planned` is already in reading order,
+    // so `reading_index == planned index`.
+    let views: Vec<ParagraphPlanView> = planned
+        .iter()
+        .enumerate()
+        .map(|(i, p)| ParagraphPlanView {
+            reading_index: i,
+            normalized_chars: p.weight,
+        })
+        .collect();
+    let order: Vec<usize> = match &ordering {
+        EngineOrdering::Policy { policy, .. } => policy(&views),
+        EngineOrdering::Lpt => {
+            let mut order: Vec<usize> = (0..planned.len()).collect();
+            order.sort_unstable_by(|&a, &b| planned[b].weight.cmp(&planned[a].weight));
+            order
+        }
+    };
 
     let partials: Vec<PartialParagraph> = planned
         .iter()
         .map(|p| PartialParagraph {
             key: p.key.clone(),
-            slots: p.chunks.iter().map(|_| Mutex::new(None)).collect(),
+            slots: p
+                .chunks
+                .iter()
+                .map(|_| ChunkSlot {
+                    data: Mutex::new(None),
+                    claimed: AtomicBool::new(false),
+                })
+                .collect(),
             remaining: AtomicUsize::new(p.chunks.len()),
         })
         .collect();
 
-    // Chunk tasks, paragraph-major in LPT order (chunk order preserved
+    // Chunk tasks, paragraph-major in dispatch order (chunk order preserved
     // within a paragraph — concat order must be deterministic).
     let tasks: Vec<ChunkTask> = order
         .iter()
@@ -327,6 +434,7 @@ where
             (0..planned[para].chunks.len()).map(move |chunk| ChunkTask { para, chunk })
         })
         .collect();
+    let total_tasks = tasks.len();
 
     // The eager fleet: min(jobs, tasks) runners, probe included. An empty
     // bundle constructs none.
@@ -346,15 +454,56 @@ where
     let total = planned.len();
     let done = AtomicUsize::new(0);
 
-    // Drain the task queue inside our bounded pool: any worker may predict
-    // any chunk (work stealing — the fine-grained units that kill the
-    // straggler tail), runners come from the shared fleet, and the worker
-    // that completes a paragraph assembles and delivers it. Each task checks
-    // its runner back in even on the error path (an aborted run must never
+    // The shared pending queue (work stealing = shared pops). When a host
+    // epoch changed since the last pop, the queue is re-scored under the
+    // same lock: pending (unclaimed, unfinished) chunk tasks rebuild
+    // paragraph-major in the policy's new order. In-flight chunks are
+    // claimed and simply finish — cancellation is the only preemption.
+    let queue: Mutex<std::collections::VecDeque<ChunkTask>> = Mutex::new(tasks.into());
+    let rescore = match &ordering {
+        EngineOrdering::Policy { policy, epoch } => Some((policy, epoch)),
+        EngineOrdering::Lpt => None,
+    };
+    let epoch_seen = AtomicU64::new(
+        rescore
+            .as_ref()
+            .map(|(_, e)| e.load(Ordering::Relaxed))
+            .unwrap_or(0),
+    );
+
+    // Drain the queue inside our bounded pool: any worker may predict any
+    // chunk (work stealing — the fine-grained units that kill the straggler
+    // tail), runners come from the shared fleet, and the worker that
+    // completes a paragraph assembles and delivers it. Each task checks its
+    // runner back in even on the error path (an aborted run must never
     // strand a waiter on a leaked runner). `try_for_each` makes rayon
     // short-circuit on the first error → v1 "abort on first error".
     let run: Result<(), SynthJobError> = pool.install(|| {
-        tasks.into_par_iter().try_for_each(|task| {
+        (0..total_tasks).into_par_iter().try_for_each(|_| {
+            let task = {
+                let mut pending = queue.lock().expect("task queue mutex unpoisoned");
+                if let Some((policy, epoch)) = &rescore {
+                    let now = epoch.load(Ordering::Relaxed);
+                    if now != epoch_seen.load(Ordering::Relaxed) {
+                        epoch_seen.store(now, Ordering::Relaxed);
+                        rescore_queue(&mut pending, policy, &views, &partials);
+                    }
+                }
+                pending.pop_front()
+            };
+            let Some(task) = task else {
+                return Ok(());
+            };
+
+            // Claim the chunk: a re-scored queue may list a chunk that
+            // another worker already popped (claim races are skips).
+            if partials[task.para].slots[task.chunk]
+                .claimed
+                .swap(true, Ordering::AcqRel)
+            {
+                return Ok(());
+            }
+
             let text = &planned[task.para].chunks[task.chunk];
             let predicted = {
                 let mut runner = runner_pool.checkout();
@@ -367,6 +516,7 @@ where
             let partial = &partials[task.para];
             {
                 let mut slot = partial.slots[task.chunk]
+                    .data
                     .lock()
                     .expect("chunk slot mutex unpoisoned");
                 *slot = Some(wav);
@@ -381,7 +531,8 @@ where
                 .slots
                 .iter()
                 .map(|s| {
-                    s.lock()
+                    s.data
+                        .lock()
                         .expect("chunk slot mutex unpoisoned")
                         .take()
                         .expect("every chunk present when the countdown hits zero")
@@ -405,6 +556,30 @@ where
     });
 
     run
+}
+
+/// Rebuild the pending queue in the policy's current order: paragraphs the
+/// policy ranks first contribute their unclaimed, unfinished chunk tasks
+/// (paragraph-major, chunk order preserved). Called under the queue lock
+/// after an epoch change.
+fn rescore_queue(
+    queue: &mut std::collections::VecDeque<ChunkTask>,
+    policy: &ParagraphOrderPolicy,
+    views: &[ParagraphPlanView],
+    partials: &[PartialParagraph],
+) {
+    let order = policy(views);
+    queue.clear();
+    for &para in &order {
+        if partials[para].remaining.load(Ordering::SeqCst) == 0 {
+            continue;
+        }
+        for (chunk, slot) in partials[para].slots.iter().enumerate() {
+            if !slot.claimed.load(Ordering::Acquire) {
+                queue.push_back(ChunkTask { para, chunk });
+            }
+        }
+    }
 }
 
 /// Synthesize every paragraph across all chapters of `bundle` into a

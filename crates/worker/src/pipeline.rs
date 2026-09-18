@@ -94,6 +94,63 @@ pub enum PipelineVariant {
 /// hardware.
 pub const PLAYABLE_SECONDS: f64 = 30.0;
 
+/// The read-ahead horizon: paragraphs whose estimated audio position is
+/// within this window AHEAD of the anchor form the priority tier;
+/// everything else (behind the anchor, or beyond) is fill, dispatched in
+/// reading order after the tier. Calibrated from the bench baseline — at
+/// Android's ~2–3× sustained RTF the pool produces 3 min of audio in
+/// 1–1.5 min, so a 3-min window stays ahead of the playhead while leaving
+/// the pool mostly for fill.
+pub const HORIZON_SECONDS: f64 = 180.0;
+
+/// Speech rate for the char→seconds estimator — measured on the reference
+/// book (55,454 normalized chars → 2,996 s of audio ≈ 18.5 chars/s; see
+/// `bench.md`), rounded down so estimates err toward over-filling the
+/// horizon slightly.
+pub const SPEECH_CHARS_PER_SECOND: f64 = 18.0;
+
+/// The one char→audio-seconds heuristic (normalized chars at the measured
+/// speech rate). Used by the anchor/horizon scheduler for paragraph
+/// positions and — as a fallback — by the playable tracker when a stored
+/// segment's duration can't be parsed. Exact measurements (the encoder
+/// recorder, parsed WAV/OGG bytes) always win where they exist; this is
+/// the single estimate, never a second divergent one.
+#[must_use]
+pub fn estimate_audio_seconds(normalized_chars: usize) -> f64 {
+    normalized_chars as f64 / SPEECH_CHARS_PER_SECOND
+}
+
+/// Anchor dispatch rank: `(tier, distance, reading_index)` — tier 0 is the
+/// horizon window ahead of the anchor (distance ascending = earliest
+/// listen-first), tier 1 is everything else in reading order. Reading
+/// order breaks distance ties deterministically.
+fn anchor_rank(distance_seconds: f64, behind: bool, reading_index: usize) -> (u8, f64, usize) {
+    let tier = u8::from(behind || distance_seconds > HORIZON_SECONDS);
+    let distance = if tier == 0 { distance_seconds } else { 0.0 };
+    (tier, distance, reading_index)
+}
+
+/// A playback position the scheduler aims audio production at: chapter and
+/// paragraph indices into the book (the identity the kernel reader's
+/// positions reduce to). Hosts set the initial anchor on the spec and move
+/// it live via [`PipelineJob::set_anchor`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ProgressiveAnchor {
+    /// Chapter index into the bundle's chapter list.
+    pub chapter: u32,
+    /// Paragraph index within that chapter.
+    pub paragraph: u32,
+}
+
+/// The live anchor state shared between the host handle and the scheduler
+/// policy: the position plus an epoch counter the policy consults to
+/// re-score the engine's pending queue.
+#[derive(Debug, Default)]
+struct AnchorShared {
+    pos: std::sync::RwLock<ProgressiveAnchor>,
+    epoch: Arc<AtomicU64>,
+}
+
 /// Everything a job needs, supplied by the host. Paths are explicit — the
 /// job never calls `default_cache_dir()` (Android's `dirs` resolves nothing
 /// over JNI; the host always knows its dirs).
@@ -134,6 +191,11 @@ pub struct PipelineSpec {
     /// Shared encoder for the synth stage (the pool shares it by
     /// reference, so it must be thread-safe).
     pub encoder: Arc<dyn Encoder + Send + Sync>,
+    /// Where the progressive scheduler aims production first: the resume
+    /// position (a stored reader position) or book start when `None`.
+    /// Movable live via [`PipelineJob::set_anchor`]; ignored by the
+    /// text-only/full variants.
+    pub initial_anchor: Option<ProgressiveAnchor>,
 }
 
 /// Runner factory: produces one engine runner per pool chunk.
@@ -329,14 +391,20 @@ impl ProgressSink for ReporterAsSink<'_> {
 pub struct PipelineJob {
     spec: PipelineSpec,
     flag: CancelFlag,
+    anchor: Arc<AnchorShared>,
 }
 
 impl PipelineJob {
     /// Build a job from a spec.
     pub fn new(spec: PipelineSpec) -> Self {
+        let anchor = Arc::new(AnchorShared {
+            pos: std::sync::RwLock::new(spec.initial_anchor.unwrap_or_default()),
+            epoch: Arc::new(AtomicU64::new(0)),
+        });
         Self {
             spec,
             flag: CancelFlag::default(),
+            anchor,
         }
     }
 
@@ -344,6 +412,18 @@ impl PipelineJob {
     /// paragraph boundary; stage boundaries check before every transition.
     pub fn cancel(&self) {
         self.flag.store(true, Ordering::Relaxed);
+    }
+
+    /// Move the scheduling anchor (progressive only): the pending queue
+    /// re-scores at the next dispatch pop — paragraphs near the new
+    /// position synthesize first; in-flight chunks finish (cancellation is
+    /// the only preemption). A no-op before `run` (the anchor is also read
+    /// at synth start).
+    pub fn set_anchor(&self, anchor: ProgressiveAnchor) {
+        if let Ok(mut pos) = self.anchor.pos.write() {
+            *pos = anchor;
+        }
+        self.anchor.epoch.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The job's cancel flag, shared with [`PipelineJob::cancel`]. Hosts
@@ -370,8 +450,8 @@ impl PipelineJob {
         source: &dyn VoiceSource,
         reporter: Option<&dyn PipelineReporter>,
     ) -> Result<PipelineOutcome, PipelineError> {
-        let Self { spec, flag } = self;
-        Self::run_parts(spec, flag, source, reporter)
+        let Self { spec, flag, anchor } = self;
+        Self::run_parts(spec, flag, anchor, source, reporter)
     }
 
     /// [`PipelineJob::run`] for hosts that hold the job in an `Arc` (the
@@ -383,12 +463,19 @@ impl PipelineJob {
         source: &dyn VoiceSource,
         reporter: Option<&dyn PipelineReporter>,
     ) -> Result<PipelineOutcome, PipelineError> {
-        Self::run_parts(self.spec.clone(), Arc::clone(&self.flag), source, reporter)
+        Self::run_parts(
+            self.spec.clone(),
+            Arc::clone(&self.flag),
+            Arc::clone(&self.anchor),
+            source,
+            reporter,
+        )
     }
 
     fn run_parts(
         spec: PipelineSpec,
         flag: CancelFlag,
+        anchor: Arc<AnchorShared>,
         source: &dyn VoiceSource,
         reporter: Option<&dyn PipelineReporter>,
     ) -> Result<PipelineOutcome, PipelineError> {
@@ -427,10 +514,12 @@ impl PipelineJob {
         let bundle_path = spec.books_dir.join(format!("{book_id}.taletrek"));
 
         // Captured before the consuming variant match (the Progressive arm
-        // needs the store dir plus the spec by reference afterwards).
+        // needs the store dir + live anchor plus the spec by reference
+        // afterwards).
         let progressive_cfg = match &spec.variant {
             PipelineVariant::Progressive { store_dir, .. } => Some(ProgressiveCfg {
                 store_dir: store_dir.clone(),
+                anchor: Arc::clone(&anchor),
             }),
             _ => None,
         };
@@ -521,11 +610,12 @@ impl PipelineJob {
             // the reader can open it), synth streams into the segment
             // store, and drain seals a full bundle over the text one.
             PipelineVariant::Progressive { .. } => {
-                let ProgressiveCfg { store_dir } =
+                let ProgressiveCfg { store_dir, anchor } =
                     progressive_cfg.expect("progressive cfg captured before the variant match");
                 let sealed = run_progressive(
                     &spec,
                     flag,
+                    anchor,
                     source,
                     sink_ref,
                     reporter,
@@ -560,10 +650,11 @@ fn to_text_only(
     taletrek_parse::to_text_only_bundle_with_id(book, voice, generator(generator_app), book_id)
 }
 
-/// The Progressive arm's pre-captured config (store dir), taken before the
-/// consuming variant match.
+/// The Progressive arm's pre-captured config (store dir + the live anchor),
+/// taken before the consuming variant match.
 struct ProgressiveCfg {
     store_dir: PathBuf,
+    anchor: Arc<AnchorShared>,
 }
 
 /// The reading-order anchor tracker for [`PipelineEvent::Playable`]: how
@@ -696,20 +787,102 @@ impl ProgressSink for ResumeProgressSink<'_> {
     }
 }
 
-/// Reading-order distinct keys for `chapters` under `voice` — the same
-/// first-occurrence walk the bundle writer dedups by.
-fn reading_order_keys(voice: &str, chapters: &[taletrek_synth::ChapterText]) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    let mut keys = Vec::new();
-    for chapter in chapters {
-        for para in &chapter.paragraphs {
-            let key = cache_key(voice, para);
-            if seen.insert(key.clone()) {
-                keys.push(key);
+/// The book's audio timeline: per-paragraph estimated positions (cumulative
+/// [`estimate_audio_seconds`] over the reading order), the
+/// (chapter, paragraph) → reading-index map, and the ordering policy built
+/// on top — the whole anchor/horizon scheduling policy lives here, in the
+/// pipeline; the engine only applies the resulting order.
+struct AudioTimeline {
+    /// Reading-order distinct keys (first-occurrence dedup).
+    keys: Vec<String>,
+    /// Estimated start time (seconds from book start) per reading-order
+    /// paragraph.
+    starts: Vec<f64>,
+    /// (chapter, paragraph) → first-occurrence reading index.
+    at: std::collections::HashMap<(u32, u32), usize>,
+}
+
+impl AudioTimeline {
+    fn build(voice: &str, chapters: &[taletrek_synth::ChapterText]) -> Self {
+        let mut keys = Vec::new();
+        let mut starts = Vec::new();
+        let mut at = std::collections::HashMap::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut cumulative = 0.0;
+        for (chapter_idx, chapter) in chapters.iter().enumerate() {
+            for (para_idx, para) in chapter.paragraphs.iter().enumerate() {
+                let key = cache_key(voice, para);
+                if seen.insert(key.clone()) {
+                    keys.push(key);
+                    starts.push(cumulative);
+                    at.insert((chapter_idx as u32, para_idx as u32), starts.len() - 1);
+                }
+                cumulative += estimate_audio_seconds(
+                    taletrek_synth::normalize_for_speech(para).chars().count(),
+                );
             }
         }
+        Self { keys, starts, at }
     }
-    keys
+
+    /// Reading index of an anchor position (book start for unmapped
+    /// positions).
+    fn index_of(&self, pos: ProgressiveAnchor) -> usize {
+        self.at
+            .get(&(pos.chapter, pos.paragraph))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The engine ordering policy over PLANNED (missing) paragraphs: the
+    /// engine's plan order is the reading order of the reduced bundle, so
+    /// `reduced` maps each engine index to its full-timeline index. Reads
+    /// the LIVE anchor each invocation; ties break in reading order.
+    fn order_policy(
+        &self,
+        anchor: Arc<AnchorShared>,
+        existing: &std::collections::HashSet<String>,
+    ) -> crate::synth_job::ParagraphOrderPolicy {
+        // The reduced reading order (missing keys only), as full-timeline
+        // indices — index-aligned with the engine's planned paragraphs.
+        let reduced: Vec<usize> = self
+            .keys
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| !existing.contains(*k))
+            .map(|(i, _)| i)
+            .collect();
+        let starts = self.starts.clone();
+        let at = self.at.clone();
+        Arc::new(move |views: &[crate::synth_job::ParagraphPlanView]| {
+            let pos = anchor.pos.read().map(|pos| *pos).unwrap_or_default();
+            let anchor_time = starts
+                .get(at.get(&(pos.chapter, pos.paragraph)).copied().unwrap_or(0))
+                .copied()
+                .unwrap_or(0.0);
+            let mut ranked: Vec<((u8, f64, usize), usize)> = views
+                .iter()
+                .enumerate()
+                .map(|(engine_idx, view)| {
+                    let full_idx = reduced.get(view.reading_index).copied().unwrap_or(0);
+                    let t = starts.get(full_idx).copied().unwrap_or(0.0);
+                    let (behind, distance) = if t < anchor_time {
+                        (true, anchor_time - t)
+                    } else {
+                        (false, t - anchor_time)
+                    };
+                    (
+                        anchor_rank(distance, behind, view.reading_index),
+                        engine_idx,
+                    )
+                })
+                .collect();
+            ranked.sort_unstable_by(|a, b| {
+                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            ranked.into_iter().map(|(_, idx)| idx).collect()
+        })
+    }
 }
 
 /// The Progressive variant: text bundle early → store-driven synth → seal.
@@ -729,6 +902,7 @@ fn reading_order_keys(voice: &str, chapters: &[taletrek_synth::ChapterText]) -> 
 fn run_progressive(
     spec: &PipelineSpec,
     flag: CancelFlag,
+    anchor: Arc<AnchorShared>,
     source: &dyn VoiceSource,
     sink_ref: Option<&dyn ProgressSink>,
     reporter: Option<&dyn PipelineReporter>,
@@ -759,11 +933,18 @@ fn run_progressive(
     write_bundle_atomic(&text_bundle, bundle_path)?;
 
     // Synth drains into the store; the playable tracker watches the
-    // reading-order prefix.
+    // reading-order prefix FROM THE INITIAL ANCHOR (a stored resume position
+    // counts from there; mid-run anchor moves re-score scheduling only —
+    // Playable is one-shot).
     let store = crate::store::SegmentStore::open(&store_dir)?;
-    let reading_order = reading_order_keys(voice, &text_bundle.chapters);
+    let timeline = AudioTimeline::build(voice, &text_bundle.chapters);
+    let reading_order = timeline.keys.clone();
     let durations: Arc<Mutex<RecordedDurations>> = Arc::new(Mutex::new(Vec::new()));
-    let tracker = Arc::new(Mutex::new(PlayableTracker::new(reading_order.clone())));
+    let initial_anchor_pos = anchor.pos.read().map(|pos| *pos).unwrap_or_default();
+    let anchor_full_idx = timeline.index_of(initial_anchor_pos);
+    let playable_order: Vec<String> =
+        reading_order[anchor_full_idx.min(reading_order.len())..].to_vec();
+    let tracker = Arc::new(Mutex::new(PlayableTracker::new(playable_order)));
 
     // Resume (task 006): keys already in the store are never re-synthesized
     // — they count as delivered for the playable tracker, fast-forward the
@@ -845,7 +1026,12 @@ fn run_progressive(
         total: reading_order.len(),
         inner: sink_ref,
     };
-    let synth = crate::synth_paragraphs_into(
+    // Anchor/horizon scheduling policy: rank planned (missing) paragraphs
+    // by their position on the book's audio timeline relative to the LIVE
+    // anchor. The engine applies it up front and re-applies it after every
+    // anchor epoch change.
+    let policy = timeline.order_policy(Arc::clone(&anchor), &existing);
+    let synth = crate::synth_paragraphs_into_dynamic(
         &reduced_bundle,
         voice,
         &model,
@@ -853,6 +1039,8 @@ fn run_progressive(
         &encoder,
         spec.jobs,
         Some(&resume_progress),
+        Some(policy),
+        Some(Arc::clone(&anchor.epoch)),
         &sink,
     );
     drop(sink);
@@ -1256,6 +1444,7 @@ mod tests {
             books_dir: books_dir.to_path_buf(),
             make_runner: runner,
             encoder: Arc::new(taletrek_synth::WavPassthrough),
+            initial_anchor: None,
         }
     }
 
@@ -2220,5 +2409,177 @@ mod tests {
             "the curly-seeded store serves the ASCII twin — same cache keys"
         );
         assert_eq!(outcome.segments, 2);
+    }
+
+    // ---- anchor + horizon (progressive-synth task 007) ----
+
+    /// A 12-paragraph book (one chapter) with distinguishable texts.
+    fn anchored_source() -> Vec<u8> {
+        let paras: Vec<String> = (0..12)
+            .map(|i| format!("Paragraph number {i} of the anchored fixture book."))
+            .collect();
+        format!("Chapter One\n\n{}", paras.join("\n\n")).into_bytes()
+    }
+
+    /// A runner recording every predicted text (jobs=1 keeps consumption
+    /// order exact).
+    struct RecordingTextRunner {
+        predicts: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl PiperRunner for RecordingTextRunner {
+        fn predict(&mut self, _m: &Path, text: &str) -> Result<Vec<u8>, SynthError> {
+            self.predicts.lock().unwrap().push(text.to_string());
+            Ok(canonical_wav())
+        }
+    }
+
+    fn text_recording_factory(predicts: &Arc<Mutex<Vec<String>>>) -> RunnerFactory {
+        let seen = Arc::clone(predicts);
+        Arc::new(move || {
+            Box::new(RecordingTextRunner {
+                predicts: seen.clone(),
+            }) as Box<dyn PiperRunner + Send>
+        })
+    }
+
+    /// Progressive spec with explicit source + anchor.
+    fn progressive_spec_with(
+        books_dir: &Path,
+        runner: RunnerFactory,
+        source: Vec<u8>,
+        anchor: Option<ProgressiveAnchor>,
+    ) -> PipelineSpec {
+        let mut s = progressive_spec(books_dir, runner);
+        s.source = source;
+        s.initial_anchor = anchor;
+        s
+    }
+
+    #[test]
+    fn estimator_converts_chars_at_the_measured_rate() {
+        assert_eq!(estimate_audio_seconds(0), 0.0);
+        assert!((estimate_audio_seconds(18) - 1.0).abs() < 1e-9);
+        assert!((estimate_audio_seconds(180) - 10.0).abs() < 1e-9);
+        assert!(estimate_audio_seconds(36) > estimate_audio_seconds(18));
+    }
+
+    #[test]
+    fn anchor_rank_tiers_horizon_first_and_breaks_ties_by_reading_order() {
+        // Ahead within the horizon: tier 0, distance ascending.
+        let near = anchor_rank(10.0, false, 5);
+        let far = anchor_rank(170.0, false, 7);
+        assert!(near < far, "closer-ahead ranks first");
+        // Beyond the horizon: tier 1 (reading order among them).
+        let beyond = anchor_rank(HORIZON_SECONDS + 1.0, false, 2);
+        assert_eq!(beyond.0, 1);
+        assert!(far < beyond, "horizon tier precedes fill");
+        // Behind the anchor: fill, regardless of distance.
+        let behind = anchor_rank(1.0, true, 3);
+        assert_eq!(behind.0, 1, "behind the anchor is fill");
+        // Equal distance ties break by reading index.
+        let a = anchor_rank(42.0, false, 4);
+        let b = anchor_rank(42.0, false, 9);
+        assert!(a < b);
+    }
+
+    #[test]
+    fn initial_anchor_synthesizes_the_anchored_position_first() {
+        // Anchor at paragraph 8 of 12: the first synthesized chunk must be
+        // paragraph 8's (jobs=1 makes consumption order exact).
+        let dir = tempfile::tempdir().unwrap();
+        let predicts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let spec = progressive_spec_with(
+            dir.path(),
+            text_recording_factory(&predicts),
+            anchored_source(),
+            Some(ProgressiveAnchor {
+                chapter: 0,
+                paragraph: 8,
+            }),
+        );
+        let outcome = PipelineJob::new(spec)
+            .run(&StubSource::default(), None)
+            .expect("anchored run");
+        assert!(outcome.sealed);
+
+        let texts = predicts.lock().unwrap();
+        let first = texts.first().expect("predicts happened").clone();
+        assert!(
+            first.contains("number 8"),
+            "the anchored paragraph synthesizes first, got {first:?} (of {texts:?})"
+        );
+    }
+
+    #[test]
+    fn set_anchor_mid_run_re_prioritizes_to_the_new_neighborhood() {
+        // After the 2nd predict the anchor jumps to paragraph 10. With
+        // jobs=1 the NEXT predicts must be paragraph 10's chunks, not the
+        // original reading order's paragraph 2/3.
+        let dir = tempfile::tempdir().unwrap();
+        let predicts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let slot: Arc<Mutex<Option<Arc<PipelineJob>>>> = Arc::new(Mutex::new(None));
+        let job_holder = Arc::clone(&slot);
+        let seen = Arc::clone(&predicts);
+        let factory: RunnerFactory = Arc::new(move || {
+            // The recorder wrapper trips the seek after the 2nd predict —
+            // the test stores the job handle before run_shared starts.
+            struct SeekAfter {
+                predicts: Arc<Mutex<Vec<String>>>,
+                job: Arc<Mutex<Option<Arc<PipelineJob>>>>,
+                inner: RecordingTextRunner,
+            }
+            impl PiperRunner for SeekAfter {
+                fn predict(&mut self, m: &Path, text: &str) -> Result<Vec<u8>, SynthError> {
+                    let out = self.inner.predict(m, text)?;
+                    let count = self.predicts.lock().unwrap().len();
+                    if count == 2 {
+                        if let Some(job) = self.job.lock().unwrap().as_ref() {
+                            job.set_anchor(ProgressiveAnchor {
+                                chapter: 0,
+                                paragraph: 10,
+                            });
+                        }
+                    }
+                    Ok(out)
+                }
+            }
+            Box::new(SeekAfter {
+                predicts: seen.clone(),
+                job: job_holder.clone(),
+                inner: RecordingTextRunner {
+                    predicts: seen.clone(),
+                },
+            }) as Box<dyn PiperRunner + Send>
+        });
+
+        let spec = progressive_spec_with(
+            dir.path(),
+            factory,
+            anchored_source(),
+            Some(ProgressiveAnchor {
+                chapter: 0,
+                paragraph: 0,
+            }),
+        );
+        let job = Arc::new(PipelineJob::new(spec));
+        slot.lock().unwrap().replace(Arc::clone(&job));
+        let outcome = job
+            .run_shared(&StubSource::default(), None)
+            .expect("seek run");
+        assert!(outcome.sealed);
+
+        let texts = predicts.lock().unwrap();
+        // Horizon at paragraph 10 covers 10 and 11 (the book ends at 11);
+        // then fill resumes in reading order.
+        let after_seek: Vec<&String> = texts.iter().skip(2).take(2).collect();
+        assert!(
+            after_seek
+                .iter()
+                .all(|t| t.contains("number 10") || t.contains("number 11")),
+            "post-seek predicts must be the new neighborhood, got {after_seek:?} (all: {texts:?})"
+        );
     }
 }
