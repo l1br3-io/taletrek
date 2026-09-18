@@ -60,6 +60,7 @@ class SynthStateMachineTest {
         chapters = 2u,
         paragraphs = 5u,
         segments = if (textOnly) 0u else 5u,
+        sealed = false,
     )
 
     private fun request() =

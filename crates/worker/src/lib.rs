@@ -63,8 +63,9 @@ pub trait ProgressSink: Send + Sync {
 
 // Flat type re-exports — the primary public API.
 pub use pipeline::{
-    CancelFlag, CancellableRunner, PipelineError, PipelineEvent, PipelineJob, PipelineOutcome,
-    PipelinePhase, PipelineReporter, PipelineSpec, PipelineVariant, RunnerFactory,
+    estimate_audio_seconds, CancelFlag, CancellableRunner, PipelineError, PipelineEvent,
+    PipelineJob, PipelineOutcome, PipelinePhase, PipelineReporter, PipelineSpec, PipelineVariant,
+    ProgressiveAnchor, RunnerFactory, HORIZON_SECONDS, PLAYABLE_SECONDS, SPEECH_CHARS_PER_SECOND,
 };
 pub use progress::Progress;
 pub use stamp::{

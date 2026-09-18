@@ -721,6 +721,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_read_segment(
     ): Int
+    external fun uniffi_taletrek_ffi_checksum_func_read_segment_progressive(
+    ): Int
     external fun uniffi_taletrek_ffi_checksum_func_decode_segment(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_export_merged_audio(
@@ -738,6 +740,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_taletrek_ffi_checksum_func_voice_catalog(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_method_pipelinehandle_cancel(
+    ): Int
+    external fun uniffi_taletrek_ffi_checksum_method_pipelinehandle_set_anchor(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_method_pipelinehandle_start(
     ): Int
@@ -787,6 +791,8 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_taletrek_ffi_fn_method_pipelinehandle_cancel(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_taletrek_ffi_fn_method_pipelinehandle_set_anchor(`ptr`: Long,`anchor`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_taletrek_ffi_fn_method_pipelinehandle_start(`ptr`: Long,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_taletrek_ffi_fn_method_pipelinehandle_state(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -812,6 +818,8 @@ internal object UniffiLib {
     external fun uniffi_taletrek_ffi_fn_func_open_book(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_read_segment(`path`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_taletrek_ffi_fn_func_read_segment_progressive(`path`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_decode_segment(`path`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -954,6 +962,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_taletrek_ffi_checksum_func_read_segment() != 37961) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_taletrek_ffi_checksum_func_read_segment_progressive() != 64574) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_taletrek_ffi_checksum_func_decode_segment() != 39744) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -979,6 +990,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_method_pipelinehandle_cancel() != 47501) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_method_pipelinehandle_set_anchor() != 770) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_method_pipelinehandle_start() != 60633) {
@@ -1527,6 +1541,15 @@ public interface PipelineHandleInterface {
     fun `cancel`()
     
     /**
+     * Move the scheduling anchor (progressive only): synthesis re-aims at
+     * the new position — the horizon near it becomes the priority tier.
+     * In-flight chunks finish (cancellation is the only preemption). A
+     * no-op before [`start`](Self::start) (set `initial_anchor` on the
+     * config instead) and for non-progressive jobs.
+     */
+    fun `setAnchor`(`anchor`: FfiAnchor)
+    
+    /**
      * Start the job on a worker thread; events stream to `observer` and
      * the terminal state lands in [`state`](Self::state). Errors if
      * already started (one-shot handle) or the source is unreadable.
@@ -1671,6 +1694,26 @@ open class PipelineHandle: Disposable, AutoCloseable, PipelineHandleInterface
     UniffiLib.uniffi_taletrek_ffi_fn_method_pipelinehandle_cancel(
         it,
         _status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Move the scheduling anchor (progressive only): synthesis re-aims at
+     * the new position — the horizon near it becomes the priority tier.
+     * In-flight chunks finish (cancellation is the only preemption). A
+     * no-op before [`start`](Self::start) (set `initial_anchor` on the
+     * config instead) and for non-progressive jobs.
+     */override fun `setAnchor`(`anchor`: FfiAnchor)
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_method_pipelinehandle_set_anchor(
+        it,
+        
+        FfiConverterTypeFfiAnchor.lower(`anchor`),_status)
 }
     }
     
@@ -2102,6 +2145,55 @@ public object FfiConverterTypeTrekPlayer: FfiConverter<TrekPlayer, Long> {
 
 
 /**
+ * A playback position the scheduler aims audio production at — chapter and
+ * paragraph indices into the book (the identity the kernel reader's
+ * positions reduce to).
+ */
+data class FfiAnchor (
+    /**
+     * Chapter index into the bundle's chapter list.
+     */
+    var `chapter`: kotlin.UInt
+    , 
+    /**
+     * Paragraph index within that chapter.
+     */
+    var `paragraph`: kotlin.UInt
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiAnchor: FfiConverterRustBuffer<FfiAnchor> {
+    override fun read(buf: ByteBuffer): FfiAnchor {
+        return FfiAnchor(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiAnchor) = (
+            FfiConverterUInt.allocationSize(value.`chapter`) +
+            FfiConverterUInt.allocationSize(value.`paragraph`)
+    )
+
+    override fun write(value: FfiAnchor, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`chapter`, buf)
+            FfiConverterUInt.write(value.`paragraph`, buf)
+    }
+}
+
+
+
+/**
  * A whole book as foreign callers see it — manifest display data plus
  * the navigable chapter/paragraph structure the UI renders against.
  */
@@ -2464,7 +2556,8 @@ data class FfiPipelineConfig (
     var `hint`: kotlin.String?
     , 
     /**
-     * `true` = text-only bundle (no voice needed); `false` = full synth.
+     * `true` = text-only bundle (no voice needed); `false` = full synth
+     * (or progressive, when [`Self::progressive`] is set).
      */
     var `textOnly`: kotlin.Boolean
     , 
@@ -2498,6 +2591,13 @@ data class FfiPipelineConfig (
      * `generator.app` identity (e.g. `taletrek-android`).
      */
     var `generatorApp`: kotlin.String
+    , 
+    /**
+     * Progressive conversion (text bundle lands immediately, synth
+     * streams into the segment store, drain seals a full bundle).
+     * `None` = the batch behavior above; ignored when `text_only`.
+     */
+    var `progressive`: FfiProgressiveConfig?
     
 ){
     
@@ -2523,6 +2623,7 @@ public object FfiConverterTypeFfiPipelineConfig: FfiConverterRustBuffer<FfiPipel
             FfiConverterString.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterOptionalTypeFfiProgressiveConfig.read(buf),
         )
     }
 
@@ -2535,7 +2636,8 @@ public object FfiConverterTypeFfiPipelineConfig: FfiConverterRustBuffer<FfiPipel
             FfiConverterString.allocationSize(value.`espeakDir`) +
             FfiConverterString.allocationSize(value.`booksDir`) +
             FfiConverterUInt.allocationSize(value.`jobs`) +
-            FfiConverterString.allocationSize(value.`generatorApp`)
+            FfiConverterString.allocationSize(value.`generatorApp`) +
+            FfiConverterOptionalTypeFfiProgressiveConfig.allocationSize(value.`progressive`)
     )
 
     override fun write(value: FfiPipelineConfig, buf: ByteBuffer) {
@@ -2548,6 +2650,7 @@ public object FfiConverterTypeFfiPipelineConfig: FfiConverterRustBuffer<FfiPipel
             FfiConverterString.write(value.`booksDir`, buf)
             FfiConverterUInt.write(value.`jobs`, buf)
             FfiConverterString.write(value.`generatorApp`, buf)
+            FfiConverterOptionalTypeFfiProgressiveConfig.write(value.`progressive`, buf)
     }
 }
 
@@ -2586,6 +2689,12 @@ data class FfiPipelineOutcome (
      * Distinct audio segments (0 for text-only).
      */
     var `segments`: kotlin.UInt
+    , 
+    /**
+     * `true` when the progressive variant sealed (text bundle replaced by
+     * the full one). Always `false` for text-only/full.
+     */
+    var `sealed`: kotlin.Boolean
     
 ){
     
@@ -2608,6 +2717,7 @@ public object FfiConverterTypeFfiPipelineOutcome: FfiConverterRustBuffer<FfiPipe
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -2617,7 +2727,8 @@ public object FfiConverterTypeFfiPipelineOutcome: FfiConverterRustBuffer<FfiPipe
             FfiConverterBoolean.allocationSize(value.`textOnly`) +
             FfiConverterUInt.allocationSize(value.`chapters`) +
             FfiConverterUInt.allocationSize(value.`paragraphs`) +
-            FfiConverterUInt.allocationSize(value.`segments`)
+            FfiConverterUInt.allocationSize(value.`segments`) +
+            FfiConverterBoolean.allocationSize(value.`sealed`)
     )
 
     override fun write(value: FfiPipelineOutcome, buf: ByteBuffer) {
@@ -2627,6 +2738,7 @@ public object FfiConverterTypeFfiPipelineOutcome: FfiConverterRustBuffer<FfiPipe
             FfiConverterUInt.write(value.`chapters`, buf)
             FfiConverterUInt.write(value.`paragraphs`, buf)
             FfiConverterUInt.write(value.`segments`, buf)
+            FfiConverterBoolean.write(value.`sealed`, buf)
     }
 }
 
@@ -2683,6 +2795,56 @@ public object FfiConverterTypeFfiPosition: FfiConverterRustBuffer<FfiPosition> {
             FfiConverterUInt.write(value.`chapter`, buf)
             FfiConverterUInt.write(value.`index`, buf)
             FfiConverterDouble.write(value.`offset`, buf)
+    }
+}
+
+
+
+/**
+ * Progressive-specific pipeline configuration.
+ */
+data class FfiProgressiveConfig (
+    /**
+     * Segment store root (e.g. `<cacheDir>/taletrek/segments`) — shared
+     * across books and runs; the resume source.
+     */
+    var `storeDir`: kotlin.String
+    , 
+    /**
+     * Where synthesis aims first: the reader's stored resume position.
+     * `None` = book start. Movable live via
+     * [`PipelineHandle::set_anchor`].
+     */
+    var `initialAnchor`: FfiAnchor?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiProgressiveConfig: FfiConverterRustBuffer<FfiProgressiveConfig> {
+    override fun read(buf: ByteBuffer): FfiProgressiveConfig {
+        return FfiProgressiveConfig(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalTypeFfiAnchor.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiProgressiveConfig) = (
+            FfiConverterString.allocationSize(value.`storeDir`) +
+            FfiConverterOptionalTypeFfiAnchor.allocationSize(value.`initialAnchor`)
+    )
+
+    override fun write(value: FfiProgressiveConfig, buf: ByteBuffer) {
+            FfiConverterString.write(value.`storeDir`, buf)
+            FfiConverterOptionalTypeFfiAnchor.write(value.`initialAnchor`, buf)
     }
 }
 
@@ -3234,6 +3396,20 @@ sealed class FfiPipelineEvent {
         companion object
     }
     
+    /**
+     * Progressive only: ≥ 30 s of audio exists at the anchor — surface
+     * "start listening" while synthesis continues.
+     */
+    object Playable : FfiPipelineEvent()
+    
+    
+    /**
+     * Progressive only: the sealed full bundle atomically replaced the
+     * text-only one; the job finishes immediately after.
+     */
+    object Sealed : FfiPipelineEvent()
+    
+    
 
     
 
@@ -3265,6 +3441,8 @@ public object FfiConverterTypeFfiPipelineEvent : FfiConverterRustBuffer<FfiPipel
                 FfiConverterUInt.read(buf),
                 FfiConverterUInt.read(buf),
                 )
+            5 -> FfiPipelineEvent.Playable
+            6 -> FfiPipelineEvent.Sealed
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -3301,6 +3479,18 @@ public object FfiConverterTypeFfiPipelineEvent : FfiConverterRustBuffer<FfiPipel
                 + FfiConverterUInt.allocationSize(value.`total`)
             )
         }
+        is FfiPipelineEvent.Playable -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is FfiPipelineEvent.Sealed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
     }
 
     override fun write(value: FfiPipelineEvent, buf: ByteBuffer) {
@@ -3326,6 +3516,14 @@ public object FfiConverterTypeFfiPipelineEvent : FfiConverterRustBuffer<FfiPipel
                 buf.putInt(4)
                 FfiConverterUInt.write(value.`done`, buf)
                 FfiConverterUInt.write(value.`total`, buf)
+                Unit
+            }
+            is FfiPipelineEvent.Playable -> {
+                buf.putInt(5)
+                Unit
+            }
+            is FfiPipelineEvent.Sealed -> {
+                buf.putInt(6)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -3357,7 +3555,12 @@ enum class FfiPipelinePhase {
     /**
      * Writing the bundle.
      */
-    WRITING;
+    WRITING,
+    /**
+     * Merging store segments into the final full bundle (progressive
+     * only): the queue drained, the book is sealing.
+     */
+    SEALING;
 
     
 
@@ -4070,6 +4273,123 @@ public object FfiConverterTypeFfiPlayerStatus: FfiConverterRustBuffer<FfiPlayerS
 
 
 
+/**
+ * The typed answer to "can I play paragraph `key` right now?" — the
+ * progressive reader's read seam. [`FfiSegmentStatus::Ready`] carries the
+ * segment; [`FfiSegmentStatus::NotReady`] means the key is *expected* (the
+ * book is filling: a text-only bundle whose chapters reference the key —
+ * the job is alive or resumable); [`FfiSegmentStatus::Missing`] means the
+ * bundle is sealed/full and the key is genuinely absent (corrupt archive
+ * or a foreign key — never a wait-worthy state).
+ */
+sealed class FfiSegmentStatus {
+    
+    /**
+     * The segment's bytes + codec extension (`opus`/`wav`/`m4a`).
+     */
+    data class Ready(
+        /**
+         * Encoded audio bytes, verbatim.
+         */
+        val `bytes`: kotlin.ByteArray, 
+        /**
+         * Codec extension (`opus`/`wav`/`m4a`) — what `decode_segment`
+         * expects alongside the bytes.
+         */
+        val `codec`: kotlin.String) : FfiSegmentStatus()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Expected but not synthesized yet — the book is filling; the caller
+     * may block briefly (buffering UX) or surface resume.
+     */
+    object NotReady : FfiSegmentStatus()
+    
+    
+    /**
+     * The sealed bundle has no such segment — not coming.
+     */
+    object Missing : FfiSegmentStatus()
+    
+    
+
+    
+
+    
+    
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiSegmentStatus : FfiConverterRustBuffer<FfiSegmentStatus>{
+    override fun read(buf: ByteBuffer): FfiSegmentStatus {
+        return when(buf.getInt()) {
+            1 -> FfiSegmentStatus.Ready(
+                FfiConverterByteArray.read(buf),
+                FfiConverterString.read(buf),
+                )
+            2 -> FfiSegmentStatus.NotReady
+            3 -> FfiSegmentStatus.Missing
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiSegmentStatus): ULong = when(value) {
+        is FfiSegmentStatus.Ready -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterByteArray.allocationSize(value.`bytes`)
+                + FfiConverterString.allocationSize(value.`codec`)
+            )
+        }
+        is FfiSegmentStatus.NotReady -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is FfiSegmentStatus.Missing -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+    }
+
+    override fun write(value: FfiSegmentStatus, buf: ByteBuffer) {
+        when(value) {
+            is FfiSegmentStatus.Ready -> {
+                buf.putInt(1)
+                FfiConverterByteArray.write(value.`bytes`, buf)
+                FfiConverterString.write(value.`codec`, buf)
+                Unit
+            }
+            is FfiSegmentStatus.NotReady -> {
+                buf.putInt(2)
+                Unit
+            }
+            is FfiSegmentStatus.Missing -> {
+                buf.putInt(3)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
 
 
 /**
@@ -4379,6 +4699,38 @@ public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteA
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeFfiAnchor: FfiConverterRustBuffer<FfiAnchor?> {
+    override fun read(buf: ByteBuffer): FfiAnchor? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiAnchor.read(buf)
+    }
+
+    override fun allocationSize(value: FfiAnchor?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiAnchor.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiAnchor?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiAnchor.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeFfiDecodedAudio: FfiConverterRustBuffer<FfiDecodedAudio?> {
     override fun read(buf: ByteBuffer): FfiDecodedAudio? {
         if (buf.get().toInt() == 0) {
@@ -4465,6 +4817,38 @@ public object FfiConverterOptionalTypeFfiPosition: FfiConverterRustBuffer<FfiPos
         } else {
             buf.put(1)
             FfiConverterTypeFfiPosition.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiProgressiveConfig: FfiConverterRustBuffer<FfiProgressiveConfig?> {
+    override fun read(buf: ByteBuffer): FfiProgressiveConfig? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiProgressiveConfig.read(buf)
+    }
+
+    override fun allocationSize(value: FfiProgressiveConfig?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiProgressiveConfig.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiProgressiveConfig?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiProgressiveConfig.write(value, buf)
         }
     }
 }
@@ -4634,6 +5018,23 @@ public object FfiConverterSequenceTypeFfiVoice: FfiConverterRustBuffer<List<FfiV
             return FfiConverterOptionalByteArray.lift(
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.uniffi_taletrek_ffi_fn_func_read_segment(
+    
+        
+        FfiConverterString.lower(`path`),
+        FfiConverterString.lower(`key`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The progressive read seam: [`read_segment`] split by *why* it's absent.
+         * See [`FfiSegmentStatus`] for the semantics.
+         */
+    @Throws(FfiException::class) fun `readSegmentProgressive`(`path`: kotlin.String, `key`: kotlin.String): FfiSegmentStatus {
+            return FfiConverterTypeFfiSegmentStatus.lift(
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_read_segment_progressive(
     
         
         FfiConverterString.lower(`path`),

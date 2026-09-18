@@ -249,6 +249,10 @@ class SynthController(
                                 FfiPipelinePhase.RESOLVING_VOICE -> SynthUiState.Preparing(null, null)
                                 FfiPipelinePhase.SYNTHESIZING -> SynthUiState.Synthesizing(0, 0)
                                 FfiPipelinePhase.WRITING -> SynthUiState.Writing
+                                // Progressive seal: the merged bundle is
+                                // landing — product wiring lands with the
+                                // progressive Android tasks.
+                                FfiPipelinePhase.SEALING -> SynthUiState.Writing
                             }
                         is FfiPipelineEvent.Parsed ->
                             SynthUiState.Preparing(event.`chapters`.toInt(), event.`paragraphs`.toInt())
@@ -256,6 +260,11 @@ class SynthController(
                             SynthUiState.DownloadingVoice(event.`bytesDone`.toLong(), event.`bytesTotal`.toLong())
                         is FfiPipelineEvent.SynthStep ->
                             SynthUiState.Synthesizing(event.`done`.toInt(), event.`total`.toInt())
+                        // Progressive lifecycle: the states above keep
+                        // flowing; the dedicated UX lands with the
+                        // progressive Android tasks.
+                        FfiPipelineEvent.Playable -> _state.value
+                        FfiPipelineEvent.Sealed -> SynthUiState.Writing
                     }
             }
         }
@@ -296,4 +305,7 @@ private fun SynthJobRequest.toConfig() =
         booksDir = booksDir,
         jobs = jobs.toUInt(),
         generatorApp = generatorApp,
+        // Progressive conversion is wired by the progressive Android tasks;
+        // the app's import flow stays batch until then.
+        progressive = null,
     )

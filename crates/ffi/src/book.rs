@@ -73,6 +73,59 @@ pub fn read_segment(path: String, key: String) -> Result<Option<Vec<u8>>, FfiErr
     Ok(read_audio_segment(Path::new(&path), &key)?.map(|seg| seg.bytes))
 }
 
+/// The typed answer to "can I play paragraph `key` right now?" — the
+/// progressive reader's read seam. [`FfiSegmentStatus::Ready`] carries the
+/// segment; [`FfiSegmentStatus::NotReady`] means the key is *expected* (the
+/// book is filling: a text-only bundle whose chapters reference the key —
+/// the job is alive or resumable); [`FfiSegmentStatus::Missing`] means the
+/// bundle is sealed/full and the key is genuinely absent (corrupt archive
+/// or a foreign key — never a wait-worthy state).
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum FfiSegmentStatus {
+    /// The segment's bytes + codec extension (`opus`/`wav`/`m4a`).
+    Ready {
+        /// Encoded audio bytes, verbatim.
+        bytes: Vec<u8>,
+        /// Codec extension (`opus`/`wav`/`m4a`) — what `decode_segment`
+        /// expects alongside the bytes.
+        codec: String,
+    },
+    /// Expected but not synthesized yet — the book is filling; the caller
+    /// may block briefly (buffering UX) or surface resume.
+    NotReady,
+    /// The sealed bundle has no such segment — not coming.
+    Missing,
+}
+
+/// The progressive read seam: [`read_segment`] split by *why* it's absent.
+/// See [`FfiSegmentStatus`] for the semantics.
+#[uniffi::export]
+pub fn read_segment_progressive(path: String, key: String) -> Result<FfiSegmentStatus, FfiError> {
+    let path = Path::new(&path);
+    let (manifest, chapters) = read_book_metadata(path)?;
+    if manifest.audio.present {
+        return Ok(match read_audio_segment(path, &key)? {
+            Some(seg) => FfiSegmentStatus::Ready {
+                bytes: seg.bytes,
+                codec: seg.codec.ext().to_string(),
+            },
+            None => FfiSegmentStatus::Missing,
+        });
+    }
+    // Text-only (filling): the key is NotReady exactly when the book's own
+    // chapters reference it — the manifest voice namespaces the key.
+    let expected = chapters.iter().any(|ch| {
+        ch.paragraphs
+            .iter()
+            .any(|p| taletrek_synth::cache_key(&manifest.book.voice_id, p) == key)
+    });
+    Ok(if expected {
+        FfiSegmentStatus::NotReady
+    } else {
+        FfiSegmentStatus::Missing
+    })
+}
+
 /// Rebuild the kernel's [`BookIndex`] from the flattened records — the
 /// player's construction path. Field-for-field: the segment keys were
 /// derived by the kernel on the way out, so they ride back unchanged.
