@@ -108,6 +108,7 @@ class SynthServiceSmokeTest {
             voiceCacheDir = "/files/voices",
             espeakDir = "/files/espeak",
             booksDir = "/files/books",
+            storeDir = "/cache/taletrek/segments",
             jobs = 2,
             generatorApp = "taletrek-android",
         )
@@ -132,6 +133,7 @@ class SynthServiceSmokeTest {
                             chapters = 2u,
                             paragraphs = 6u,
                             segments = 6u,
+                            sealed = false,
                         ),
                     ),
                 )
@@ -171,7 +173,7 @@ class SynthServiceSmokeTest {
     @Test
     fun cancelIntentStopsTheJobAndLandsCancelled() =
         runBlocking {
-            val engine = ScriptedEngine(FfiPipelineState.Finished(FfiPipelineOutcome("x", "x", true, 1u, 1u, 1u)))
+            val engine = ScriptedEngine(FfiPipelineState.Finished(FfiPipelineOutcome("x", "x", true, 1u, 1u, 1u, false)))
             startService(engine)
             awaitFresh { it is SynthUiState.Synthesizing }
             val context = ApplicationProvider.getApplicationContext<android.content.Context>()

@@ -114,6 +114,7 @@ class ExportTest {
                 voiceCacheDir = voices.absolutePath,
                 espeakDir = espeak.absolutePath,
                 booksDir = books.absolutePath,
+                storeDir = freshDir("export/segments").absolutePath,
                 jobs = 2,
                 generatorApp = "taletrek-android",
             )

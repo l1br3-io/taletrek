@@ -135,6 +135,7 @@ class SynthService : Service() {
             is SynthUiState.Preparing,
             is SynthUiState.DownloadingVoice,
             is SynthUiState.Synthesizing,
+            is SynthUiState.Filling,
             SynthUiState.Writing,
             -> {
                 acquireWake()
@@ -231,6 +232,7 @@ class SynthService : Service() {
         this is SynthUiState.Preparing ||
             this is SynthUiState.DownloadingVoice ||
             this is SynthUiState.Synthesizing ||
+            this is SynthUiState.Filling ||
             this is SynthUiState.Writing
 
     private fun SynthUiState.notificationCopy(): Triple<String, String, Progress?> =
@@ -264,6 +266,20 @@ class SynthService : Service() {
                 Triple(
                     "Synthesizing",
                     if (total > 0) "$done of $total paragraphs" else "Starting…",
+                    if (total > 0) {
+                        Progress.Determinate(((done * 100) / total).toInt())
+                    } else {
+                        Progress.Indeterminate
+                    },
+                )
+            is SynthUiState.Filling ->
+                Triple(
+                    "Preparing audio",
+                    if (total > 0) {
+                        "Listening available · $done of $total paragraphs"
+                    } else {
+                        "Listening available"
+                    },
                     if (total > 0) {
                         Progress.Determinate(((done * 100) / total).toInt())
                     } else {

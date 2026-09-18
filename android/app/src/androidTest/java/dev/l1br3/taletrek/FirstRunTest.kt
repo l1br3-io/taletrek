@@ -74,6 +74,7 @@ class FirstRunTest {
                 voiceCacheDir = voices.absolutePath,
                 espeakDir = espeak.absolutePath,
                 booksDir = books.absolutePath,
+                storeDir = freshDir("segments").absolutePath,
                 jobs = 2,
                 generatorApp = "taletrek-android",
             )

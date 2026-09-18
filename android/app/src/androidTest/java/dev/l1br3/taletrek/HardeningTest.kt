@@ -60,6 +60,7 @@ class HardeningTest {
         voiceCacheDir = File(files, "voices").path,
         espeakDir = File(files, "espeak-ng-data").path,
         booksDir = books.path,
+        storeDir = File(books, "../segments/${books.name}").path,
         jobs = 2,
         generatorApp = "taletrek-android",
     )

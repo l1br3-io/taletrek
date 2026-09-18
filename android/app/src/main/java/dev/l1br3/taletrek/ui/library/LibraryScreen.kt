@@ -449,6 +449,13 @@ private fun ConvertProgressCard(
             is SynthUiState.Synthesizing ->
                 "Synthesizing audio" to
                     if (state.total > 0) "${state.done} of ${state.total} paragraphs" else "Starting…"
+            is SynthUiState.Filling ->
+                "Preparing audio" to
+                    if (state.total > 0) {
+                        "Listening available · ${state.done} of ${state.total} paragraphs"
+                    } else {
+                        "Listening available"
+                    }
             SynthUiState.Writing -> "Finishing" to "Writing bundle…"
             is SynthUiState.Done -> "Book ready" to "Added to your library"
             is SynthUiState.Failed -> "Conversion failed" to state.message
@@ -460,6 +467,8 @@ private fun ConvertProgressCard(
             is SynthUiState.DownloadingVoice ->
                 if (state.total > 0) ((state.done * 100) / state.total).toInt() else null
             is SynthUiState.Synthesizing ->
+                if (state.total > 0) (state.done * 100) / state.total else null
+            is SynthUiState.Filling ->
                 if (state.total > 0) (state.done * 100) / state.total else null
             else -> null
         }

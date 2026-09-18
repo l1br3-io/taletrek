@@ -2,11 +2,13 @@ package dev.l1br3.taletrek.service
 
 import android.content.Context
 import android.content.Intent
+import dev.l1br3.taletrek.ffi.FfiAnchor
 import dev.l1br3.taletrek.ffi.FfiPipelineConfig
 import dev.l1br3.taletrek.ffi.FfiPipelineEvent
 import dev.l1br3.taletrek.ffi.FfiPipelinePhase
 import dev.l1br3.taletrek.ffi.FfiPipelineSetupException
 import dev.l1br3.taletrek.ffi.FfiPipelineState
+import dev.l1br3.taletrek.ffi.FfiProgressiveConfig
 import dev.l1br3.taletrek.ffi.PipelineHandle
 import dev.l1br3.taletrek.ffi.PipelineObserver
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -109,9 +111,9 @@ class HandleSynthEngine(
     }
 }
 
-/** One convert request, carried across the service intent. Android only
- *  ever submits the full job (the kernel/FFI keep the text-only variant —
- *  it's the format's capability, used by desktop/web). */
+/** One convert request, carried across the service intent. Android
+ *  submits the progressive variant: the text bundle lands immediately
+ *  and audio fills the segment store while the book is listenable. */
 data class SynthJobRequest(
     val sourcePath: String,
     val hint: String?,
@@ -119,8 +121,10 @@ data class SynthJobRequest(
     val voiceCacheDir: String,
     val espeakDir: String,
     val booksDir: String,
+    val storeDir: String,
     val jobs: Int,
     val generatorApp: String,
+    val initialAnchor: FfiAnchor? = null,
 ) {
     fun toIntent(context: Context): Intent =
         Intent(context, SynthService::class.java).apply {
@@ -131,8 +135,11 @@ data class SynthJobRequest(
             putExtra(EXTRA_VOICE_CACHE, voiceCacheDir)
             putExtra(EXTRA_ESPEAK, espeakDir)
             putExtra(EXTRA_BOOKS, booksDir)
+            putExtra(EXTRA_STORE, storeDir)
             putExtra(EXTRA_JOBS, jobs)
             putExtra(EXTRA_GENERATOR, generatorApp)
+            putExtra(EXTRA_ANCHOR_CH, initialAnchor?.chapter?.toInt() ?: -1)
+            putExtra(EXTRA_ANCHOR_P, initialAnchor?.paragraph?.toInt() ?: -1)
         }
 
     companion object {
@@ -142,13 +149,18 @@ data class SynthJobRequest(
         const val EXTRA_VOICE_CACHE = "dev.l1br3.taletrek.synth.voiceCache"
         const val EXTRA_ESPEAK = "dev.l1br3.taletrek.synth.espeak"
         const val EXTRA_BOOKS = "dev.l1br3.taletrek.synth.books"
+        const val EXTRA_STORE = "dev.l1br3.taletrek.synth.store"
         const val EXTRA_JOBS = "dev.l1br3.taletrek.synth.jobs"
         const val EXTRA_GENERATOR = "dev.l1br3.taletrek.synth.generator"
+        const val EXTRA_ANCHOR_CH = "dev.l1br3.taletrek.synth.anchorChapter"
+        const val EXTRA_ANCHOR_P = "dev.l1br3.taletrek.synth.anchorParagraph"
 
         /** Inverse of [toIntent] — null when the intent carries no job. */
         fun fromIntent(intent: Intent): SynthJobRequest? {
             if (intent.action != SynthService.ACTION_START) return null
             val source = intent.getStringExtra(EXTRA_SOURCE) ?: return null
+            val anchorCh = intent.getIntExtra(EXTRA_ANCHOR_CH, -1)
+            val anchorP = intent.getIntExtra(EXTRA_ANCHOR_P, -1)
             return SynthJobRequest(
                 sourcePath = source,
                 hint = intent.getStringExtra(EXTRA_HINT),
@@ -156,8 +168,15 @@ data class SynthJobRequest(
                 voiceCacheDir = intent.getStringExtra(EXTRA_VOICE_CACHE) ?: return null,
                 espeakDir = intent.getStringExtra(EXTRA_ESPEAK) ?: return null,
                 booksDir = intent.getStringExtra(EXTRA_BOOKS) ?: return null,
+                storeDir = intent.getStringExtra(EXTRA_STORE) ?: return null,
                 jobs = intent.getIntExtra(EXTRA_JOBS, 2),
                 generatorApp = intent.getStringExtra(EXTRA_GENERATOR) ?: "taletrek-android",
+                initialAnchor =
+                    if (anchorCh >= 0 && anchorP >= 0) {
+                        FfiAnchor(anchorCh.toUInt(), anchorP.toUInt())
+                    } else {
+                        null
+                    },
             )
         }
     }
@@ -182,6 +201,13 @@ sealed interface SynthUiState {
 
     /** Synthesizing (paragraphs done of total). */
     data class Synthesizing(
+        val done: Int,
+        val total: Int,
+    ) : SynthUiState
+
+    /** Synthesizing with listening already possible — audio runs ahead
+     *  of the playhead (progressive `Playable`). */
+    data class Filling(
         val done: Int,
         val total: Int,
     ) : SynthUiState
@@ -221,10 +247,17 @@ class SynthController(
     private val _state = MutableStateFlow<SynthUiState>(SynthUiState.Idle)
     val state = _state.asStateFlow()
 
+    private var playable = false
+    private var stepDone = 0
+    private var stepTotal = 0
+
     /** Submit one job; `false` when a job is already running. */
     @Synchronized
     fun submit(request: SynthJobRequest): Boolean {
         if (_state.value.isRunningPhase) return false
+        playable = false
+        stepDone = 0
+        stepTotal = 0
         _state.value = SynthUiState.Preparing(chapters = null, paragraphs = null)
         engine.start(request.toConfig(), observer) { terminal ->
             _state.value = terminal.toUi()
@@ -247,7 +280,12 @@ class SynthController(
                             when (event.v1) {
                                 FfiPipelinePhase.PARSING -> SynthUiState.Preparing(null, null)
                                 FfiPipelinePhase.RESOLVING_VOICE -> SynthUiState.Preparing(null, null)
-                                FfiPipelinePhase.SYNTHESIZING -> SynthUiState.Synthesizing(0, 0)
+                                FfiPipelinePhase.SYNTHESIZING ->
+                                    if (playable) {
+                                        _state.value
+                                    } else {
+                                        SynthUiState.Synthesizing(0, 0)
+                                    }
                                 FfiPipelinePhase.WRITING -> SynthUiState.Writing
                                 // Progressive seal: the merged bundle is
                                 // landing — product wiring lands with the
@@ -258,12 +296,21 @@ class SynthController(
                             SynthUiState.Preparing(event.`chapters`.toInt(), event.`paragraphs`.toInt())
                         is FfiPipelineEvent.DownloadStep ->
                             SynthUiState.DownloadingVoice(event.`bytesDone`.toLong(), event.`bytesTotal`.toLong())
-                        is FfiPipelineEvent.SynthStep ->
-                            SynthUiState.Synthesizing(event.`done`.toInt(), event.`total`.toInt())
-                        // Progressive lifecycle: the states above keep
-                        // flowing; the dedicated UX lands with the
-                        // progressive Android tasks.
-                        FfiPipelineEvent.Playable -> _state.value
+                        is FfiPipelineEvent.SynthStep -> {
+                            stepDone = event.`done`.toInt()
+                            stepTotal = event.`total`.toInt()
+                            if (playable) {
+                                SynthUiState.Filling(stepDone, stepTotal)
+                            } else {
+                                SynthUiState.Synthesizing(stepDone, stepTotal)
+                            }
+                        }
+                        // Progressive lifecycle: listening is possible from
+                        // here on — the rest of the run renders as filling.
+                        FfiPipelineEvent.Playable -> {
+                            playable = true
+                            SynthUiState.Filling(stepDone, stepTotal)
+                        }
                         FfiPipelineEvent.Sealed -> SynthUiState.Writing
                     }
             }
@@ -290,6 +337,7 @@ val SynthUiState.isRunningPhase: Boolean
         this is SynthUiState.Preparing ||
             this is SynthUiState.DownloadingVoice ||
             this is SynthUiState.Synthesizing ||
+            this is SynthUiState.Filling ||
             this is SynthUiState.Writing
 
 private fun SynthJobRequest.toConfig() =
@@ -305,7 +353,11 @@ private fun SynthJobRequest.toConfig() =
         booksDir = booksDir,
         jobs = jobs.toUInt(),
         generatorApp = generatorApp,
-        // Progressive conversion is wired by the progressive Android tasks;
-        // the app's import flow stays batch until then.
-        progressive = null,
+        // Every import converts progressively: text bundle first, audio
+        // fills the store while the book is listenable, drain seals.
+        progressive =
+            FfiProgressiveConfig(
+                storeDir = storeDir,
+                initialAnchor = initialAnchor,
+            ),
     )

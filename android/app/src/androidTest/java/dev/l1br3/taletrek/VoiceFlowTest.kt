@@ -87,6 +87,7 @@ class VoiceFlowTest {
                     voiceCacheDir = File(files, "voices").path,
                     espeakDir = File(files, "espeak-ng-data").path,
                     booksDir = shelf.path,
+                    storeDir = File(files, "segments/voice-selection").path,
                     jobs = 2,
                     generatorApp = "taletrek-android",
                 )
