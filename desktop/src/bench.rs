@@ -11,10 +11,21 @@
 //! - [`BenchEncoder`] wraps the production encoder and times every
 //!   [`Encoder::encode`] call (the synth/encode split's denominator side).
 //! - Per-**paragraph** attribution rides a thread-local accumulator: a
-//!   paragraph's predicts and its sink delivery all happen on the same pool
+//!   paragraph's predicts and its sink delivery all happen on one pool
 //!   worker thread, so the runner adds elapsed time to the thread's current
-//!   paragraph and the [`SegmentSink`] closure closes it out. This stays
-//!   exact under any `--jobs` parallelism without touching the engine.
+//!   paragraph and the [`SegmentSink`] closure closes it out.
+//!
+//! # Two-pass protocol
+//!
+//! Since the fine-grained scheduling rework (progressive-synth task 002), a
+//! paragraph's chunks may be predicted by **different** workers — the
+//! thread-local close is then only exact at `jobs=1`. [`run_bench_cmd`]
+//! therefore runs two passes: the requested `--jobs` pass supplies wall /
+//! RTF / audio / delivery counts, and (when `jobs > 1`) a `jobs=1` profile
+//! pass supplies the per-paragraph and per-chunk distributions plus the
+//! synth/encode split — the intrinsic, scheduling-independent cost profile.
+//! [`run_bench`] itself is single-pass; its `paragraphs` field is exact only
+//! at `jobs=1` (documented there).
 //!
 //! [`run_bench`] drives [`taletrek_worker::synth_paragraphs_into`] — the
 //! same pool engine the batch pipeline stamps through — with stub runners in
@@ -85,6 +96,10 @@ pub struct BenchMeta {
 /// `make_runner` and `encoder` are the production seams (the CLI passes the
 /// desktop engine selection; tests pass stubs) — both are wrapped in the
 /// timing decorators here, never at the call site.
+///
+/// Per-paragraph attribution is exact only at `jobs=1` (see the module's
+/// two-pass note); the caller merges a sequential profile pass for the
+/// paragraph rows when benchmarking parallel jobs.
 #[allow(clippy::missing_panics_doc)] // poisoned bench mutex = a recorder bug; panicking is correct
 pub fn run_bench<R, E, F>(
     bundle: &BookBundle,
@@ -173,27 +188,30 @@ pub fn percentile(mut samples: Vec<Duration>, q: f64) -> Duration {
 }
 
 /// Render the bench report as a markdown document: a settings table, a
-/// measurements table (wall, split, RTF), and the paragraph/chunk
-/// percentile rows (p50/p95/max) plus the tail ratio.
+/// measurements table (wall, splits, RTF — with the parallel pass's own
+/// predict sum for makespan-efficiency math), and the paragraph/chunk
+/// percentile rows (p50/p95/max, from the intrinsic profile) plus the tail
+/// ratio.
+///
+/// `profile` supplies the per-paragraph/per-chunk distributions and the
+/// intrinsic predict/encode split; `None` means `main` already ran at
+/// `jobs=1` and doubles as its own profile.
 #[must_use]
-pub fn render_report(stats: &BenchStats, meta: &BenchMeta) -> String {
-    let p50 = percentile(stats.paragraphs.clone(), 0.50);
-    let p95 = percentile(stats.paragraphs.clone(), 0.95);
-    let max = stats.paragraphs.iter().max().copied().unwrap_or_default();
+pub fn render_report(main: &BenchStats, profile: Option<&BenchStats>, meta: &BenchMeta) -> String {
+    let profile = profile.unwrap_or(main);
+    let p50 = percentile(profile.paragraphs.clone(), 0.50);
+    let p95 = percentile(profile.paragraphs.clone(), 0.95);
+    let max = profile.paragraphs.iter().max().copied().unwrap_or_default();
     let tail = if p50.is_zero() {
         0.0
     } else {
         max.as_secs_f64() / p50.as_secs_f64()
     };
-    let rtf = if stats.wall.is_zero() {
+    let rtf = if main.wall.is_zero() {
         0.0
     } else {
-        stats.audio_total.as_secs_f64() / stats.wall.as_secs_f64()
+        main.audio_total.as_secs_f64() / main.wall.as_secs_f64()
     };
-    let other = stats
-        .wall
-        .saturating_sub(stats.predict_total.min(stats.wall))
-        .saturating_sub(stats.encode_total.min(stats.wall));
     format!(
         concat!(
             "# bench-synth — {doc}\n\n",
@@ -201,11 +219,12 @@ pub fn render_report(stats: &BenchStats, meta: &BenchMeta) -> String {
             "| engine | {engine} |\n| voice | {voice} |\n| jobs | {jobs} |\n",
             "| paragraphs | {deliveries} |\n| chunks | {chunks} |\n\n",
             "| metric | value |\n| --- | --- |\n",
-            "| wall | {wall} |\n| predict total | {predict} |\n",
-            "| encode total | {encode} |\n| other (wall − split) | {other} |\n",
+            "| wall | {wall} |\n| parallel predict Σ | {ppredict} |\n",
+            "| predict total (jobs=1) | {predict} |\n",
+            "| encode total (jobs=1) | {encode} |\n",
             "| audio total | {audio} |\n| sustained RTF | {rtf:.1}x |\n\n",
-            "| predict durations | p50 | p95 | max |\n| --- | --- | --- | --- |\n",
-            "| per paragraph | {pp50} | {pp95} | {pmax} |\n",
+            "| predict durations (jobs=1) | p50 | p95 | max |\n| --- | --- | --- | --- |\n",
+            "| per paragraph | {p50} | {p95} | {pmax} |\n",
             "| per chunk | {cp50} | {cp95} | {cmax} |\n",
             "| tail (paragraph max/p50) | {tail:.1}x | | |\n"
         ),
@@ -213,20 +232,20 @@ pub fn render_report(stats: &BenchStats, meta: &BenchMeta) -> String {
         engine = meta.engine,
         voice = meta.voice,
         jobs = meta.jobs,
-        deliveries = stats.deliveries,
-        chunks = stats.chunks.len(),
-        wall = fmt_duration(stats.wall),
-        predict = fmt_duration(stats.predict_total),
-        encode = fmt_duration(stats.encode_total),
-        other = fmt_duration(other),
-        audio = fmt_duration(stats.audio_total),
+        deliveries = main.deliveries,
+        chunks = profile.chunks.len(),
+        wall = fmt_duration(main.wall),
+        ppredict = fmt_duration(main.predict_total),
+        predict = fmt_duration(profile.predict_total),
+        encode = fmt_duration(profile.encode_total),
+        audio = fmt_duration(main.audio_total),
         rtf = rtf,
-        pp50 = fmt_duration(p50),
-        pp95 = fmt_duration(p95),
+        p50 = fmt_duration(p50),
+        p95 = fmt_duration(p95),
         pmax = fmt_duration(max),
-        cp50 = fmt_duration(percentile(stats.chunks.clone(), 0.50)),
-        cp95 = fmt_duration(percentile(stats.chunks.clone(), 0.95)),
-        cmax = fmt_duration(stats.chunks.iter().max().copied().unwrap_or_default()),
+        cp50 = fmt_duration(percentile(profile.chunks.clone(), 0.50)),
+        cp95 = fmt_duration(percentile(profile.chunks.clone(), 0.95)),
+        cmax = fmt_duration(profile.chunks.iter().max().copied().unwrap_or_default()),
         tail = tail,
     )
 }
@@ -334,8 +353,11 @@ pub fn run_bench_cmd(args: BenchArgs) -> Result<()> {
         .context("resolving voice model")?;
 
     let engine = engine_label(&runner_spec).to_string();
+    let profile_spec = runner_spec.clone();
     let factory_voice_model = voice_model.clone();
-    let stats = run_bench(
+    let profile_voice_model = voice_model.clone();
+    let profile_factory_model = profile_voice_model.clone();
+    let main = run_bench(
         &bundle,
         &voice_id,
         &voice_model,
@@ -344,13 +366,32 @@ pub fn run_bench_cmd(args: BenchArgs) -> Result<()> {
         jobs,
         Some(&progress),
     )?;
+
+    // Intrinsic profile: at jobs > 1 a paragraph's chunks may span workers,
+    // so the per-paragraph rows (and the split totals) come from an exact
+    // sequential pass. Wall / RTF / audio / deliveries stay from the
+    // parallel pass above.
+    let profile = if jobs > 1 {
+        Some(run_bench(
+            &bundle,
+            &voice_id,
+            &profile_voice_model,
+            move || DesktopRunner::new(profile_spec.clone(), &profile_factory_model),
+            &encoder,
+            1,
+            None,
+        )?)
+    } else {
+        None
+    };
+
     let meta = BenchMeta {
         doc: args.input.display().to_string(),
         voice: voice_id,
         jobs,
         engine,
     };
-    print!("{}", render_report(&stats, &meta));
+    print!("{}", render_report(&main, profile.as_ref(), &meta));
     Ok(())
 }
 
@@ -484,11 +525,68 @@ mod tests {
     }
 
     #[test]
-    fn run_bench_attributes_every_paragraph_under_parallel_jobs() {
+    fn run_bench_attributes_one_paragraph_per_delivery_at_jobs_one() {
         // 5 paragraphs (one duplicated, one long enough to split into
-        // multiple chunks) at jobs=2: thread-local attribution must still
-        // close exactly one paragraph sample per delivery, and the chunk
-        // count must equal what split_for_speech plans for the same cap.
+        // multiple chunks), sequential: the thread-local close is exact at
+        // jobs=1 — one paragraph sample per delivery, chunk count equals
+        // the pipeline's own split planning, and the paragraph samples sum
+        // to predict_total exactly.
+        let long = "Alpha beta gamma delta. ".repeat(60);
+        let paragraphs = vec![
+            "Short one.".to_string(),
+            long,
+            "Short two.".to_string(),
+            "Short one.".to_string(),
+            "Short three.".to_string(),
+        ];
+        let bundle = text_only_bundle(paragraphs.clone());
+
+        let stats = run_bench(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1,
+            None,
+        )
+        .expect("stub bench run succeeds");
+
+        assert_eq!(stats.deliveries, 5, "one delivery per paragraph occurrence");
+        assert_eq!(
+            stats.paragraphs.len(),
+            5,
+            "sequential close must yield one paragraph sample per delivery"
+        );
+        let sum: Duration = stats.paragraphs.iter().sum();
+        assert_eq!(sum, stats.predict_total);
+        let expected_chunks: usize = paragraphs
+            .iter()
+            .map(|p| split_for_speech(&normalize_for_speech(p), MAX_SYNTH_CHARS).len())
+            .sum();
+        assert!(
+            expected_chunks > 5,
+            "fixture must contain a split paragraph"
+        );
+        assert_eq!(
+            stats.chunks.len(),
+            expected_chunks,
+            "one chunk sample per predict call"
+        );
+        let expected_audio = expected_chunks as f64 * 2.0 / 16_000.0;
+        assert!(
+            (stats.audio_total.as_secs_f64() - expected_audio).abs() < 1e-9,
+            "audio total {} ~ {expected_audio}",
+            stats.audio_total.as_secs_f64()
+        );
+    }
+
+    #[test]
+    fn run_bench_parallel_pass_keeps_scheduling_free_invariants() {
+        // At jobs=2 chunks may span workers, so only the scheduling-free
+        // facts hold: delivery count, chunk count, audio total (per-predict
+        // accounting). The per-paragraph rows come from the jobs=1 profile
+        // pass in run_bench_cmd (two-pass protocol).
         let long = "Alpha beta gamma delta. ".repeat(60);
         let paragraphs = vec![
             "Short one.".to_string(),
@@ -510,45 +608,34 @@ mod tests {
         )
         .expect("stub bench run succeeds");
 
-        assert_eq!(stats.deliveries, 5, "one delivery per paragraph occurrence");
-        assert_eq!(
-            stats.paragraphs.len(),
-            5,
-            "thread-local close must yield one paragraph sample per delivery"
-        );
-        // predict_total is exactly the sum of the per-paragraph samples —
-        // both accumulate the same timed values.
-        let sum: Duration = stats.paragraphs.iter().sum();
-        assert_eq!(sum, stats.predict_total);
-        // Chunk count matches the pipeline's own split planning under the
-        // stub's default cap (MAX_SYNTH_CHARS).
+        assert_eq!(stats.deliveries, 5);
         let expected_chunks: usize = paragraphs
             .iter()
             .map(|p| split_for_speech(&normalize_for_speech(p), MAX_SYNTH_CHARS).len())
             .sum();
-        assert!(
-            expected_chunks > 5,
-            "fixture must contain a split paragraph"
-        );
-        assert_eq!(
-            stats.chunks.len(),
-            expected_chunks,
-            "one chunk sample per predict call"
-        );
-        // Audio total: every predict returned 4 PCM bytes = 2 samples at
-        // 16 kHz = 0.125 ms of audio.
+        assert_eq!(stats.chunks.len(), expected_chunks);
         let expected_audio = expected_chunks as f64 * 2.0 / 16_000.0;
         assert!(
             (stats.audio_total.as_secs_f64() - expected_audio).abs() < 1e-9,
-            "audio total {} ~ {expected_audio}",
-            stats.audio_total.as_secs_f64()
+            "per-predict audio accounting is worker-agnostic"
         );
     }
 
     #[test]
     fn render_report_contains_settings_measurements_and_tail() {
-        let stats = BenchStats {
+        let main = BenchStats {
             wall: Duration::from_secs(10),
+            paragraphs: vec![Duration::from_millis(1); 3],
+            chunks: vec![Duration::from_millis(1); 3],
+            predict_total: Duration::from_secs(5),
+            encode_total: Duration::from_millis(900),
+            audio_total: Duration::from_secs(100),
+            deliveries: 3,
+        };
+        // A jobs=1 profile: the paragraph distribution [1,2,3]s drives the
+        // percentile + tail rows.
+        let profile = BenchStats {
+            wall: Duration::from_secs(30),
             paragraphs: vec![
                 Duration::from_secs(1),
                 Duration::from_secs(2),
@@ -566,14 +653,21 @@ mod tests {
             jobs: 2,
             engine: "sherpa (in-process)".into(),
         };
-        let report = render_report(&stats, &meta);
+        let report = render_report(&main, Some(&profile), &meta);
         assert!(report.contains("novel.epub"), "names the doc");
         assert!(
             report.contains("en_US-hfc_female-medium"),
             "names the voice"
         );
         assert!(report.contains("sherpa (in-process)"), "names the engine");
-        assert!(report.contains("10.0s"), "wall time rendered");
+        assert!(
+            report.contains("10.0s"),
+            "wall time rendered from main pass"
+        );
+        assert!(
+            report.contains("5.0s"),
+            "parallel predict sum rendered from main pass"
+        );
         assert!(report.contains("RTF"), "sustained RTF present");
         assert!(
             report.contains("10.0x"),
@@ -581,7 +675,14 @@ mod tests {
         );
         assert!(report.contains("p50"), "percentile rows present");
         assert!(report.contains("p95"), "percentile rows present");
-        // p50 of [1,2,3]s = 2s, max = 3s → tail ratio 1.5x.
+        // p50 of [1,2,3]s = 2s, max = 3s → tail ratio 1.5x (profile rows).
         assert!(report.contains("1.5x"), "tail max/p50 ratio rendered");
+        // jobs=1 invocation: main doubles as its own profile.
+        let single = render_report(&profile, None, &meta);
+        assert!(
+            single.contains("30.0s"),
+            "profile-less render uses main for wall"
+        );
+        assert!(single.contains("1.5x"), "tail from main-as-profile");
     }
 }
