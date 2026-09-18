@@ -34,11 +34,13 @@ data class OpenedBook(
     val path: String,
     val chapters: List<ReaderChapter>,
     val initialChapter: Int,
+    val initialPos: FfiParagraphPos? = null,
 )
 
 /**
  * The transport bar's enabled state, derived from the snapshot —
  * bounds facts about *where playback is*, never next/prev decisions.
+ * `buffering`/`stalled` are the progressive fill's held-load states.
  */
 data class TransportUiState(
     val canPlayPause: Boolean,
@@ -47,6 +49,8 @@ data class TransportUiState(
     val canNextParagraph: Boolean,
     val canPrevChapter: Boolean,
     val canNextChapter: Boolean,
+    val buffering: Boolean = false,
+    val stalled: Boolean = false,
 )
 
 /** The reader screen's render state — Compose renders this, nothing else. */
@@ -63,6 +67,8 @@ data class ReaderUiState(
     val status: FfiPlayerStatus = FfiPlayerStatus.IDLE,
     val active: FfiParagraphPos? = null,
     val skipped: UInt = 0u,
+    val buffering: Boolean = false,
+    val stalled: Boolean = false,
     val transport: TransportUiState =
         TransportUiState(
             canPlayPause = false,
@@ -85,11 +91,18 @@ data class ReaderUiState(
 class ReaderViewModel(
     private val opener: suspend () -> OpenedBook?,
     private val transport: ReaderTransport,
+    private val isSynthJobActive: () -> Boolean = { false },
+    private val onResumeSynth: () -> Unit = {},
 ) : ViewModel() {
     private val _ui = MutableStateFlow(ReaderUiState())
     val ui: StateFlow<ReaderUiState> = _ui.asStateFlow()
 
     private var lastPara: FfiParagraphPos? = null
+
+    /** A filling book stays playable through its fill and after seal
+     *  (sticky: armed at open when a job was live; the reads answer
+     *  Ready from the sealed bundle from then on). */
+    private var fillingSession = false
 
     init {
         viewModelScope.launch {
@@ -110,7 +123,15 @@ class ReaderViewModel(
                         ).withDerivedTransport()
                 }
             }
-            if (opened != null) transport.openBook(opened.path)
+            if (opened != null) {
+                fillingSession = !opened.audioPresent && isSynthJobActive()
+                if (fillingSession) {
+                    opened.initialPos?.let {
+                        transport.reanchor(it.chapter, it.index)
+                    }
+                }
+                transport.openBook(opened.path)
+            }
         }
         viewModelScope.launch {
             transport.states.collect { state ->
@@ -130,6 +151,8 @@ class ReaderViewModel(
                 status = state.status,
                 active = state.para,
                 skipped = state.skipped,
+                buffering = state.buffering,
+                stalled = state.stalled,
             )
         // The follow policy (the task's locked rule, simpler than the
         // desktop's re-entry rule): a user scroll defers auto-scroll;
@@ -149,7 +172,8 @@ class ReaderViewModel(
     /** Enabled-state derivation — bounds facts of the snapshot, nothing more. */
     private fun ReaderUiState.withDerivedTransport(): ReaderUiState {
         val para = active
-        val audio = audioPresent
+        val audio = audioPresent || fillingSession
+        val held = buffering || stalled
         val lastChapter = chapters.size - 1
         val atBookStart = para != null && para.chapter == 0u && para.index == 0u
         val atBookEnd =
@@ -159,12 +183,14 @@ class ReaderViewModel(
         return copy(
             transport =
                 TransportUiState(
-                    canPlayPause = audio,
+                    canPlayPause = audio && !held,
                     playing = status == FfiPlayerStatus.PLAYING,
-                    canPrevParagraph = audio && para != null && !atBookStart,
-                    canNextParagraph = audio && para != null && !atBookEnd,
-                    canPrevChapter = audio && para != null && para.chapter > 0u,
-                    canNextChapter = audio && para != null && para.chapter.toInt() < lastChapter,
+                    canPrevParagraph = audio && !held && para != null && !atBookStart,
+                    canNextParagraph = audio && !held && para != null && !atBookEnd,
+                    canPrevChapter = audio && !held && para != null && para.chapter > 0u,
+                    canNextChapter = audio && !held && para != null && para.chapter.toInt() < lastChapter,
+                    buffering = buffering,
+                    stalled = stalled,
                 ),
         )
     }
@@ -177,10 +203,12 @@ class ReaderViewModel(
     /**
      * Click-to-seek: one SeekToParagraph forward — the kernel's own
      * semantics do the rest (idle starts playing there, paused
-     * re-anchors paused, playing jumps).
+     * re-anchors paused, playing jumps). A filling book re-aims the
+     * synth job here too (read ahead where the user actually is).
      */
     fun onParagraphTapped(index: Int) {
         transport.seekToParagraph(_ui.value.renderedChapter.toUInt(), index.toUInt())
+        if (fillingSession) transport.reanchor(_ui.value.renderedChapter.toUInt(), index.toUInt())
         _ui.update { it.copy(follow = true) }
     }
 
@@ -188,7 +216,14 @@ class ReaderViewModel(
     fun jumpToChapter(ordinal: Int) {
         if (ordinal !in _ui.value.chapters.indices) return
         transport.seekToParagraph(ordinal.toUInt(), 0u)
+        if (fillingSession) transport.reanchor(ordinal.toUInt(), 0u)
         _ui.update { it.copy(renderedChapter = ordinal, follow = true) }
+    }
+
+    /** The stalled-load affordance: resubmit the synth job, retry the load. */
+    fun resumeAudio() {
+        onResumeSynth()
+        transport.retryLoad()
     }
 
     fun play() = transport.play()
@@ -207,9 +242,11 @@ class ReaderViewModel(
         fun factory(
             opener: suspend () -> OpenedBook?,
             transport: ReaderTransport,
+            isSynthJobActive: () -> Boolean = { false },
+            onResumeSynth: () -> Unit = {},
         ): ViewModelProvider.Factory =
             viewModelFactory {
-                initializer { ReaderViewModel(opener, transport) }
+                initializer { ReaderViewModel(opener, transport, isSynthJobActive, onResumeSynth) }
             }
     }
 }
@@ -229,12 +266,8 @@ suspend fun openBookForReading(
     withContext(ioDispatcher) {
         runCatching {
             val session = BookSession.open(context, path, store)
-            val initial =
-                session.kernel
-                    .snapshot()
-                    .para
-                    ?.chapter
-                    ?.toInt() ?: 0
+            val restored = session.kernel.snapshot().para
+            val initial = restored?.chapter?.toInt() ?: 0
             val opened =
                 OpenedBook(
                     title = session.book.title,
@@ -249,6 +282,7 @@ suspend fun openBookForReading(
                             )
                         },
                     initialChapter = initial,
+                    initialPos = restored,
                 )
             session.kernel.close()
             opened

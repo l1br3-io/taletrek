@@ -97,6 +97,8 @@ class SynthServiceSmokeTest {
             cancelled.set(true)
         }
 
+        override fun reanchor(anchor: dev.l1br3.taletrek.ffi.FfiAnchor) {}
+
         fun awaitStart() = started.await(5, TimeUnit.SECONDS)
     }
 

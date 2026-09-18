@@ -23,6 +23,7 @@ class SynthStateMachineTest {
     /** Scriptable fake: records start/cancel, replays events on demand. */
     private class FakeEngine : SynthEngine {
         val starts = mutableListOf<FfiPipelineConfig>()
+        val anchors = mutableListOf<FfiAnchor>()
         var cancelCount = 0
         var observer: PipelineObserver? = null
         var onTerminal: ((FfiPipelineState) -> Unit)? = null
@@ -41,6 +42,10 @@ class SynthStateMachineTest {
 
         override fun cancel() {
             cancelCount++
+        }
+
+        override fun reanchor(anchor: FfiAnchor) {
+            anchors += anchor
         }
 
         fun emit(event: FfiPipelineEvent) {
@@ -230,5 +235,13 @@ class SynthStateMachineTest {
         assertEquals(1, engine.cancelCount)
         engine.terminal(FfiPipelineState.Cancelled)
         assertEquals(SynthUiState.Cancelled, controller.state.value)
+    }
+
+    @Test
+    fun reanchorForwardsToTheEngine() {
+        val engine = FakeEngine()
+        val controller = SynthController(engine)
+        controller.reanchor(FfiAnchor(chapter = 2u, paragraph = 3u))
+        assertEquals(listOf(FfiAnchor(chapter = 2u, paragraph = 3u)), engine.anchors)
     }
 }

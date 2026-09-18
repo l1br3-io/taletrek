@@ -97,6 +97,23 @@ fun LibraryScreen(
         if (synthState?.isRunningPhase == true) terminalDismissed = false
     }
 
+    // The filling book's text bundle lands mid-run (progressive writes
+    // it before any audio) — rescan once per job when synth starts so
+    // the row appears; the seal's terminal rescan completes it.
+    var fillScanned by remember { mutableStateOf(false) }
+    LaunchedEffect(synthState) {
+        val state = synthState
+        val running = state is SynthUiState.Synthesizing || state is SynthUiState.Filling
+        if (running && !fillScanned) {
+            fillScanned = true
+            viewModel.rescan()
+        }
+        if (state == null || !state.isRunningPhase) fillScanned = false
+    }
+
+    // The pending job's shelf snapshot — the filling-row disambiguator.
+    val fillingShelfPaths = remember { importViewModel.fillingJobShelfPaths() }
+
     val notifPermission =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     LaunchedEffect(Unit) {
@@ -350,9 +367,11 @@ fun LibraryScreen(
                             }
                         }
                         items(ui.visible, key = { it.bookId }) { book ->
+                            val filling = fillingRowUi(book, synthState, fillingShelfPaths)
                             BookRow(
                                 book = book,
                                 preparingAudio = ui.exporting == book,
+                                fillingDetail = filling.detail,
                                 onOpen = { onOpenBook(book) },
                                 onRequestDelete = { viewModel.requestDelete(book) },
                                 onShareBundle = {
@@ -508,6 +527,7 @@ private fun ConvertProgressCard(
 private fun BookRow(
     book: BookShelf,
     preparingAudio: Boolean,
+    fillingDetail: String?,
     onOpen: () -> Unit,
     onRequestDelete: () -> Unit,
     onShareBundle: () -> Unit,
@@ -519,10 +539,19 @@ private fun BookRow(
     ListItem(
         headlineContent = { Text(book.title, style = MaterialTheme.typography.titleMedium) },
         supportingContent = {
-            Text(
-                "${book.chapterCount} chapter${if (book.chapterCount == 1) "" else "s"}",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Column {
+                Text(
+                    "${book.chapterCount} chapter${if (book.chapterCount == 1) "" else "s"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                fillingDetail?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         },
         trailingContent = {
             Box {

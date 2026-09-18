@@ -151,7 +151,7 @@ class PlayerBridgeTest {
 
     @Test
     fun aMissingSegmentIsAKernelSkipNotALoop() {
-        segments.keys.remove("k0")
+        segments.script("k0", SegmentFetch.Absent)
         kernel.script(load("k0", 0.0)) // one load; the kernel absorbs the failure report
         bridge.userPlay()
 
@@ -159,6 +159,94 @@ class PlayerBridgeTest {
         assertEquals("k0", failed.key)
         assertTrue(port.loads.isEmpty())
     }
+
+    @Test
+    fun aNotYetSegmentWaitsAndRecoversWithoutUserActionWhenItLands() =
+        runTest {
+            val scheduler = StandardTestDispatcher(testScheduler)
+            val buffering = mutableListOf<Boolean>()
+            val waitingBridge =
+                PlayerBridge(
+                    kernel = kernel,
+                    segments = segments,
+                    cache = cache,
+                    port = port,
+                    scope = CoroutineScope(scheduler),
+                    ioDispatcher = scheduler,
+                    keepWaiting = { true },
+                    onBuffering = { buffering += it },
+                )
+            segments.script("k0", SegmentFetch.NotYet, SegmentFetch.Bytes(SEGMENT_BYTES))
+            kernel.script(load("k0", 1.0))
+            waitingBridge.userPlay()
+
+            advanceUntilIdle()
+
+            assertEquals(listOf("k0"), port.loads.map { it.second })
+            assertEquals(1000L, port.loads.single().third)
+            assertEquals(listOf(true, false), buffering)
+            assertTrue(kernel.events.filterIsInstance<FfiPlayerEvent.SegmentFailed>().isEmpty())
+        }
+
+    @Test
+    fun aNotYetSegmentWithADeadJobStallsInsteadOfSkipping() =
+        runTest {
+            val scheduler = StandardTestDispatcher(testScheduler)
+            var stalls = 0
+            val buffering = mutableListOf<Boolean>()
+            val stalledBridge =
+                PlayerBridge(
+                    kernel = kernel,
+                    segments = segments,
+                    cache = cache,
+                    port = port,
+                    scope = CoroutineScope(scheduler),
+                    ioDispatcher = scheduler,
+                    keepWaiting = { false },
+                    onBuffering = { buffering += it },
+                    onStalled = { stalls++ },
+                )
+            segments.script("k0", SegmentFetch.NotYet, SegmentFetch.NotYet)
+            kernel.script(load("k0", 0.0))
+            stalledBridge.userPlay()
+
+            advanceUntilIdle()
+
+            assertEquals(1, stalls)
+            assertTrue(port.loads.isEmpty())
+            assertTrue(kernel.events.filterIsInstance<FfiPlayerEvent.SegmentFailed>().isEmpty())
+        }
+
+    @Test
+    fun retryReplaysTheLastOrderedLoad() =
+        runTest {
+            val scheduler = StandardTestDispatcher(testScheduler)
+            var alive = false
+            val buffering = mutableListOf<Boolean>()
+            val retryBridge =
+                PlayerBridge(
+                    kernel = kernel,
+                    segments = segments,
+                    cache = cache,
+                    port = port,
+                    scope = CoroutineScope(scheduler),
+                    ioDispatcher = scheduler,
+                    keepWaiting = { alive },
+                    onBuffering = { buffering += it },
+                )
+            segments.script("k0", SegmentFetch.NotYet)
+            kernel.script(load("k0", 0.0))
+            retryBridge.userPlay()
+            advanceUntilIdle()
+            assertTrue(port.loads.isEmpty())
+
+            alive = true
+            segments.script("k0", SegmentFetch.Bytes(SEGMENT_BYTES))
+            retryBridge.retry()
+            advanceUntilIdle()
+
+            assertEquals(listOf("k0"), port.loads.map { it.second })
+        }
 
     @Test
     fun aStopActionSilencesOutputAndLeavesNoResidentFile() {
@@ -283,9 +371,27 @@ class PlayerBridgeTest {
     }
 
     private class FakeSegments : SegmentSource {
-        val keys = mutableSetOf("k0", "k1")
+        private val scripted = mutableMapOf<String, ArrayDeque<SegmentFetch>>()
+        private val served = mutableMapOf<String, SegmentFetch>()
 
-        override fun segment(key: String): ByteArray? = if (key in keys) SEGMENT_BYTES else null
+        fun script(
+            key: String,
+            vararg outcomes: SegmentFetch,
+        ) {
+            scripted[key] = ArrayDeque(outcomes.toList())
+        }
+
+        override fun segment(key: String): SegmentFetch {
+            scripted[key]?.let { queue ->
+                val next = queue.removeFirstOrNull()
+                if (queue.isEmpty()) scripted.remove(key)
+                if (next != null) {
+                    served[key] = next
+                    return next
+                }
+            }
+            return served[key] ?: if (key == "k0" || key == "k1") SegmentFetch.Bytes(SEGMENT_BYTES) else SegmentFetch.Absent
+        }
     }
 
     private class FakePort : AudioPort {

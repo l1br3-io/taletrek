@@ -29,6 +29,9 @@ interface SynthEngine {
 
     /** Request cancellation (no-op when idle). */
     fun cancel()
+
+    /** Move the scheduling anchor (progressive only; no-op when idle). */
+    fun reanchor(anchor: FfiAnchor)
 }
 
 /**
@@ -104,6 +107,10 @@ class HandleSynthEngine(
 
     override fun cancel() {
         handle?.cancel()
+    }
+
+    override fun reanchor(anchor: FfiAnchor) {
+        handle?.setAnchor(anchor)
     }
 
     private companion object {
@@ -267,6 +274,9 @@ class SynthController(
 
     /** Request cancel; no-op when not running. */
     fun cancel() = engine.cancel()
+
+    /** Move the scheduling anchor at the playhead (progressive only). */
+    fun reanchor(anchor: FfiAnchor) = engine.reanchor(anchor)
 
     /** Whether a job is currently running (any pre-terminal state). */
     fun isRunning(): Boolean = _state.value.isRunningPhase

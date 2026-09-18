@@ -134,6 +134,9 @@ class MainActivity : ComponentActivity() {
                         onImportConsumed = { pendingImportUri = null },
                         onSourceConsumed = { pendingSourceUri = null },
                         onNavControllerReady = { navController = it },
+                        onResumeSynth = {
+                            lifecycleScope.launch { resumePendingImport(pendingStore) }
+                        },
                     )
                 }
             }
@@ -154,15 +157,21 @@ class MainActivity : ComponentActivity() {
      */
     private fun maybeResumePendingImport(pendingStore: PendingJobStore) {
         lifecycleScope.launch {
-            val resume =
-                PendingImportResume(
-                    store = pendingStore,
-                    loadPosition = { positionStore.load(it) },
-                    isConverting = { SynthService.active.value?.isRunningPhase == true },
-                    startJob = { request -> startForegroundService(request.toIntent(this@MainActivity)) },
-                )
-            resume.resumeWith(libraryViewModel.ui.first { !it.loading }.books)
+            resumePendingImport(pendingStore)
         }
+    }
+
+    /** One resume attempt over the scanned shelf (also the reader's
+     *  stalled-load affordance action). */
+    private suspend fun resumePendingImport(pendingStore: PendingJobStore) {
+        val resume =
+            PendingImportResume(
+                store = pendingStore,
+                loadPosition = { positionStore.load(it) },
+                isConverting = { SynthService.active.value?.isRunningPhase == true },
+                startJob = { request -> startForegroundService(request.toIntent(this@MainActivity)) },
+            )
+        resume.resumeWith(libraryViewModel.ui.first { !it.loading }.books)
     }
 
     /** The bundle paths currently on disk — the pending marker's shelf snapshot. */
@@ -217,6 +226,7 @@ fun AppNav(
     onImportConsumed: () -> Unit,
     onSourceConsumed: () -> Unit,
     onNavControllerReady: (NavHostController) -> Unit,
+    onResumeSynth: () -> Unit,
 ) {
     val nav = rememberNavController()
     LaunchedEffect(nav) { onNavControllerReady(nav) }
@@ -251,6 +261,10 @@ fun AppNav(
                                 if (shelf != null) openBookForReading(context, shelf.path, positionStore) else null
                             },
                             transport = transport,
+                            isSynthJobActive = {
+                                SynthService.active.value?.isRunningPhase == true
+                            },
+                            onResumeSynth = onResumeSynth,
                         ),
                 )
             ReaderScreen(

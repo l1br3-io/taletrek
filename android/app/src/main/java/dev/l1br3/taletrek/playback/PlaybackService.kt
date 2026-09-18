@@ -25,6 +25,8 @@ import dev.l1br3.taletrek.data.BookSession
 import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.ffi.FfiPlayerStatus
 import dev.l1br3.taletrek.ffi.FfiPosition
+import dev.l1br3.taletrek.service.SynthService
+import dev.l1br3.taletrek.service.isRunningPhase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,6 +55,11 @@ class PlaybackService : MediaSessionService() {
     private var bridge: PlayerBridge? = null
     private var openBookId: String? = null
     private var openAudioPresent = false
+
+    /** The progressive load's held states — ride every state broadcast. */
+    @Volatile private var loadBuffering = false
+
+    @Volatile private var loadStalled = false
 
     private lateinit var positionStore: PositionStore
 
@@ -205,6 +212,17 @@ class PlaybackService : MediaSessionService() {
                     )
                     immediateResult
                 }
+                SessionCommands.ACTION_REANCHOR -> {
+                    SynthService.reanchor(
+                        args.getLong(SessionCommands.EXTRA_CHAPTER).toUInt(),
+                        args.getLong(SessionCommands.EXTRA_INDEX).toUInt(),
+                    )
+                    immediateResult
+                }
+                SessionCommands.ACTION_RETRY_LOAD -> {
+                    bridge?.retry()
+                    immediateResult
+                }
                 SessionCommands.ACTION_GET_STATE -> Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS, stateBundle()))
                 else -> Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
@@ -221,13 +239,34 @@ class PlaybackService : MediaSessionService() {
             runCatching { withContext(Dispatchers.IO) { BookSession.open(this@PlaybackService, path, positionStore) } }
                 .onSuccess { session ->
                     bridge?.release()
+                    loadBuffering = false
+                    loadStalled = false
+                    // A text-only bundle may be mid-fill: segments answer
+                    // NotReady until the synth job lands them — the source
+                    // + the bridge's wait loop make that a buffer, not a
+                    // skip. Sealed books keep the plain file read.
+                    val segments =
+                        if (session.book.audioPresent) {
+                            FileSegmentSource(path)
+                        } else {
+                            ProgressiveSegmentSource(path)
+                        }
                     bridge =
                         PlayerBridge(
                             kernel = session.kernel,
-                            segments = FileSegmentSource(path),
+                            segments = segments,
                             cache = SegmentCache(File(cacheDir, "segments")),
                             port = exoPort,
                             scope = serviceScope,
+                            keepWaiting = { SynthService.active.value?.isRunningPhase == true },
+                            onBuffering = { buffering ->
+                                loadBuffering = buffering
+                                if (!buffering) rebroadcastState()
+                            },
+                            onStalled = {
+                                loadStalled = true
+                                rebroadcastState()
+                            },
                             onPositionChanged = { pos -> persist(session.book.bookId, pos) },
                             onSnapshotChanged = { snap ->
                                 broadcastSnapshot(session.book.bookId, session.book.audioPresent, snap)
@@ -241,6 +280,13 @@ class PlaybackService : MediaSessionService() {
                 }
         }
         return immediateResult
+    }
+
+    /** Re-push the current state (held load flags changed, no kernel transition). */
+    private fun rebroadcastState() {
+        val bookId = openBookId ?: return
+        val snap = bridge?.snapshot() ?: return
+        broadcastSnapshot(bookId, openAudioPresent, snap)
     }
 
     /**
@@ -384,6 +430,8 @@ class PlaybackService : MediaSessionService() {
             snap.failures.lastError?.let { putString(SessionCommands.STATE_LAST_ERROR, it) }
             putString(SessionCommands.STATE_BOOK_ID, bookId)
             putBoolean(SessionCommands.STATE_AUDIO_PRESENT, audioPresent)
+            putBoolean(SessionCommands.STATE_BUFFERING, loadBuffering)
+            putBoolean(SessionCommands.STATE_STALLED, loadStalled)
         }
 }
 

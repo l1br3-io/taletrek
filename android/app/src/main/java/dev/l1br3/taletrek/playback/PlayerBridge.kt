@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -37,6 +38,9 @@ class PlayerBridge(
     private val port: AudioPort,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val keepWaiting: () -> Boolean = { true },
+    private val onBuffering: ((Boolean) -> Unit)? = null,
+    private val onStalled: (() -> Unit)? = null,
     private val onPositionChanged: ((FfiPosition?) -> Unit)? = null,
     private val onSnapshotChanged: ((FfiStateSnapshot) -> Unit)? = null,
 ) {
@@ -50,6 +54,12 @@ class PlayerBridge(
     private var lastReportedPosition: FfiPosition? = null
 
     private var loadJob: Job? = null
+
+    /** The last ordered (key, offset) — what a resume retries. */
+    private var lastRequest: Pair<String, Double>? = null
+
+    /** Whether a buffering signal is currently outstanding (edge-triggered). */
+    private var waiting = false
 
     // --- user transport (buttons, notification, media keys) ------------
 
@@ -126,6 +136,7 @@ class PlayerBridge(
             FfiPlayerAction.Stop -> {
                 loadJob?.cancel()
                 pendingKey = null
+                clearWaiting()
                 port.stopOutput()
                 cache.clear()
             }
@@ -139,21 +150,64 @@ class PlayerBridge(
     ) {
         loadJob?.cancel()
         pendingKey = key
+        lastRequest = key to offset
         loadJob =
             scope.launch {
-                val bytes = withContext(ioDispatcher) { segments.segment(key) }
-                if (bytes == null) {
-                    // A missing segment is the platform's failure to load —
-                    // the kernel's skip path, not ours.
-                    dispatch(FfiPlayerEvent.SegmentFailed(key, "segment missing from bundle"))
-                    return@launch
+                while (true) {
+                    val fetch = withContext(ioDispatcher) { segments.segment(key) }
+                    when (fetch) {
+                        is SegmentFetch.Bytes -> {
+                            if (pendingKey != key) return@launch // superseded mid-flight
+                            val file = withContext(ioDispatcher) { cache.write(key, fetch.data) }
+                            if (pendingKey != key) return@launch
+                            lastLoadedKey = key
+                            clearWaiting()
+                            port.load(file, key, (offset * 1000).toLong())
+                            return@launch
+                        }
+                        SegmentFetch.Absent -> {
+                            // A missing segment is the platform's failure to
+                            // load — the kernel's skip path, not ours.
+                            clearWaiting()
+                            dispatch(FfiPlayerEvent.SegmentFailed(key, "segment missing from bundle"))
+                            return@launch
+                        }
+                        SegmentFetch.NotYet -> {
+                            if (pendingKey != key) return@launch // superseded mid-flight
+                            if (!keepWaiting()) {
+                                // The segment is expected but no job will
+                                // land it — surface the stall, never a skip.
+                                pendingKey = null
+                                clearWaiting()
+                                onStalled?.invoke()
+                                return@launch
+                            }
+                            markWaiting()
+                            delay(NOT_YET_RETRY_MS)
+                        }
+                    }
                 }
-                if (pendingKey != key) return@launch // superseded mid-flight
-                val file = withContext(ioDispatcher) { cache.write(key, bytes) }
-                if (pendingKey != key) return@launch
-                lastLoadedKey = key
-                port.load(file, key, (offset * 1000).toLong())
             }
+    }
+
+    private fun markWaiting() {
+        if (!waiting) {
+            waiting = true
+            onBuffering?.invoke(true)
+        }
+    }
+
+    private fun clearWaiting() {
+        if (waiting) {
+            waiting = false
+            onBuffering?.invoke(false)
+        }
+    }
+
+    /** Re-run the last ordered load — the resume affordance's retry. */
+    fun retry() {
+        val (key, offset) = lastRequest ?: return
+        beginLoad(key, offset)
     }
 
     // --- observation -----------------------------------------------------
@@ -164,8 +218,13 @@ class PlayerBridge(
 
     fun release() {
         loadJob?.cancel()
+        clearWaiting()
         port.stopOutput()
         cache.clear()
         kernel.close()
+    }
+
+    private companion object {
+        const val NOT_YET_RETRY_MS = 400L
     }
 }

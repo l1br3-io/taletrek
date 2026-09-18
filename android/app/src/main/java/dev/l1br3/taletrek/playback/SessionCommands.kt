@@ -18,6 +18,8 @@ object SessionCommands {
     const val ACTION_NEXT_PARAGRAPH = "dev.l1br3.taletrek.action.NEXT_PARAGRAPH"
     const val ACTION_PREV_PARAGRAPH = "dev.l1br3.taletrek.action.PREV_PARAGRAPH"
     const val ACTION_SEEK_PARAGRAPH = "dev.l1br3.taletrek.action.SEEK_PARAGRAPH"
+    const val ACTION_REANCHOR = "dev.l1br3.taletrek.action.REANCHOR"
+    const val ACTION_RETRY_LOAD = "dev.l1br3.taletrek.action.RETRY_LOAD"
     const val ACTION_GET_STATE = "dev.l1br3.taletrek.action.GET_STATE"
     const val ACTION_STATE_BROADCAST = "dev.l1br3.taletrek.action.STATE_BROADCAST"
 
@@ -25,10 +27,22 @@ object SessionCommands {
     val NEXT_PARAGRAPH = SessionCommand(ACTION_NEXT_PARAGRAPH, Bundle.EMPTY)
     val PREV_PARAGRAPH = SessionCommand(ACTION_PREV_PARAGRAPH, Bundle.EMPTY)
     val SEEK_PARAGRAPH = SessionCommand(ACTION_SEEK_PARAGRAPH, Bundle.EMPTY)
+    val REANCHOR = SessionCommand(ACTION_REANCHOR, Bundle.EMPTY)
+    val RETRY_LOAD = SessionCommand(ACTION_RETRY_LOAD, Bundle.EMPTY)
     val GET_STATE = SessionCommand(ACTION_GET_STATE, Bundle.EMPTY)
     val STATE_BROADCAST = SessionCommand(ACTION_STATE_BROADCAST, Bundle.EMPTY)
 
-    val ALL = listOf(OPEN_BOOK, NEXT_PARAGRAPH, PREV_PARAGRAPH, SEEK_PARAGRAPH, GET_STATE, STATE_BROADCAST)
+    val ALL =
+        listOf(
+            OPEN_BOOK,
+            NEXT_PARAGRAPH,
+            PREV_PARAGRAPH,
+            SEEK_PARAGRAPH,
+            REANCHOR,
+            RETRY_LOAD,
+            GET_STATE,
+            STATE_BROADCAST,
+        )
 
     const val EXTRA_PATH = "path"
     const val EXTRA_CHAPTER = "chapter"
@@ -43,6 +57,8 @@ object SessionCommands {
     const val STATE_LAST_ERROR = "lastError"
     const val STATE_BOOK_ID = "bookId"
     const val STATE_AUDIO_PRESENT = "audioPresent"
+    const val STATE_BUFFERING = "buffering"
+    const val STATE_STALLED = "stalled"
 
     /** An empty-book state (no book open yet). */
     fun emptyStateBundle(): Bundle =
@@ -64,6 +80,8 @@ data class SessionState(
     val lastError: String?,
     val bookId: String?,
     val audioPresent: Boolean,
+    val buffering: Boolean = false,
+    val stalled: Boolean = false,
 ) {
     companion object {
         /** Parse the wire bundle (GET_STATE reply or STATE_BROADCAST extras). */
@@ -89,6 +107,8 @@ data class SessionState(
                 lastError = extras.getString(SessionCommands.STATE_LAST_ERROR),
                 bookId = bookId,
                 audioPresent = extras.getBoolean(SessionCommands.STATE_AUDIO_PRESENT, true),
+                buffering = extras.getBoolean(SessionCommands.STATE_BUFFERING, false),
+                stalled = extras.getBoolean(SessionCommands.STATE_STALLED, false),
             )
         }
 
@@ -96,6 +116,8 @@ data class SessionState(
             snapshot: FfiStateSnapshot,
             bookId: String,
             audioPresent: Boolean,
+            buffering: Boolean = false,
+            stalled: Boolean = false,
         ): SessionState =
             SessionState(
                 status = snapshot.status,
@@ -105,6 +127,8 @@ data class SessionState(
                 lastError = snapshot.failures.lastError,
                 bookId = bookId,
                 audioPresent = audioPresent,
+                buffering = buffering,
+                stalled = stalled,
             )
     }
 }

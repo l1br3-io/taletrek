@@ -11,6 +11,7 @@ import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import dev.l1br3.taletrek.MainActivity
+import dev.l1br3.taletrek.ffi.FfiAnchor
 import dev.l1br3.taletrek.ffi.PipelineHandle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -111,6 +112,7 @@ class SynthService : Service() {
         _active.value = null
         val fresh = SynthController(engineFactory())
         controller = fresh
+        reanchorSink = { chapter, paragraph -> fresh.reanchor(FfiAnchor(chapter, paragraph)) }
         collectJob =
             serviceScope.launch {
                 fresh.state.collect { onState(it) }
@@ -124,6 +126,7 @@ class SynthService : Service() {
         serviceScope.cancel()
         releaseWake()
         _active.value = null
+        reanchorSink = null
         super.onDestroy()
     }
 
@@ -147,6 +150,7 @@ class SynthService : Service() {
             SynthUiState.Cancelled,
             -> {
                 releaseWake()
+                reanchorSink = null
                 // GOTCHA: stopForeground(REMOVE) would also kill the
                 // terminal notification we WANT the user to see — detach
                 // (the ongoing flag drops with the service), then
@@ -310,6 +314,19 @@ class SynthService : Service() {
 
         /** Process-wide single-job progress — the UI's (and tests') window. */
         val active: kotlinx.coroutines.flow.StateFlow<SynthUiState?> = _active.asStateFlow()
+
+        /** The live job's anchor seam — the playback service routes the
+         *  playhead here so synthesis reads ahead where the user is. */
+        @Volatile
+        private var reanchorSink: ((chapter: UInt, paragraph: UInt) -> Unit)? = null
+
+        /** Re-aim the live progressive job at the playhead (no-op when idle). */
+        fun reanchor(
+            chapter: UInt,
+            paragraph: UInt,
+        ) {
+            reanchorSink?.invoke(chapter, paragraph)
+        }
 
         /** Instrumented smokes swap in a fake engine before starting. */
         @Volatile
