@@ -170,6 +170,12 @@ impl taletrek_synth::PiperRunner for LazySherpaRunner {
             .expect("inner constructed above")
             .predict(voice_model, text)
     }
+
+    /// Forward the sherpa arena bound — split planning asks before the lazy
+    /// inner runner exists.
+    fn max_synth_chars(&self) -> usize {
+        taletrek_synth::SHERPA_MAX_SYNTH_CHARS
+    }
 }
 
 /// The convert job as an object: `new(config)` → `start(observer)` →
@@ -621,6 +627,24 @@ mod tests {
         assert_eq!(
             spec.espeak_root.join("espeak-ng-data"),
             PathBuf::from(&cfg.espeak_dir)
+        );
+    }
+
+    #[test]
+    fn lazy_sherpa_runner_forwards_the_sherpa_chunk_cap_pre_construction() {
+        // The arena bound is a locked spec decision (120 chars): the lazy
+        // wrapper must advertise it before the inner runner exists, or split
+        // planning feeds 400-char chunks and the ORT arena snaps to its
+        // high-water mark (the LMK crash class). Found by the bench-synth
+        // baseline (progressive-synth task 001).
+        let runner = LazySherpaRunner::new(std::path::PathBuf::from("/nonexistent"));
+        assert!(
+            runner.inner.is_none(),
+            "cap must be answerable without constructing the engine"
+        );
+        assert_eq!(
+            runner.max_synth_chars(),
+            taletrek_synth::SHERPA_MAX_SYNTH_CHARS
         );
     }
 

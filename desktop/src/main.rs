@@ -19,6 +19,7 @@
 //! binaries); `--piper`/`--ffmpeg` demote either side back to the subprocess
 //! engines independently.
 
+mod bench;
 mod bundle_io;
 mod cli;
 mod engine;
@@ -51,6 +52,7 @@ fn main() -> Result<()> {
         Some(Cmd::Parse { args }) => run_parse(args),
         Some(Cmd::Synth { common }) => run_synth(common),
         Some(Cmd::Resynth { common }) => run_resynth(common),
+        Some(Cmd::BenchSynth { args }) => bench::run_bench_cmd(args),
     }
 }
 
@@ -236,7 +238,7 @@ where
 ///
 /// The chained bundle is stamped with `voice_id` — the voice `synth` will use —
 /// so the manifest and the content-addressed audio keys agree.
-fn load_synth_input(input: &Path, voice_id: &str) -> Result<BookBundle> {
+pub(crate) fn load_synth_input(input: &Path, voice_id: &str) -> Result<BookBundle> {
     let is_bundle = input
         .extension()
         .and_then(|e| e.to_str())

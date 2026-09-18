@@ -59,4 +59,4 @@ pub use merge::merge_bundle_audio;
 #[cfg(feature = "native-encode")]
 pub use opus_native::NativeOpusEncoder;
 #[cfg(feature = "sherpa")]
-pub use sherpa_runner::{default_espeak_data_dir, SherpaRunner};
+pub use sherpa_runner::{default_espeak_data_dir, SherpaRunner, SHERPA_MAX_SYNTH_CHARS};
