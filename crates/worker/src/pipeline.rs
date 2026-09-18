@@ -643,6 +643,59 @@ fn pop_duration(durations: &mut RecordedDurations, bytes: &[u8]) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// A stored segment's playback seconds, by codec: WAV via header parse,
+/// Opus via the manual OGG page-granule scan (no feature-gated deps);
+/// anything else counts as 0.0 (the playable heuristic degrades, never
+/// blocks).
+fn stored_duration_seconds(seg: &taletrek_synth::AudioSegment) -> f64 {
+    match seg.codec {
+        AudioCodec::Wav => taletrek_synth::pcm::wav_duration(&seg.bytes),
+        AudioCodec::Opus => taletrek_synth::pcm::opus_duration_seconds(&seg.bytes),
+        AudioCodec::M4a => 0.0,
+    }
+}
+
+/// The text bundle reduced to paragraphs whose keys are NOT in `existing`
+/// (the resume skip set) — the engine's work list. Chapter identity and
+/// order are preserved so planning keys stay identical; chapters may end
+/// up empty (the engine iterates them harmlessly).
+fn reduce_to_missing(
+    bundle: &BookBundle,
+    voice: &str,
+    existing: &std::collections::HashSet<String>,
+) -> BookBundle {
+    let mut reduced = bundle.clone();
+    for chapter in &mut reduced.chapters {
+        chapter
+            .paragraphs
+            .retain(|p| !existing.contains(&cache_key(voice, p)));
+    }
+    reduced
+}
+
+/// Progress lift for resumed runs: the engine reports over MISSING keys
+/// only; this wrapper re-bases `done` onto the seeded count and reports the
+/// FULL distinct total, so hosts never see a lying 0% flash.
+struct ResumeProgressSink<'a> {
+    seeded: usize,
+    total: usize,
+    inner: Option<&'a dyn ProgressSink>,
+}
+
+impl ProgressSink for ResumeProgressSink<'_> {
+    fn synth_step(&self, done: usize, _engine_total: usize) {
+        if let Some(inner) = self.inner {
+            inner.synth_step(self.seeded + done, self.total);
+        }
+    }
+
+    fn download_step(&self, bytes_done: u64, bytes_total: u64) {
+        if let Some(inner) = self.inner {
+            inner.download_step(bytes_done, bytes_total);
+        }
+    }
+}
+
 /// Reading-order distinct keys for `chapters` under `voice` — the same
 /// first-occurrence walk the bundle writer dedups by.
 fn reading_order_keys(voice: &str, chapters: &[taletrek_synth::ChapterText]) -> Vec<String> {
@@ -712,6 +765,47 @@ fn run_progressive(
     let durations: Arc<Mutex<RecordedDurations>> = Arc::new(Mutex::new(Vec::new()));
     let tracker = Arc::new(Mutex::new(PlayableTracker::new(reading_order.clone())));
 
+    // Resume (task 006): keys already in the store are never re-synthesized
+    // — they count as delivered for the playable tracker, fast-forward the
+    // progress stream (no lying 0% flash), and are skipped by the engine
+    // via a reduced work bundle.
+    let existing: std::collections::HashSet<String> = store
+        .keys()
+        .map_err(PipelineError::Store)?
+        .into_iter()
+        .collect();
+    let seeded: Vec<&String> = reading_order
+        .iter()
+        .filter(|k| existing.contains(*k))
+        .collect();
+    if !reading_order.is_empty() {
+        if let Some(sink) = sink_ref {
+            sink.synth_step(seeded.len(), reading_order.len());
+        }
+    }
+    {
+        let mut t = tracker.lock().expect("playable tracker mutex");
+        let mut advanced = false;
+        for key in &seeded {
+            // Duration by codec from the stored bytes (WAV parse or OGG
+            // granule scan); a mid-scan eviction miss degrades to 0.0 s.
+            let seconds = store
+                .get(key)
+                .map_err(PipelineError::Store)?
+                .map(|seg| stored_duration_seconds(&seg))
+                .unwrap_or(0.0);
+            advanced |= t.deliver(key, seconds);
+        }
+        if advanced && !t.emitted && t.prefix_total >= PLAYABLE_SECONDS {
+            t.emitted = true;
+            drop(t);
+            if let Some(r) = reporter {
+                r.pipeline_event(PipelineEvent::Playable);
+            }
+        }
+    }
+    let reduced_bundle = reduce_to_missing(&text_bundle, voice, &existing);
+
     let encoder = DurationRecordingEncoder {
         inner: Arc::clone(&spec.encoder),
         durations: Arc::clone(&durations),
@@ -743,14 +837,22 @@ fn run_progressive(
     let cancelled_flag = Arc::clone(&flag);
     let factory = Arc::clone(&spec.make_runner);
     let make_runner = move || CancellableRunner::new(Arc::clone(&cancelled_flag), factory());
+    // Engine steps report over the MISSING keys only; the resume wrapper
+    // lifts them onto the full total so hosts see done grow from the seeded
+    // count to all.
+    let resume_progress = ResumeProgressSink {
+        seeded: seeded.len(),
+        total: reading_order.len(),
+        inner: sink_ref,
+    };
     let synth = crate::synth_paragraphs_into(
-        &text_bundle,
+        &reduced_bundle,
         voice,
         &model,
         make_runner,
         &encoder,
         spec.jobs,
-        sink_ref,
+        Some(&resume_progress),
         &sink,
     );
     drop(sink);
@@ -1955,5 +2057,168 @@ mod tests {
             1,
             "Sealed is emitted exactly once: {events:?}"
         );
+    }
+
+    // ---- resume / skip-existing (progressive-synth task 006) ----
+
+    /// A counting runner factory: records every construction so tests can
+    /// prove which runs synthesized anything at all.
+    fn counting_factory() -> (RunnerFactory, Arc<Mutex<usize>>) {
+        let calls = Arc::new(Mutex::new(0));
+        let seen = Arc::clone(&calls);
+        let factory: RunnerFactory = Arc::new(move || {
+            *seen.lock().unwrap() += 1;
+            Box::new(StubRunner) as Box<dyn PiperRunner + Send>
+        });
+        (factory, calls)
+    }
+
+    /// Cancel-after-first runner behind the shared slot pattern.
+    fn cancelling_factory(slot: &Arc<Mutex<Option<CancelFlag>>>) -> RunnerFactory {
+        let slot = Arc::clone(slot);
+        Arc::new(move || {
+            let flag = slot
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("test stores the flag before run");
+            Box::new(CancelAfterFirstRunner { flag, seen: 0 }) as Box<dyn PiperRunner + Send>
+        })
+    }
+
+    #[test]
+    fn progressive_resume_synthesizes_only_missing_keys() {
+        // Run 1 cancels after the first predict (one segment lands in the
+        // store). Run 2 must synthesize only the two missing keys and seal.
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("segments");
+
+        let slot: Arc<Mutex<Option<CancelFlag>>> = Arc::new(Mutex::new(None));
+        let job = PipelineJob::new(progressive_spec(dir.path(), cancelling_factory(&slot)));
+        slot.lock().unwrap().replace(job.cancel_flag());
+        let err = job.run(&StubSource::default(), None).unwrap_err();
+        assert!(matches!(err, PipelineError::Cancelled));
+        let seeded = crate::store::SegmentStore::open(&store_dir)
+            .unwrap()
+            .keys()
+            .unwrap();
+        assert_eq!(seeded.len(), 1, "cancel left exactly one segment");
+
+        let (factory, _calls) = counting_factory();
+        let outcome = PipelineJob::new(progressive_spec(dir.path(), factory))
+            .run(&StubSource::default(), None)
+            .expect("resume run seals");
+        assert!(outcome.sealed);
+        assert_eq!(outcome.segments, 3);
+
+        // The store + sealed bundle prove all three keys exist; only the
+        // two missing ones were synthesized this run (runner constructed
+        // exactly once for the remaining work).
+        let store = crate::store::SegmentStore::open(&store_dir).unwrap();
+        assert_eq!(store.keys().unwrap().len(), 3);
+        let bundle =
+            taletrek_synth::read_book_bundle(&std::fs::read(&outcome.bundle_path).unwrap())
+                .unwrap();
+        assert_eq!(bundle.manifest.audio.segment_count, 3);
+    }
+
+    #[test]
+    fn progressive_fully_seeded_store_seals_with_zero_runner_constructions() {
+        let dir = tempfile::tempdir().unwrap();
+        // Run 1 fills the store completely.
+        PipelineJob::new(progressive_spec(dir.path(), stub_factory()))
+            .run(&StubSource::default(), None)
+            .expect("seeding run");
+
+        // Run 2 over the same source: every key hits the store — the
+        // engine never constructs a runner.
+        let (factory, calls) = counting_factory();
+        let outcome = PipelineJob::new(progressive_spec(dir.path(), factory))
+            .run(&StubSource::default(), None)
+            .expect("full-hit run seals");
+        assert!(outcome.sealed);
+        assert_eq!(outcome.segments, 3);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            0,
+            "zero runner constructions — nothing to synthesize"
+        );
+    }
+
+    #[test]
+    fn progressive_resume_progress_starts_at_the_seeded_count() {
+        // Cancel after the first paragraph, then resume with a recorder:
+        // the FIRST SynthStep must read (1, 3) — no lying 0% flash.
+        let dir = tempfile::tempdir().unwrap();
+
+        let slot: Arc<Mutex<Option<CancelFlag>>> = Arc::new(Mutex::new(None));
+        let job = PipelineJob::new(progressive_spec(dir.path(), cancelling_factory(&slot)));
+        slot.lock().unwrap().replace(job.cancel_flag());
+        assert!(matches!(
+            job.run(&StubSource::default(), None).unwrap_err(),
+            PipelineError::Cancelled
+        ));
+
+        #[derive(Default, Clone)]
+        struct Recorder {
+            events: Arc<Mutex<Vec<PipelineEvent>>>,
+        }
+        impl PipelineReporter for Recorder {
+            fn pipeline_event(&self, event: PipelineEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+        }
+        let recorder = Recorder::default();
+
+        let outcome = PipelineJob::new(progressive_spec(dir.path(), stub_factory()))
+            .run(&StubSource::default(), Some(&recorder))
+            .expect("resume run");
+        assert!(outcome.sealed);
+
+        let events = recorder.events.lock().unwrap();
+        let first_step = events
+            .iter()
+            .find(|e| matches!(e, PipelineEvent::SynthStep { .. }))
+            .expect("at least one step");
+        assert_eq!(
+            *first_step,
+            PipelineEvent::SynthStep { done: 1, total: 3 },
+            "first step reflects the seeded segment: {events:?}"
+        );
+        assert!(
+            events.contains(&PipelineEvent::SynthStep { done: 3, total: 3 }),
+            "run completes to 3/3: {events:?}"
+        );
+    }
+
+    #[test]
+    fn progressive_skip_uses_exact_cache_key_bytes_across_normalization() {
+        // G30 lineage: a curly-quoted paragraph and its ASCII twin share a
+        // cache key (the key normalizes internally). A store seeded by the
+        // curly book serves the ASCII book with zero synthesis.
+        let dir = tempfile::tempdir().unwrap();
+        let curly = "chapter one\n\nIt\u{2019}s a curly \u{2014} test paragraph.\n\nplain second";
+        let ascii = "chapter one\n\nIt's a curly - test paragraph.\n\nplain second";
+
+        let seed_spec = |source: &[u8]| {
+            let mut s = progressive_spec(dir.path(), stub_factory());
+            s.source = source.to_vec();
+            s
+        };
+        PipelineJob::new(seed_spec(curly.as_bytes()))
+            .run(&StubSource::default(), None)
+            .expect("curly seeding run");
+
+        let (_factory, calls) = counting_factory();
+        let outcome = PipelineJob::new(seed_spec(ascii.as_bytes()))
+            .run(&StubSource::default(), None)
+            .expect("ascii run");
+        assert!(outcome.sealed);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            0,
+            "the curly-seeded store serves the ASCII twin — same cache keys"
+        );
+        assert_eq!(outcome.segments, 2);
     }
 }

@@ -254,6 +254,12 @@ where
     F: Fn() -> R + Sync,
 {
     let paragraphs = collect_paragraphs(bundle);
+    if paragraphs.is_empty() {
+        // Degenerate empty work list (also: the progressive resume path
+        // with a fully-seeded store): no pool, no cap probe, no runner
+        // constructions — nothing to synthesize.
+        return Ok(());
+    }
 
     // Bound the pool at `--jobs` (clamped to >= 1; `num_threads(0)` would
     // panic). The default `num_cpus` is resolved by the caller.
@@ -862,10 +868,14 @@ mod tests {
     struct SchedulingRecorder {
         predicts: std::sync::Arc<std::sync::Mutex<Vec<(String, std::thread::ThreadId)>>>,
         cap: usize,
+        delay: std::time::Duration,
     }
 
     impl PiperRunner for SchedulingRecorder {
         fn predict(&mut self, _voice_model: &Path, text: &str) -> Result<Vec<u8>, SynthError> {
+            if !self.delay.is_zero() {
+                std::thread::sleep(self.delay);
+            }
             self.predicts
                 .lock()
                 .unwrap()
@@ -910,6 +920,7 @@ mod tests {
             move || SchedulingRecorder {
                 predicts: seen.clone(),
                 cap: 60,
+                delay: std::time::Duration::from_millis(1),
             },
             &WavPassthrough,
             2,
@@ -960,6 +971,7 @@ mod tests {
             move || SchedulingRecorder {
                 predicts: seen.clone(),
                 cap: MAX_SYNTH_CHARS,
+                delay: std::time::Duration::ZERO,
             },
             &WavPassthrough,
             1,
@@ -1011,6 +1023,7 @@ mod tests {
             move || SchedulingRecorder {
                 predicts: seen.clone(),
                 cap,
+                delay: std::time::Duration::ZERO,
             },
             &WavPassthrough,
             2,
@@ -1180,6 +1193,7 @@ mod tests {
             move || SchedulingRecorder {
                 predicts: seen.clone(),
                 cap: 60,
+                delay: std::time::Duration::from_millis(1),
             },
             &WavPassthrough,
             2,
