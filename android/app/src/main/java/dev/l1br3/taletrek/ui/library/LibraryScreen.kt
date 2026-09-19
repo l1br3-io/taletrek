@@ -290,22 +290,25 @@ fun LibraryScreen(
             }
             // The in-page convert surface — pinned above the body in
             // EVERY state (empty first-run library included), not just
-            // the notification's shade. Running phases always show;
-            // terminal ones stay until dismissed.
+            // the notification's shade. One row per book: once the job's
+            // filling row is on the shelf, running progress lives on the
+            // row and the card hides; before the row exists it is the
+            // only feedback, and terminal cards linger until dismissed.
             val convertState = synthState
-            if (convertState != null && convertState !is SynthUiState.Idle) {
-                if (convertState.isRunningPhase || !terminalDismissed) {
-                    ConvertProgressCard(
-                        state = convertState,
-                        onCancel = {
-                            context.startService(
-                                Intent(context, SynthService::class.java)
-                                    .setAction(SynthService.ACTION_CANCEL),
-                            )
-                        },
-                        onDismiss = { terminalDismissed = true },
-                    )
-                }
+            val fillingRowOnShelf =
+                convertState != null &&
+                    ui.books.any { fillingRowUi(it, convertState, fillingShelfPaths).filling }
+            if (convertState != null && convertCardVisible(convertState, fillingRowOnShelf, terminalDismissed)) {
+                ConvertProgressCard(
+                    state = convertState,
+                    onCancel = {
+                        context.startService(
+                            Intent(context, SynthService::class.java)
+                                .setAction(SynthService.ACTION_CANCEL),
+                        )
+                    },
+                    onDismiss = { terminalDismissed = true },
+                )
             }
             when {
                 ui.loading -> {
@@ -371,7 +374,14 @@ fun LibraryScreen(
                             BookRow(
                                 book = book,
                                 preparingAudio = ui.exporting == book,
+                                filling = filling.filling,
                                 fillingDetail = filling.detail,
+                                onCancelFill = {
+                                    context.startService(
+                                        Intent(context, SynthService::class.java)
+                                            .setAction(SynthService.ACTION_CANCEL),
+                                    )
+                                },
                                 onOpen = { onOpenBook(book) },
                                 onRequestDelete = { viewModel.requestDelete(book) },
                                 onShareBundle = {
@@ -527,7 +537,9 @@ private fun ConvertProgressCard(
 private fun BookRow(
     book: BookShelf,
     preparingAudio: Boolean,
+    filling: Boolean,
     fillingDetail: String?,
+    onCancelFill: () -> Unit,
     onOpen: () -> Unit,
     onRequestDelete: () -> Unit,
     onShareBundle: () -> Unit,
@@ -559,6 +571,18 @@ private fun BookRow(
                     Icon(Icons.Default.MoreVert, contentDescription = "Book actions")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    // The card is hidden while this row carries the job —
+                    // cancel lives here (plus the service notification).
+                    if (filling) {
+                        DropdownMenuItem(
+                            text = { Text("Cancel audio preparation") },
+                            leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onCancelFill()
+                            },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("Share bundle") },
                         onClick = {

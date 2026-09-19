@@ -36,3 +36,20 @@ private fun counts(
     done: Int,
     total: Int,
 ): String? = if (total > 0) "Preparing audio · $done of $total paragraphs" else null
+
+/**
+ * Whether the pinned convert card is visible — one row per book: once the
+ * job's filling row is on the shelf, running progress lives on the row
+ * and the card hides (the row's menu carries cancel). Before the row
+ * exists (parse, voice download — first run) the card is the only
+ * feedback. Terminal states keep the card until dismissed.
+ */
+fun convertCardVisible(
+    state: SynthUiState?,
+    fillingRowOnShelf: Boolean,
+    terminalDismissed: Boolean,
+): Boolean {
+    if (state == null || state is SynthUiState.Idle) return false
+    if (state.isRunningPhase) return !fillingRowOnShelf
+    return !terminalDismissed
+}

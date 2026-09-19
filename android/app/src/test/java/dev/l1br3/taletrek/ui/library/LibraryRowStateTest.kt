@@ -63,4 +63,41 @@ class LibraryRowStateTest {
         assertFalse(cancelled.filling)
         assertFalse(failed.filling)
     }
+
+    @Test
+    fun theConvertCardHidesOnceTheFillingRowExists() {
+        // Before the row exists (parse, voice download) the card is the
+        // only feedback — every running phase shows it.
+        assertTrue(
+            convertCardVisible(SynthUiState.DownloadingVoice(1, 100), fillingRowOnShelf = false, terminalDismissed = false),
+        )
+        assertTrue(
+            convertCardVisible(SynthUiState.Preparing(null, null), fillingRowOnShelf = false, terminalDismissed = false),
+        )
+        // Once the job's row is on the shelf, the card hides — one row
+        // per book.
+        assertFalse(
+            convertCardVisible(SynthUiState.Filling(2, 9), fillingRowOnShelf = true, terminalDismissed = false),
+        )
+        assertFalse(
+            convertCardVisible(SynthUiState.Writing, fillingRowOnShelf = true, terminalDismissed = false),
+        )
+    }
+
+    @Test
+    fun theConvertCardTerminalLingersUntilDismissed() {
+        // Terminal feedback stays (even when the row exists) until the
+        // user dismisses; nothing shows for no job or idle.
+        assertTrue(
+            convertCardVisible(SynthUiState.Done("bk", "/books/bk.taletrek"), fillingRowOnShelf = true, terminalDismissed = false),
+        )
+        assertTrue(
+            convertCardVisible(SynthUiState.Failed("parse", "bad doc"), fillingRowOnShelf = false, terminalDismissed = false),
+        )
+        assertFalse(
+            convertCardVisible(SynthUiState.Done("bk", "/books/bk.taletrek"), fillingRowOnShelf = false, terminalDismissed = true),
+        )
+        assertFalse(convertCardVisible(null, fillingRowOnShelf = false, terminalDismissed = false))
+        assertFalse(convertCardVisible(SynthUiState.Idle, fillingRowOnShelf = false, terminalDismissed = false))
+    }
 }
