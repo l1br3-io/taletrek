@@ -49,6 +49,11 @@ class VoiceStore(
     /** Select `voiceId` (persisted; flow + snapshot follow). */
     suspend fun setSelected(voiceId: String) {
         datastore.edit { it[key] = voiceId }
+        // The init collector mirrors edits asynchronously on Dispatchers.IO —
+        // set the mirror directly so `setSelected`'s postcondition holds for
+        // the very next `selectedSnapshot()` (import submit). Idempotent
+        // with the collector, which replays the same value after our edit.
+        _selected.value = voiceId
     }
 
     companion object {
