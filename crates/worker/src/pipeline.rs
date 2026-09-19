@@ -88,11 +88,13 @@ pub enum PipelineVariant {
 
 /// Seconds of audio (at the reading-order anchor — book start until task
 /// 007 makes the anchor dynamic) that must exist before the pipeline
-/// reports [`PipelineEvent::Playable`]. Calibrated by the `bench-synth`
-/// baseline (`docs/specs/progressive-synth/bench.md`); 30 s keeps
-/// first-listen well under the spec's ≤ 30 s success bar on warm-voice
-/// hardware.
-pub const PLAYABLE_SECONDS: f64 = 30.0;
+/// reports [`PipelineEvent::Playable`]. Originally 30 s from the
+/// `bench-synth` baseline ([`bench.md`]); halved to 15 s post-ship
+/// (2026-09-19) to cut warm-run time-to-first-listen — the horizon
+/// scheduler keeps the pool aimed at the playhead window, so the buffer
+/// rebuilds faster than it plays even when Playable fires earlier.
+/// Revisit with real-phone RTF data (the owed bench datapoint).
+pub const PLAYABLE_SECONDS: f64 = 15.0;
 
 /// The read-ahead horizon: paragraphs whose estimated audio position is
 /// within this window AHEAD of the anchor form the priority tier;
