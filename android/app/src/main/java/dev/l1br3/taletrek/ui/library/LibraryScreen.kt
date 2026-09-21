@@ -62,6 +62,7 @@ import dev.l1br3.taletrek.data.SourceImport
 import dev.l1br3.taletrek.service.SynthService
 import dev.l1br3.taletrek.service.SynthUiState
 import dev.l1br3.taletrek.service.isRunningPhase
+import dev.l1br3.taletrek.service.jobProgressCopy
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.IOException
@@ -460,46 +461,17 @@ private fun ConvertProgressCard(
 ) {
     val (title, detail) =
         when (state) {
-            is SynthUiState.Preparing ->
-                "Converting document" to
-                    if (state.paragraphs != null && state.paragraphs > 0) {
-                        "${state.chapters} chapters · ${state.paragraphs} paragraphs"
-                    } else {
-                        "Reading…"
-                    }
-            is SynthUiState.DownloadingVoice ->
-                "Downloading voice" to
-                    if (state.total > 0) {
-                        "${state.done / (1024 * 1024)} of ${state.total / (1024 * 1024)} MB"
-                    } else {
-                        "Downloading…"
-                    }
-            is SynthUiState.Synthesizing ->
-                "Synthesizing audio" to
-                    if (state.total > 0) "${state.done} of ${state.total} paragraphs" else "Starting…"
-            is SynthUiState.Filling ->
-                "Preparing audio" to
-                    if (state.total > 0) {
-                        "Listening available · ${state.done} of ${state.total} paragraphs"
-                    } else {
-                        "Listening available"
-                    }
-            SynthUiState.Writing -> "Finishing" to "Writing bundle…"
+            is SynthUiState.Preparing -> "Converting document" to state.jobProgressCopy().detail
+            is SynthUiState.DownloadingVoice -> "Downloading voice" to state.jobProgressCopy().detail
+            is SynthUiState.Synthesizing -> "Synthesizing audio" to state.jobProgressCopy().detail
+            is SynthUiState.Filling -> "Preparing audio" to state.jobProgressCopy().detail
+            SynthUiState.Writing -> "Finishing" to state.jobProgressCopy().detail
             is SynthUiState.Done -> "Book ready" to "Added to your library"
             is SynthUiState.Failed -> "Conversion failed" to state.message
             SynthUiState.Cancelled -> "Conversion cancelled" to null
             SynthUiState.Idle -> return
         }
-    val percent =
-        when (state) {
-            is SynthUiState.DownloadingVoice ->
-                if (state.total > 0) ((state.done * 100) / state.total).toInt() else null
-            is SynthUiState.Synthesizing ->
-                if (state.total > 0) (state.done * 100) / state.total else null
-            is SynthUiState.Filling ->
-                if (state.total > 0) (state.done * 100) / state.total else null
-            else -> null
-        }
+    val percent = state.jobProgressCopy().percent
     ListItem(
         headlineContent = { Text(title, style = MaterialTheme.typography.titleSmall) },
         supportingContent = {

@@ -292,6 +292,7 @@ fun AppNav(
                             },
                             transport = transport,
                             filling = FillingBookMonitor.filling,
+                            jobState = SynthService.active,
                             onResumeSynth = onResumeSynth,
                         ),
                 )

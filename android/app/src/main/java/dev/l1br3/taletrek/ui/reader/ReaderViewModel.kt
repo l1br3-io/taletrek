@@ -13,12 +13,16 @@ import dev.l1br3.taletrek.ffi.FfiPlayerStatus
 import dev.l1br3.taletrek.playback.SessionState
 import dev.l1br3.taletrek.service.FillPhase
 import dev.l1br3.taletrek.service.FillingBook
+import dev.l1br3.taletrek.service.PendingTerminal
+import dev.l1br3.taletrek.service.SynthUiState
+import dev.l1br3.taletrek.service.fillLine
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -46,7 +50,10 @@ data class OpenedBook(
 /**
  * The transport bar's enabled state, derived from the snapshot —
  * bounds facts about *where playback is*, never next/prev decisions.
- * `buffering`/`stalled` are the progressive fill's held-load states.
+ * `buffering`/`stalled` are the progressive fill's held-load states;
+ * `bufferingDetail` mirrors the live job when *this* book is the one
+ * filling ("Downloading voice 12 of 63 MB"); `resumeLabel` names the
+ * stalled affordance for why the fill paused (Resume vs Retry).
  */
 data class TransportUiState(
     val canPlayPause: Boolean,
@@ -57,7 +64,14 @@ data class TransportUiState(
     val canNextChapter: Boolean,
     val buffering: Boolean = false,
     val stalled: Boolean = false,
-)
+    val bufferingDetail: String? = null,
+    val resumeLabel: String = RESUME_LABEL,
+) {
+    companion object {
+        const val RESUME_LABEL = "Resume preparing audio"
+        const val RETRY_LABEL = "Retry preparing audio"
+    }
+}
 
 /** The reader screen's render state — Compose renders this, nothing else. */
 data class ReaderUiState(
@@ -98,12 +112,20 @@ class ReaderViewModel(
     private val opener: suspend () -> OpenedBook?,
     private val transport: ReaderTransport,
     private val filling: Flow<FillingBook?> = flowOf(null),
+    private val jobState: StateFlow<SynthUiState?> = MutableStateFlow(null),
     private val onResumeSynth: () -> Unit = {},
 ) : ViewModel() {
     private val _ui = MutableStateFlow(ReaderUiState())
     val ui: StateFlow<ReaderUiState> = _ui.asStateFlow()
 
     private var lastPara: FfiParagraphPos? = null
+
+    /** The live fill's progress line for the open book (null when the
+     *  fill isn't this book's) — rendered only while buffering. */
+    private var liveFillLine: String? = null
+
+    /** The stalled affordance's label — Retry after a failed fill. */
+    private var resumeLabel = TransportUiState.RESUME_LABEL
 
     /** A filling book stays playable through its fill and after seal
      *  (sticky: armed whenever *this* book's fill goes live — opened
@@ -132,7 +154,10 @@ class ReaderViewModel(
             }
             if (opened != null) {
                 transport.openBook(opened.path)
-                if (!opened.audioPresent) observeFillFor(opened)
+                if (!opened.audioPresent) {
+                    observeFillFor(opened)
+                    observeFillDetailFor(opened)
+                }
             }
         }
         viewModelScope.launch {
@@ -164,6 +189,35 @@ class ReaderViewModel(
                         _ui.update { it.withDerivedTransport() }
                     }
                 }
+        }
+    }
+
+    /** The buffering line mirrors the live job while THIS book fills —
+     *  and a paused fill names its recovery affordance (Retry after a
+     *  failure, Resume after a cancel). */
+    private fun observeFillDetailFor(opened: OpenedBook) {
+        viewModelScope.launch {
+            combine(filling, jobState) { target, state ->
+                val line =
+                    if (target?.phase == FillPhase.Live && target.path == opened.path) {
+                        state?.fillLine()
+                    } else {
+                        null
+                    }
+                val pausedHere =
+                    target?.path == opened.path && target.phase is FillPhase.Paused
+                val label =
+                    if (pausedHere && (target.phase as FillPhase.Paused).reason == PendingTerminal.FAILED) {
+                        TransportUiState.RETRY_LABEL
+                    } else {
+                        TransportUiState.RESUME_LABEL
+                    }
+                line to label
+            }.distinctUntilChanged().collect { (line, label) ->
+                liveFillLine = line
+                resumeLabel = label
+                _ui.update { it.withDerivedTransport() }
+            }
         }
     }
 
@@ -217,6 +271,8 @@ class ReaderViewModel(
                     canNextChapter = audio && !held && para != null && para.chapter.toInt() < lastChapter,
                     buffering = buffering,
                     stalled = stalled,
+                    bufferingDetail = if (buffering) liveFillLine else null,
+                    resumeLabel = resumeLabel,
                 ),
         )
     }
@@ -269,10 +325,11 @@ class ReaderViewModel(
             opener: suspend () -> OpenedBook?,
             transport: ReaderTransport,
             filling: Flow<FillingBook?> = flowOf(null),
+            jobState: StateFlow<SynthUiState?> = MutableStateFlow(null),
             onResumeSynth: () -> Unit = {},
         ): ViewModelProvider.Factory =
             viewModelFactory {
-                initializer { ReaderViewModel(opener, transport, filling, onResumeSynth) }
+                initializer { ReaderViewModel(opener, transport, filling, jobState, onResumeSynth) }
             }
     }
 }

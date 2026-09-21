@@ -98,7 +98,7 @@ fun TransportBar(
             when {
                 state.buffering -> {
                     Text(
-                        "Preparing audio…",
+                        state.bufferingDetail ?: "Preparing audio…",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
@@ -112,7 +112,7 @@ fun TransportBar(
                         modifier = Modifier.padding(top = 6.dp),
                     )
                     OutlinedButton(onClick = onResumeSynth, modifier = Modifier.padding(top = 6.dp)) {
-                        Text("Resume preparing audio")
+                        Text(state.resumeLabel)
                     }
                 }
                 !state.canPlayPause -> {

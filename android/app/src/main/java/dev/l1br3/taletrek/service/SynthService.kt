@@ -242,55 +242,26 @@ class SynthService : Service() {
     private fun SynthUiState.notificationCopy(): Triple<String, String, Progress?> =
         when (this) {
             SynthUiState.Idle -> Triple("TaleTrek", "", null)
-            is SynthUiState.Preparing ->
-                Triple(
-                    "Converting document",
-                    if (paragraphs != null && paragraphs > 0) {
-                        "$chapters chapters · $paragraphs paragraphs"
-                    } else {
-                        "Reading…"
-                    },
-                    Progress.Indeterminate,
-                )
+            is SynthUiState.Preparing -> Triple("Converting document", jobProgressCopy().detail!!, Progress.Indeterminate)
             is SynthUiState.DownloadingVoice ->
                 Triple(
                     "Downloading",
-                    if (total > 0) {
-                        "${done / (1024 * 1024)} of ${total / (1024 * 1024)} MB"
-                    } else {
-                        "Downloading…"
-                    },
-                    if (total > 0) {
-                        Progress.Determinate(((done * 100) / total).toInt())
-                    } else {
-                        Progress.Indeterminate
-                    },
+                    jobProgressCopy().detail!!,
+                    jobProgressCopy().percent?.let { Progress.Determinate(it) } ?: Progress.Indeterminate,
                 )
             is SynthUiState.Synthesizing ->
                 Triple(
                     "Synthesizing",
-                    if (total > 0) "$done of $total paragraphs" else "Starting…",
-                    if (total > 0) {
-                        Progress.Determinate(((done * 100) / total).toInt())
-                    } else {
-                        Progress.Indeterminate
-                    },
+                    jobProgressCopy().detail!!,
+                    jobProgressCopy().percent?.let { Progress.Determinate(it) } ?: Progress.Indeterminate,
                 )
             is SynthUiState.Filling ->
                 Triple(
                     "Preparing audio",
-                    if (total > 0) {
-                        "Listening available · $done of $total paragraphs"
-                    } else {
-                        "Listening available"
-                    },
-                    if (total > 0) {
-                        Progress.Determinate(((done * 100) / total).toInt())
-                    } else {
-                        Progress.Indeterminate
-                    },
+                    jobProgressCopy().detail!!,
+                    jobProgressCopy().percent?.let { Progress.Determinate(it) } ?: Progress.Indeterminate,
                 )
-            SynthUiState.Writing -> Triple("Finishing", "Writing bundle…", Progress.Indeterminate)
+            SynthUiState.Writing -> Triple("Finishing", jobProgressCopy().detail!!, Progress.Indeterminate)
             is SynthUiState.Done -> Triple("Book ready", "Audio book ready", null)
             is SynthUiState.Failed -> Triple("Conversion failed", message, null)
             SynthUiState.Cancelled -> Triple("Conversion cancelled", "", null)

@@ -6,6 +6,7 @@ import dev.l1br3.taletrek.playback.SessionState
 import dev.l1br3.taletrek.service.FillPhase
 import dev.l1br3.taletrek.service.FillingBook
 import dev.l1br3.taletrek.service.PendingTerminal
+import dev.l1br3.taletrek.service.SynthUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +20,8 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -35,6 +38,7 @@ class ReaderViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private val transport = FakeTransport()
     private val fill = MutableStateFlow<FillingBook?>(null)
+    private val jobState = MutableStateFlow<SynthUiState?>(null)
     private lateinit var vm: ReaderViewModel
 
     private fun liveFor(path: String) = FillingBook(path, "bk_sample", FillPhase.Live)
@@ -416,6 +420,89 @@ class ReaderViewModelTest {
 
             vm.resumeAudio()
             assertEquals(listOf("resumeSynth", "retryLoad"), transport.commands)
+        }
+
+    @Test
+    fun bufferingMirrorsTheLiveJobForThisBook() =
+        runTest(dispatcher) {
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    filling = fill,
+                    jobState = jobState,
+                )
+            advanceUntilIdle()
+            fill.value = liveFor("/books/bk_sample.taletrek")
+            jobState.value = SynthUiState.DownloadingVoice(12L * 1024 * 1024, 63L * 1024 * 1024)
+            transport.emit(playing(para(0, 0)).copy(buffering = true))
+            advanceUntilIdle()
+
+            assertEquals("Downloading voice 12 of 63 MB", vm.ui.value.transport.bufferingDetail)
+
+            jobState.value = SynthUiState.Filling(24, 210)
+            advanceUntilIdle()
+            assertEquals("Preparing audio · 24 of 210 paragraphs", vm.ui.value.transport.bufferingDetail)
+        }
+
+    @Test
+    fun bufferingWithoutThisBooksFillIsThePlainLine() =
+        runTest(dispatcher) {
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    filling = fill,
+                    jobState = jobState,
+                )
+            jobState.value = SynthUiState.Filling(24, 210)
+            transport.emit(playing(para(0, 0)).copy(buffering = true))
+            advanceUntilIdle()
+
+            assertNull(vm.ui.value.transport.bufferingDetail)
+        }
+
+    @Test
+    fun theDetailClearsWithTheBuffer() =
+        runTest(dispatcher) {
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    filling = fill,
+                    jobState = jobState,
+                )
+            fill.value = liveFor("/books/bk_sample.taletrek")
+            jobState.value = SynthUiState.Filling(24, 210)
+            transport.emit(playing(para(0, 0)).copy(buffering = true))
+            advanceUntilIdle()
+            assertNotNull(vm.ui.value.transport.bufferingDetail)
+
+            transport.emit(playing(para(0, 0)).copy(buffering = false))
+            advanceUntilIdle()
+            assertNull(vm.ui.value.transport.bufferingDetail)
+        }
+
+    @Test
+    fun aFailedFillsResumeReadsRetry() =
+        runTest(dispatcher) {
+            fill.value =
+                FillingBook(
+                    "/books/bk_sample.taletrek",
+                    "bk_sample",
+                    FillPhase.Paused(PendingTerminal.FAILED),
+                )
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    filling = fill,
+                )
+            advanceUntilIdle()
+            transport.emit(playing(para(0, 0)).copy(stalled = true))
+            advanceUntilIdle()
+
+            assertEquals("Retry preparing audio", vm.ui.value.transport.resumeLabel)
         }
 
     private suspend fun TestScope.opened(): ReaderViewModel {
