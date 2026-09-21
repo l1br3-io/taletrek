@@ -6,6 +6,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.l1br3.taletrek.ffi.deleteCachedVoice
 import dev.l1br3.taletrek.ffi.openBook
 import dev.l1br3.taletrek.ffi.voiceCatalog
+import dev.l1br3.taletrek.service.PendingJobStore
+import dev.l1br3.taletrek.service.PendingTerminal
 import dev.l1br3.taletrek.service.SynthJobRequest
 import dev.l1br3.taletrek.service.SynthService
 import dev.l1br3.taletrek.service.SynthUiState
@@ -168,10 +170,20 @@ class HardeningTest {
             assertTrue("warmup run failed: $warmup", warmup is SynthUiState.Done)
             books.listFiles()!!.forEach { it.delete() }
 
-            val before = SynthService.active.value
-            context.startForegroundService(
-                request(src, books = books, store = freshShelf("cancel-synth-store")).toIntent(context),
+            // The import flow's marker, saved at submit against the
+            // (empty) shelf — the keep-materials leg below rides it.
+            val marker = PendingJobStore(files)
+            marker.clear()
+            val cancelRun =
+                request(src, books = books, store = freshShelf("cancel-synth-store"))
+            marker.save(
+                PendingJobStore.PendingJob(
+                    request = cancelRun,
+                    preExistingBookPaths = emptyList(),
+                ),
             )
+            val before = SynthService.active.value
+            context.startForegroundService(cancelRun.toIntent(context))
             withTimeout(120_000) {
                 SynthService.active.first { it is SynthUiState.Synthesizing && it.done < 6 }
             }
@@ -195,6 +207,18 @@ class HardeningTest {
                         book.audioPresent,
                     )
                 }
+            }
+            // The terminal policy's keep leg: a cancel stamps (never
+            // spends) the marker and the source copy survives for the
+            // one-tap manual resume (applied here as the activity's
+            // terminal collector would).
+            if (terminal is SynthUiState.Cancelled) {
+                marker.stampTerminal(PendingTerminal.CANCELLED)
+                val kept = marker.load()
+                assertTrue("cancel keeps the marker", kept != null)
+                assertTrue("cancel stamps the reason", kept?.terminalReason == PendingTerminal.CANCELLED)
+                assertTrue("cancel keeps the source copy", src.isFile)
+                marker.clear()
             }
         }
 
