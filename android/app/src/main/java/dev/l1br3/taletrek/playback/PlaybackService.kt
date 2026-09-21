@@ -25,8 +25,11 @@ import dev.l1br3.taletrek.data.BookSession
 import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.ffi.FfiPlayerStatus
 import dev.l1br3.taletrek.ffi.FfiPosition
+import dev.l1br3.taletrek.ffi.setSegmentStore
+import dev.l1br3.taletrek.service.FillingBookMonitor
+import dev.l1br3.taletrek.service.KernelDirs
 import dev.l1br3.taletrek.service.SynthService
-import dev.l1br3.taletrek.service.isRunningPhase
+import dev.l1br3.taletrek.service.isLiveFor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -56,6 +59,9 @@ class PlaybackService : MediaSessionService() {
     private var openBookId: String? = null
     private var openAudioPresent = false
 
+    /** The open book's bundle path — the per-book fill gate's key. */
+    private var openPath: String? = null
+
     /** The progressive load's held states — ride every state broadcast. */
     @Volatile private var loadBuffering = false
 
@@ -66,6 +72,14 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         positionStore = PositionStore.fromContext(this)
+        // Process-start store registration: the FFI player upgrades a
+        // text-only index to playable only while a store is registered —
+        // doing it here (not at engine start) means reads reach
+        // NotReady/Missing and the app decides, before any job has ever
+        // run in this process. Idempotent with the engine's per-start
+        // registration (same deterministic dir — one definition,
+        // KernelDirs).
+        runCatching { setSegmentStore(KernelDirs.segmentStoreDir(this)) }
         exo =
             ExoPlayer
                 .Builder(this)
@@ -213,10 +227,15 @@ class PlaybackService : MediaSessionService() {
                     immediateResult
                 }
                 SessionCommands.ACTION_REANCHOR -> {
-                    SynthService.reanchor(
-                        args.getLong(SessionCommands.EXTRA_CHAPTER).toUInt(),
-                        args.getLong(SessionCommands.EXTRA_INDEX).toUInt(),
-                    )
+                    // Per-book: only the open book's own live fill may be
+                    // steered — a text-only read while another book
+                    // converts must never move that job's horizon.
+                    if (FillingBookMonitor.filling.value.isLiveFor(openPath)) {
+                        SynthService.reanchor(
+                            args.getLong(SessionCommands.EXTRA_CHAPTER).toUInt(),
+                            args.getLong(SessionCommands.EXTRA_INDEX).toUInt(),
+                        )
+                    }
                     immediateResult
                 }
                 SessionCommands.ACTION_RETRY_LOAD -> {
@@ -258,7 +277,11 @@ class PlaybackService : MediaSessionService() {
                             cache = SegmentCache(File(cacheDir, "segments")),
                             port = exoPort,
                             scope = serviceScope,
-                            keepWaiting = { SynthService.active.value?.isRunningPhase == true },
+                            // Per-book: a NotYet waits only while the live
+                            // fill targets THIS book — text-only A while B
+                            // converts surfaces the honest stall instead
+                            // of buffering forever.
+                            keepWaiting = { FillingBookMonitor.filling.value.isLiveFor(openPath) },
                             onBuffering = { buffering ->
                                 loadBuffering = buffering
                                 if (!buffering) rebroadcastState()
@@ -274,9 +297,11 @@ class PlaybackService : MediaSessionService() {
                         ).also { exoPort.attach(it) }
                     openBookId = session.book.bookId
                     openAudioPresent = session.book.audioPresent
+                    openPath = path
                 }.onFailure {
                     openBookId = null
                     openAudioPresent = false
+                    openPath = null
                 }
         }
         return immediateResult

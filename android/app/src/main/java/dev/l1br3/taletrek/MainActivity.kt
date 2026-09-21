@@ -27,6 +27,7 @@ import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.data.SourceImport
 import dev.l1br3.taletrek.data.VoiceStore
 import dev.l1br3.taletrek.service.FillingBookMonitor
+import dev.l1br3.taletrek.service.KernelDirs
 import dev.l1br3.taletrek.service.PendingImportResume
 import dev.l1br3.taletrek.service.PendingJobStore
 import dev.l1br3.taletrek.service.SynthJobRequest
@@ -108,7 +109,7 @@ class MainActivity : ComponentActivity() {
                             voiceCacheDir = filesDir.resolve("voices").path,
                             espeakDir = filesDir.resolve("espeak-ng-data").path,
                             booksDir = filesDir.resolve("books").path,
-                            segmentStoreDir = File(cacheDir, "taletrek/segments").path,
+                            segmentStoreDir = KernelDirs.segmentStoreDir(this),
                         ),
                 ),
             )[ImportViewModel::class.java]
