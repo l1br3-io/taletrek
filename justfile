@@ -99,6 +99,50 @@ verify-rust:
         cargo test --workspace
     fi
 
+# The pre-ship full matrix in one command: verify-rust + android-test +
+# test-web + android-instrumented — in PARALLEL by default with per-suite
+# wall time and PASS/FAIL (non-zero exit if any leg fails; logs kept under
+# /tmp/taletrek-verify-all/). The instrumented leg needs devices: fewer than
+# two connected and the pair boots first via android-emulators-up (the
+# sharded gate). JOBS=serial runs the legs one-by-one for debugging. Scoped
+# recipes are dev conveniences — this is the matrix; nothing here replaces
+# anything narrower.
+verify-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    RUN_DIR=/tmp/taletrek-verify-all
+    rm -rf "$RUN_DIR"; mkdir -p "$RUN_DIR"
+    leg() {  # $1 = name, rest = command; records "name rc seconds"
+        local NAME="$1"; shift
+        local T0=$SECONDS RC=0
+        "$@" > "$RUN_DIR/$NAME.log" 2>&1 || RC=$?
+        echo "$NAME $RC $((SECONDS-T0))s" >> "$RUN_DIR/results"
+    }
+    ADB="{{android_home}}/platform-tools/adb"
+    if ! "$ADB" devices | awk '/^emulator-.*device$/{n++} END{exit !(n>=2)}'; then
+        echo "verify-all: fewer than 2 devices up — booting the pair (takes ~1 min)"
+        just android-emulators-up
+    fi
+    if [ "${JOBS:-parallel}" = serial ]; then
+        leg rust  just verify-rust
+        leg jvm   just android-test
+        leg web   just test-web
+        leg instr just android-instrumented
+    else
+        leg rust  just verify-rust & P1=$!
+        leg jvm   just android-test & P2=$!
+        leg web   just test-web & P3=$!
+        leg instr just android-instrumented & P4=$!
+        wait "$P1" || true; wait "$P2" || true; wait "$P3" || true; wait "$P4" || true
+    fi
+    RC=0
+    echo "verify-all:"
+    while read -r NAME LRC DT; do
+        ST=PASS; [ "$LRC" = 0 ] || { ST=FAIL; RC=1; }
+        printf '  %-6s %-4s %-6s log: %s/%s.log\n' "$NAME" "$ST" "$DT" "$RUN_DIR" "$NAME"
+    done < <(sort "$RUN_DIR/results")
+    exit $RC
+
 # --- Android (effort 4) --------------------------------------------------------
 
 # Android toolchain locations (docs/developing.md § Android — override via env)
