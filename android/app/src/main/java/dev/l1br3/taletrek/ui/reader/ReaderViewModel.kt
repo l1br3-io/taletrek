@@ -11,11 +11,17 @@ import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.ffi.FfiParagraphPos
 import dev.l1br3.taletrek.ffi.FfiPlayerStatus
 import dev.l1br3.taletrek.playback.SessionState
+import dev.l1br3.taletrek.service.FillPhase
+import dev.l1br3.taletrek.service.FillingBook
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -91,7 +97,7 @@ data class ReaderUiState(
 class ReaderViewModel(
     private val opener: suspend () -> OpenedBook?,
     private val transport: ReaderTransport,
-    private val isSynthJobActive: () -> Boolean = { false },
+    private val filling: Flow<FillingBook?> = flowOf(null),
     private val onResumeSynth: () -> Unit = {},
 ) : ViewModel() {
     private val _ui = MutableStateFlow(ReaderUiState())
@@ -100,8 +106,9 @@ class ReaderViewModel(
     private var lastPara: FfiParagraphPos? = null
 
     /** A filling book stays playable through its fill and after seal
-     *  (sticky: armed at open when a job was live; the reads answer
-     *  Ready from the sealed bundle from then on). */
+     *  (sticky: armed whenever *this* book's fill goes live — opened
+     *  before, during, or after the job — never disarmed mid-visit;
+     *  the reads answer Ready from the sealed bundle from then on). */
     private var fillingSession = false
 
     init {
@@ -124,13 +131,8 @@ class ReaderViewModel(
                 }
             }
             if (opened != null) {
-                fillingSession = !opened.audioPresent && isSynthJobActive()
-                if (fillingSession) {
-                    opened.initialPos?.let {
-                        transport.reanchor(it.chapter, it.index)
-                    }
-                }
                 transport.openBook(opened.path)
+                if (!opened.audioPresent) observeFillFor(opened)
             }
         }
         viewModelScope.launch {
@@ -138,6 +140,30 @@ class ReaderViewModel(
                 if (state.bookId != null && state.bookId != _ui.value.bookId) return@collect
                 _ui.update { current -> apply(current, state).withDerivedTransport() }
             }
+        }
+    }
+
+    /** The reader observes its book's fill — the answer is a live
+     *  signal, never an open-time guess (the spec's locked stance). */
+    private fun observeFillFor(opened: OpenedBook) {
+        viewModelScope.launch {
+            filling
+                .map { it?.takeIf { target -> target.phase == FillPhase.Live && target.path == opened.path } }
+                .distinctUntilChanged()
+                .collect { liveForThisBook ->
+                    if (liveForThisBook != null && !fillingSession) {
+                        fillingSession = true
+                        // Re-aim the fill where the reader actually is —
+                        // the spec's locked arming rule (the job's own
+                        // anchor may point elsewhere by now).
+                        val at =
+                            _ui.value.active
+                                ?: opened.initialPos
+                                ?: FfiParagraphPos(_ui.value.renderedChapter.toUInt(), 0u)
+                        transport.reanchor(at.chapter, at.index)
+                        _ui.update { it.withDerivedTransport() }
+                    }
+                }
         }
     }
 
@@ -242,11 +268,11 @@ class ReaderViewModel(
         fun factory(
             opener: suspend () -> OpenedBook?,
             transport: ReaderTransport,
-            isSynthJobActive: () -> Boolean = { false },
+            filling: Flow<FillingBook?> = flowOf(null),
             onResumeSynth: () -> Unit = {},
         ): ViewModelProvider.Factory =
             viewModelFactory {
-                initializer { ReaderViewModel(opener, transport, isSynthJobActive, onResumeSynth) }
+                initializer { ReaderViewModel(opener, transport, filling, onResumeSynth) }
             }
     }
 }

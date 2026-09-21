@@ -290,9 +290,7 @@ fun AppNav(
                                 if (shelf != null) openBookForReading(context, shelf.path, positionStore) else null
                             },
                             transport = transport,
-                            isSynthJobActive = {
-                                SynthService.active.value?.isRunningPhase == true
-                            },
+                            filling = FillingBookMonitor.filling,
                             onResumeSynth = onResumeSynth,
                         ),
                 )

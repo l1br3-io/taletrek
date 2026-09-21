@@ -3,6 +3,9 @@ package dev.l1br3.taletrek.ui.reader
 import dev.l1br3.taletrek.ffi.FfiParagraphPos
 import dev.l1br3.taletrek.ffi.FfiPlayerStatus
 import dev.l1br3.taletrek.playback.SessionState
+import dev.l1br3.taletrek.service.FillPhase
+import dev.l1br3.taletrek.service.FillingBook
+import dev.l1br3.taletrek.service.PendingTerminal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,7 +34,10 @@ import org.junit.Test
 class ReaderViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private val transport = FakeTransport()
+    private val fill = MutableStateFlow<FillingBook?>(null)
     private lateinit var vm: ReaderViewModel
+
+    private fun liveFor(path: String) = FillingBook(path, "bk_sample", FillPhase.Live)
 
     @Before
     fun setUp() {
@@ -219,11 +225,12 @@ class ReaderViewModelTest {
     @Test
     fun openingAFillingBookAtItsStoredPositionAnchorsSynthesisThere() =
         runTest(dispatcher) {
+            fill.value = liveFor("/books/bk_sample.taletrek")
             vm =
                 ReaderViewModel(
                     opener = { book(initialChapter = 1, audio = false, initialPos = para(1, 0)) },
                     transport = transport,
-                    isSynthJobActive = { true },
+                    filling = fill,
                 )
             advanceUntilIdle()
 
@@ -232,34 +239,136 @@ class ReaderViewModelTest {
         }
 
     @Test
-    fun aFillingBookWithoutAStoredPositionOpensUnanchored() =
+    fun aFillingBookWithoutAStoredPositionAnchorsAtTheRenderedStart() =
+        runTest(dispatcher) {
+            fill.value = liveFor("/books/bk_sample.taletrek")
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    filling = fill,
+                )
+            advanceUntilIdle()
+
+            assertEquals(listOf(0u to 0u), transport.reanchors)
+        }
+
+    @Test
+    fun openedBeforeTheJobArmsWhenThisBooksFillGoesLive() =
         runTest(dispatcher) {
             vm =
                 ReaderViewModel(
                     opener = { book(initialChapter = 0, audio = false) },
                     transport = transport,
-                    isSynthJobActive = { true },
+                    filling = fill,
+                )
+            advanceUntilIdle()
+            assertFalse(vm.ui.value.transport.canPlayPause)
+
+            fill.value = liveFor("/books/bk_sample.taletrek")
+            advanceUntilIdle()
+
+            assertTrue("armed by the live fill", vm.ui.value.transport.canPlayPause)
+            assertEquals(listOf(0u to 0u), transport.reanchors)
+        }
+
+    @Test
+    fun lateArmingReanchorsAtTheRenderedPosition() =
+        runTest(dispatcher) {
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    filling = fill,
                 )
             advanceUntilIdle()
 
+            vm.jumpToChapter(1)
+            fill.value = liveFor("/books/bk_sample.taletrek")
+            advanceUntilIdle()
+
+            assertEquals(listOf(1u to 0u), transport.reanchors)
+        }
+
+    @Test
+    fun anotherBooksFillNeverArmsThisSession() =
+        runTest(dispatcher) {
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    filling = fill,
+                )
+            advanceUntilIdle()
+
+            fill.value = liveFor("/books/bk_other.taletrek")
+            advanceUntilIdle()
+
+            assertFalse(vm.ui.value.transport.canPlayPause)
+            vm.onParagraphTapped(2)
             assertTrue(transport.reanchors.isEmpty())
+        }
+
+    @Test
+    fun aPausedFillNeverArmsTheSession() =
+        runTest(dispatcher) {
+            fill.value =
+                FillingBook(
+                    "/books/bk_sample.taletrek",
+                    "bk_sample",
+                    FillPhase.Paused(PendingTerminal.CANCELLED),
+                )
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    filling = fill,
+                )
+            advanceUntilIdle()
+
+            assertFalse(vm.ui.value.transport.canPlayPause)
+            assertTrue(transport.reanchors.isEmpty())
+        }
+
+    @Test
+    fun armingIsStickyThroughTheSeal() =
+        runTest(dispatcher) {
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    filling = fill,
+                )
+            fill.value = liveFor("/books/bk_sample.taletrek")
+            advanceUntilIdle()
+            assertTrue(vm.ui.value.transport.canPlayPause)
+
+            // Done: the flow goes null — the session stays armed (sealed
+            // reads answer Ready from the bundle from then on).
+            fill.value = null
+            advanceUntilIdle()
+            assertTrue(vm.ui.value.transport.canPlayPause)
+
+            vm.onParagraphTapped(2)
+            assertEquals(listOf(0u to 0u, 0u to 2u), transport.reanchors)
         }
 
     @Test
     fun seekingWhileFillingReanchorsSynthesisAtThePlayhead() =
         runTest(dispatcher) {
+            fill.value = liveFor("/books/bk_sample.taletrek")
             vm =
                 ReaderViewModel(
                     opener = { book(initialChapter = 0, audio = false) },
                     transport = transport,
-                    isSynthJobActive = { true },
+                    filling = fill,
                 )
             advanceUntilIdle()
 
             vm.onParagraphTapped(2)
             vm.jumpToChapter(1)
 
-            assertEquals(listOf(0u to 2u, 1u to 0u), transport.reanchors)
+            assertEquals(listOf(0u to 0u, 0u to 2u, 1u to 0u), transport.reanchors)
         }
 
     @Test
