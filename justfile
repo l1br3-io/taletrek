@@ -344,6 +344,11 @@ android: android-kernel
 android-test:
     @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android testDebugUnitTest ktlintCheck
 
+# Scoped Kotlin JVM dev loop: --tests filter (glob or FQCN, quoted), ktlint
+# still gates. Convenience only — never replaces the full android-test gate.
+android-test-class filter:
+    @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android testDebugUnitTest --tests "{{filter}}" ktlintCheck
+
 # Instrumented tests on connected device (kernel round-trip, Compose UI)
 android-instrumented:
     @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android connectedDebugAndroidTest
