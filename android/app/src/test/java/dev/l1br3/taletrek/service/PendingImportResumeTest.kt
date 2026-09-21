@@ -194,4 +194,16 @@ class PendingImportResumeTest {
             resume().resumeManually(listOf(shelf("bk_new", audio = false)))
             assertTrue(started.isEmpty())
         }
+
+    @Test
+    fun manualResumeClearsTheStampTheJobIsLiveAgain() =
+        runTest {
+            pendingWith()
+            store.stampTerminal(PendingTerminal.CANCELLED)
+            resume().resumeManually(listOf(shelf("bk_new", audio = false)))
+            assertEquals(null, store.load()?.terminalReason)
+            // Unspent again: a later process death auto-resumes like any other.
+            resume().resumeWith(listOf(shelf("bk_new", audio = false)))
+            assertEquals(2, started.size)
+        }
 }

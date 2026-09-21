@@ -48,6 +48,11 @@ class PendingImportResume(
                 .singleOrNull()
                 ?.let { loadPosition(it.bookId) }
                 ?.let { FfiAnchor(chapter = it.chapter, paragraph = it.index) }
+        // A resumed job is live again — the marker reads unspent from
+        // here (a later process death auto-resumes like any other).
+        if (pending.terminalReason != null) {
+            store.save(pending.copy(terminalReason = null))
+        }
         startJob(pending.request.copy(initialAnchor = anchor))
     }
 }

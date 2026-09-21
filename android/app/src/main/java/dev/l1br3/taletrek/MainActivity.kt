@@ -26,10 +26,12 @@ import dev.l1br3.taletrek.data.BooksRepository
 import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.data.SourceImport
 import dev.l1br3.taletrek.data.VoiceStore
+import dev.l1br3.taletrek.service.FillingBookMonitor
 import dev.l1br3.taletrek.service.PendingImportResume
 import dev.l1br3.taletrek.service.PendingJobStore
 import dev.l1br3.taletrek.service.SynthJobRequest
 import dev.l1br3.taletrek.service.SynthService
+import dev.l1br3.taletrek.service.SynthUiState
 import dev.l1br3.taletrek.service.isRunningPhase
 import dev.l1br3.taletrek.service.pipelineJobsForDevice
 import dev.l1br3.taletrek.ui.library.ImportViewModel
@@ -44,6 +46,7 @@ import dev.l1br3.taletrek.ui.voices.VoiceScreen
 import dev.l1br3.taletrek.ui.voices.VoiceViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -66,10 +69,11 @@ class MainActivity : ComponentActivity() {
         // one active handle per file (see PositionStore).
         positionStore = PositionStore.fromContext(this)
         val pendingStore = PendingJobStore(filesDir)
+        val repo = BooksRepository(this, positionStore)
         libraryViewModel =
             ViewModelProvider(
                 this,
-                LibraryViewModel.factory(BooksRepository(this, positionStore)),
+                LibraryViewModel.factory(repo),
             )[LibraryViewModel::class.java]
         voiceStore = VoiceStore.fromContext(this)
         importViewModel =
@@ -118,6 +122,26 @@ class MainActivity : ComponentActivity() {
                     espeakDir = { filesDir.resolve("espeak-ng-data").path },
                 ),
             )[VoiceViewModel::class.java]
+        // The fill authority, process-wired before anything can ask —
+        // reader arming, bridge waiting, and reanchor routing all read
+        // this one derivation (never a sampled snapshot).
+        FillingBookMonitor.start(
+            store = pendingStore,
+            shelf = repo.state.map { it.books },
+            rescan = { repo.refresh() },
+        )
+        // The terminal policy runs at activity level — a job ending
+        // while the reader (not the library) is composed must still
+        // stamp/spend the recovery material. Re-plays are idempotent.
+        lifecycleScope.launch {
+            SynthService.active.collect { state ->
+                when (state) {
+                    is SynthUiState.Done, is SynthUiState.Failed, SynthUiState.Cancelled ->
+                        importViewModel.onJobTerminal(state)
+                    else -> {}
+                }
+            }
+        }
         maybeResumePendingImport(pendingStore)
         handleViewIntent(intent)
         setContent {

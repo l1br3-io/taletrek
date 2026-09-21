@@ -1,6 +1,9 @@
 package dev.l1br3.taletrek.service
 
 import dev.l1br3.taletrek.ffi.FfiAnchor
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.util.Properties
 
@@ -37,6 +40,12 @@ class PendingJobStore(
 
     private val file = File(filesDir, FILE_NAME)
 
+    private val _revisions = MutableStateFlow(0L)
+
+    /** Bumps on every write — the monitor re-derives on it (stamps and
+     *  spends are marker-only changes; no other signal moves). */
+    val revisions: StateFlow<Long> = _revisions.asStateFlow()
+
     fun save(job: PendingJob) {
         val props = Properties()
         val request = job.request
@@ -57,6 +66,7 @@ class PendingJobStore(
         job.terminalReason?.let { props.setProperty(KEY_TERMINAL, it.name) }
         file.parentFile?.mkdirs()
         file.outputStream().use { props.store(it, null) }
+        _revisions.value += 1L
     }
 
     /** The persisted job, or null when none is pending (or the record is unreadable). */
@@ -102,7 +112,7 @@ class PendingJobStore(
 
     /** Spend the record — the job ended (or became unresumable). */
     fun clear() {
-        runCatching { file.delete() }
+        if (runCatching { file.delete() }.getOrDefault(false)) _revisions.value += 1L
     }
 
     /** Stamp a non-Done terminal onto the record (no-op when absent). */
