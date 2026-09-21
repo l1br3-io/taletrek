@@ -1,16 +1,21 @@
 package dev.l1br3.taletrek.ui.library
 
 import dev.l1br3.taletrek.data.BookShelf
+import dev.l1br3.taletrek.service.FillPhase
+import dev.l1br3.taletrek.service.FillingBook
+import dev.l1br3.taletrek.service.PendingTerminal
 import dev.l1br3.taletrek.service.SynthUiState
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The library row's filling state — pure derivation, no Compose (the
- * rendering is dumb). A text-only row is "preparing audio" exactly when
- * a live job wrote it during this run (it appeared after the pending
- * marker's shelf snapshot); desktop-made text-only imports keep the
+ * The library row's fill state — pure derivation from the monitor (the
+ * rendering is dumb). A row is filling exactly when the live fill
+ * targets it; a paused fill (cancelled/failed marker) is the recovery
+ * row; everything else — desktop text-only imports included — keeps the
  * neutral row.
  */
 class LibraryRowStateTest {
@@ -20,48 +25,64 @@ class LibraryRowStateTest {
         path: String = "/files/books/$bookId.taletrek",
     ) = BookShelf(bookId, "Title", null, 3, audio, path)
 
+    private fun fill(
+        path: String,
+        phase: FillPhase = FillPhase.Live,
+    ) = FillingBook(path, path.substringAfterLast("/").removeSuffix(".taletrek"), phase)
+
     @Test
     fun aFillingRowShowsPreparingAudioProgress() {
-        val ui = fillingRowUi(shelf(), SynthUiState.Filling(4, 9), preExistingPaths = setOf("/files/books/bk_old.taletrek"))
+        val ui = fillingRowUi(shelf(), fill("/files/books/bk_new.taletrek"), SynthUiState.Filling(4, 9))
         assertTrue(ui.filling)
         assertTrue(ui.detail!!.contains("4 of 9"))
+        assertFalse(ui.paused)
     }
 
     @Test
     fun earlyPhasesShowPreparingWithoutCounts() {
-        val preparing = fillingRowUi(shelf(), SynthUiState.Preparing(null, null), emptySet())
-        val downloading = fillingRowUi(shelf(), SynthUiState.DownloadingVoice(10, 100), emptySet())
-        val synthesizing = fillingRowUi(shelf(), SynthUiState.Synthesizing(1, 9), emptySet())
+        val preparing = fillingRowUi(shelf(), fill("/files/books/bk_new.taletrek"), SynthUiState.Preparing(null, null))
+        val downloading = fillingRowUi(shelf(), fill("/files/books/bk_new.taletrek"), SynthUiState.DownloadingVoice(10, 100))
+        val synthesizing = fillingRowUi(shelf(), fill("/files/books/bk_new.taletrek"), SynthUiState.Synthesizing(1, 9))
         assertTrue(preparing.filling)
-        assertTrue(preparing.detail == null)
+        assertNull(preparing.detail)
         assertTrue(downloading.filling)
-        assertTrue(downloading.detail == null)
+        assertNull(downloading.detail)
         assertTrue(synthesizing.filling)
         assertTrue(synthesizing.detail!!.contains("1 of 9"))
     }
 
     @Test
-    fun theSealedRowIsTheNormalCompleteRow() {
-        val ui = fillingRowUi(shelf(audio = true), SynthUiState.Done("bk_new", "/books/bk_new.taletrek"), emptySet())
-        assertFalse(ui.filling)
-    }
-
-    @Test
-    fun aDesktopTextOnlyImportKeepsTheNeutralRow() {
-        val preExisting = fillingRowUi(shelf(), SynthUiState.Filling(4, 9), preExistingPaths = setOf("/files/books/bk_new.taletrek"))
-        val idleJob = fillingRowUi(shelf(), SynthUiState.Done("bk_new", "/books/bk_new.taletrek"), emptySet())
-        val noJob = fillingRowUi(shelf(), null, emptySet())
-        assertFalse(preExisting.filling)
-        assertFalse(idleJob.filling)
-        assertFalse(noJob.filling)
-    }
-
-    @Test
-    fun aTerminalJobDoesNotKeepRowsFilling() {
-        val cancelled = fillingRowUi(shelf(), SynthUiState.Cancelled, emptySet())
-        val failed = fillingRowUi(shelf(), SynthUiState.Failed("resolve", "down"), emptySet())
+    fun aPausedFillIsTheRecoveryRow() {
+        val cancelled =
+            fillingRowUi(shelf(), fill("/files/books/bk_new.taletrek", FillPhase.Paused(PendingTerminal.CANCELLED)), null)
+        val failed =
+            fillingRowUi(shelf(), fill("/files/books/bk_new.taletrek", FillPhase.Paused(PendingTerminal.FAILED)), null)
+        assertTrue(cancelled.paused)
         assertFalse(cancelled.filling)
+        assertTrue(failed.paused)
         assertFalse(failed.filling)
+    }
+
+    @Test
+    fun anotherBooksFillNeverMarksThisRow() {
+        val ui = fillingRowUi(shelf(), fill("/files/books/bk_other.taletrek"), SynthUiState.Filling(4, 9))
+        assertFalse(ui.filling)
+        assertFalse(ui.paused)
+    }
+
+    @Test
+    fun theSealedRowIsTheNormalCompleteRow() {
+        val ui =
+            fillingRowUi(shelf(audio = true), fill("/files/books/bk_new.taletrek"), SynthUiState.Done("bk_new", "/books/bk_new.taletrek"))
+        assertFalse(ui.filling)
+        assertFalse(ui.paused)
+    }
+
+    @Test
+    fun noFillAtAllKeepsTheNeutralRow() {
+        val ui = fillingRowUi(shelf(), null, null)
+        assertFalse(ui.filling)
+        assertFalse(ui.paused)
     }
 
     @Test
@@ -98,6 +119,6 @@ class LibraryRowStateTest {
             convertCardVisible(SynthUiState.Done("bk", "/books/bk.taletrek"), fillingRowOnShelf = false, terminalDismissed = true),
         )
         assertFalse(convertCardVisible(null, fillingRowOnShelf = false, terminalDismissed = false))
-        assertFalse(convertCardVisible(SynthUiState.Idle, fillingRowOnShelf = false, terminalDismissed = false))
+        assertEquals(false, convertCardVisible(SynthUiState.Idle, fillingRowOnShelf = false, terminalDismissed = false))
     }
 }

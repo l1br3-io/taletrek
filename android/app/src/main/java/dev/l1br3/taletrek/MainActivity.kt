@@ -267,6 +267,7 @@ fun AppNav(
                 importViewModel = importViewModel,
                 onOpenBook = { book -> nav.navigate("reader/${book.bookId}") },
                 onOpenVoices = { nav.navigate("voices") },
+                onResumeFill = onResumeSynth,
                 pendingImportUri = pendingImportUri,
                 pendingSourceUri = pendingSourceUri,
                 onImportConsumed = onImportConsumed,

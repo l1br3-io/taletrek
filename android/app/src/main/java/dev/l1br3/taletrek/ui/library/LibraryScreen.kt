@@ -10,6 +10,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -59,6 +60,7 @@ import dev.l1br3.taletrek.data.ExportFiles
 import dev.l1br3.taletrek.data.ExportKind
 import dev.l1br3.taletrek.data.PickedLane
 import dev.l1br3.taletrek.data.SourceImport
+import dev.l1br3.taletrek.service.FillingBookMonitor
 import dev.l1br3.taletrek.service.SynthService
 import dev.l1br3.taletrek.service.SynthUiState
 import dev.l1br3.taletrek.service.isRunningPhase
@@ -80,6 +82,7 @@ fun LibraryScreen(
     importViewModel: ImportViewModel,
     onOpenBook: (BookShelf) -> Unit,
     onOpenVoices: () -> Unit,
+    onResumeFill: () -> Unit,
     pendingImportUri: String?,
     pendingSourceUri: String?,
     onImportConsumed: () -> Unit,
@@ -88,6 +91,7 @@ fun LibraryScreen(
     val ui by viewModel.ui.collectAsState()
     val importUi by importViewModel.ui.collectAsState()
     val synthState by SynthService.active.collectAsState()
+    val fillingBook by FillingBookMonitor.filling.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     var searchOpen by remember { mutableStateOf(false) }
 
@@ -97,23 +101,6 @@ fun LibraryScreen(
     LaunchedEffect(synthState) {
         if (synthState?.isRunningPhase == true) terminalDismissed = false
     }
-
-    // The filling book's text bundle lands mid-run (progressive writes
-    // it before any audio) — rescan once per job when synth starts so
-    // the row appears; the seal's terminal rescan completes it.
-    var fillScanned by remember { mutableStateOf(false) }
-    LaunchedEffect(synthState) {
-        val state = synthState
-        val running = state is SynthUiState.Synthesizing || state is SynthUiState.Filling
-        if (running && !fillScanned) {
-            fillScanned = true
-            viewModel.rescan()
-        }
-        if (state == null || !state.isRunningPhase) fillScanned = false
-    }
-
-    // The pending job's shelf snapshot — the filling-row disambiguator.
-    val fillingShelfPaths = remember { importViewModel.fillingJobShelfPaths() }
 
     val notifPermission =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -297,7 +284,7 @@ fun LibraryScreen(
             val convertState = synthState
             val fillingRowOnShelf =
                 convertState != null &&
-                    ui.books.any { fillingRowUi(it, convertState, fillingShelfPaths).filling }
+                    ui.books.any { fillingRowUi(it, fillingBook, convertState).filling }
             if (convertState != null && convertCardVisible(convertState, fillingRowOnShelf, terminalDismissed)) {
                 ConvertProgressCard(
                     state = convertState,
@@ -370,11 +357,12 @@ fun LibraryScreen(
                             }
                         }
                         items(ui.visible, key = { it.bookId }) { book ->
-                            val filling = fillingRowUi(book, synthState, fillingShelfPaths)
+                            val filling = fillingRowUi(book, fillingBook, synthState)
                             BookRow(
                                 book = book,
                                 preparingAudio = ui.exporting == book,
                                 filling = filling.filling,
+                                pausedFill = filling.paused,
                                 fillingDetail = filling.detail,
                                 onCancelFill = {
                                     context.startService(
@@ -382,6 +370,7 @@ fun LibraryScreen(
                                             .setAction(SynthService.ACTION_CANCEL),
                                     )
                                 },
+                                onResumeFill = onResumeFill,
                                 onOpen = { onOpenBook(book) },
                                 onRequestDelete = { viewModel.requestDelete(book) },
                                 onShareBundle = {
@@ -509,8 +498,10 @@ private fun BookRow(
     book: BookShelf,
     preparingAudio: Boolean,
     filling: Boolean,
+    pausedFill: Boolean,
     fillingDetail: String?,
     onCancelFill: () -> Unit,
+    onResumeFill: () -> Unit,
     onOpen: () -> Unit,
     onRequestDelete: () -> Unit,
     onShareBundle: () -> Unit,
@@ -533,6 +524,21 @@ private fun BookRow(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                // The recovery row: a paused fill keeps its marker +
+                // source by policy — one tap resumes it from the store.
+                if (pausedFill) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 2.dp),
+                    ) {
+                        Text(
+                            "Audio preparation paused",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(onClick = onResumeFill) { Text("Resume") }
+                    }
                 }
             }
         },

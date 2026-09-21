@@ -120,10 +120,6 @@ class ImportViewModel(
         }
     }
 
-    /** The pending job's shelf snapshot — disambiguates filling rows
-     *  from desktop-made text-only imports. */
-    fun fillingJobShelfPaths(): Set<String> = pendingStore.load()?.preExistingBookPaths?.toSet() ?: emptySet()
-
     fun dismissError() {
         if (_ui.value is ImportUiState.Failed) _ui.value = ImportUiState.Idle
     }
