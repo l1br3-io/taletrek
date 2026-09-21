@@ -168,6 +168,43 @@ workspace lints (`unsafe_code = forbid`, `missing_docs = warn`, clippy
 
 ---
 
+## Loop budgets
+
+The feedback loops around these suites (effort `fast-test-loops`): scoped
+loops answer in seconds, the instrumented matrix shards across two emulators,
+and the pre-ship matrix runs once — in parallel. Numbers below are this-host
+measurements (62 GB / 32 cores, KVM); the source of truth with per-run detail
+and the structural findings is
+[`docs/specs/fast-test-loops/baseline.md`](specs/fast-test-loops/baseline.md).
+
+| Loop | Recipe | Baseline | After | Notes |
+| --- | --- | --- | --- | --- |
+| Android JVM, cold (after `gradlew clean`) | `just android-test` | 10 s | **1 s** | gradle build cache (26 tasks `FROM-CACHE`); warm was already ~1 s |
+| Android JVM, scoped class | `just android-test-class <fqcn>` | n/a | **~2 s** | `--tests` filter + ktlint; a wrong filter fails non-zero |
+| Rust, warm full | `just test-rust` | 78 s | ~75–100 s | nextest runs binaries in parallel; the wall is the 10k-paragraph `peak_memory` proof (74–100 s solo) — runner is not the lever |
+| Rust, scoped crate | `just test-rust-pkg ffi` | n/a (full gate 78–100 s) | **1–4 s** | the real dev-loop win |
+| Rust gates | `just verify-rust` | 80 s | ~119 s* | clippy + nextest + doc-tests; *same pole variance, see baseline |
+| Instrumented, 1 device | `just android-instrumented` | **237 s** median | unchanged (fallback path) | serial, AGP-connected |
+| Instrumented, 2 devices (sharded) | `just android-instrumented` | (baseline above) | **125 s** (117 s on-device) | 42/42; halves count-summed against the source `@Test` total |
+| Pre-ship matrix | `just verify-all` | ~331 s serial sum | parallel (all four legs at once) | per-suite PASS/FAIL + timing; `JOBS=serial` to debug |
+
+To re-measure (bash `SECONDS`, suite must exit 0 or the number doesn't count):
+
+```sh
+T0=$SECONDS; just <recipe> >/tmp/loop.log 2>&1; echo "rc=$? $((SECONDS-T0))s"
+# android-test cold first:  android/gradlew --project-dir android clean -q
+# rust touch-cold first:     touch crates/{parse,reader,synth,worker,ffi}/src/lib.rs desktop/src/main.rs
+```
+
+Sharding notes (why `android-instrumented` is hand-rolled): AGP's
+multi-device `connectedDebugAndroidTest` **duplicates** the full suite on
+every device (no time saved), and its class-filter property **mangles comma
+lists** (runs only the first class; raw `am instrument` handles them fine).
+The recipe therefore does one gradle install pass + two parallel raw
+`am instrument` halves; new test classes auto-append to the lighter half.
+
+---
+
 ## 4. CI matrix
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs three jobs:

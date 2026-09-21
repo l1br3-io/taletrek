@@ -183,6 +183,31 @@ device-only signal — the spec's final smoke stays a hardware checklist.
 piper+ffmpeg, gate pre-wired) · `just verify` (SPA gates) · `just verify-rust`
 (clippy `-D warnings` + tests). Details per layer: [`docs/testing.md`](testing.md).
 
+## Test loops
+
+The daily default is the **scoped loop**; the full gates stay the **pre-ship
+default** — a scoped recipe is a convenience that never replaces its gate
+(and `just verify-all` runs the full matrix, never a scoped subset).
+
+| Loop | Scoped command | Budget (this host) | Full gate |
+| --- | --- | --- | --- |
+| Rust crate | `just test-rust-pkg ffi` | **1–4 s** | `just test-rust` — nextest when on `$PATH`; wall ≈ the 10k-paragraph memory proof (74–100 s, machine-mood) |
+| Kotlin JVM class | `just android-test-class 'dev.l1br3.taletrek.service.FillingBookMonitorTest'` | **~2 s** (ktlint still gates) | `just android-test` (~1 s warm) |
+| Instrumented class | `just android-instrumented-class dev.l1br3.taletrek.FillStatesTest` | class-dependent; `ANDROID_SERIAL=emulator-5554` pins one device | `just android-instrumented` — **shards across two devices** |
+| Pre-ship matrix | — | — | `just verify-all` (parallel; `JOBS=serial` to debug) |
+
+- **Two emulators, one command:** `just android-emulators-up` boots the pair
+  — `taletrek` on `:5554` + `taletrek2` on `:5556` (created if missing, same
+  system image ⇒ no downloads; headless, cold-boot, G31 `-dns-server`) — in
+  ~30–65 s. With both up, `just android-instrumented` shards its class
+  halves across the devices: **~125 s vs ~237 s** single-device (42/42 either
+  way — the halves' test counts must sum to the source `@Test` total, so a
+  dropped suite fails loudly). Budget: ~2–3 GB extra RAM. Stop every
+  instance: `just android-emulator-stop`.
+- All loop numbers: baseline → after + how to re-measure:
+  [`docs/testing.md` § Loop budgets](testing.md#loop-budgets) (source of
+  truth: [`docs/specs/fast-test-loops/baseline.md`](specs/fast-test-loops/baseline.md)).
+
 ## Releasing
 
 Tag push → CI matrix → GitHub-release artifacts (`taletrek-<version>-<target>`):
