@@ -54,9 +54,28 @@ gui:
 test-web:
     @pnpm test
 
-# Rust workspace tests (hermetic — no piper/ffmpeg)
+# Rust workspace tests (hermetic — no piper/ffmpeg). cargo-nextest runs the
+# test binaries in parallel when on $PATH (fallback: plain cargo test);
+# nextest never runs doc-tests — the verify-rust gate covers those.
 test-rust:
-    @cargo test --workspace
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v cargo-nextest >/dev/null 2>&1; then
+        cargo nextest run --workspace
+    else
+        cargo test --workspace
+    fi
+
+# Scoped Rust dev loop: pkg is the crate suffix (ffi → taletrek-ffi, empty =
+# whole workspace). Convenience only — never replaces the full gate.
+test-rust-pkg pkg="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v cargo-nextest >/dev/null 2>&1; then
+        if [ -n "{{pkg}}" ]; then cargo nextest run -p "taletrek-{{pkg}}"; else cargo nextest run --workspace; fi
+    else
+        if [ -n "{{pkg}}" ]; then cargo test -p "taletrek-{{pkg}}"; else cargo test --workspace; fi
+    fi
 
 # Real-piper/ffmpeg/sherpa e2e (the #[ignore]d tests) — gate env pre-wired to the setup cache
 test-e2e:
@@ -66,10 +85,19 @@ test-e2e:
 verify:
     @pnpm verify
 
-# Rust gates: clippy -D warnings + tests
+# Rust gates: clippy -D warnings + tests. When nextest serves the unit run,
+# cargo test --workspace --doc always finishes the gate (nextest doesn't run
+# doc-tests) — the gate can never silently narrow.
 verify-rust:
-    @cargo clippy --workspace --all-targets -- -D warnings
-    @cargo test --workspace
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo clippy --workspace --all-targets -- -D warnings
+    if command -v cargo-nextest >/dev/null 2>&1; then
+        cargo nextest run --workspace
+        cargo test --workspace --doc
+    else
+        cargo test --workspace
+    fi
 
 # --- Android (effort 4) --------------------------------------------------------
 
