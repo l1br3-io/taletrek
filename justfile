@@ -315,9 +315,25 @@ android-fixtures:
         --method scan_volume --arg external_primary >/dev/null 2>&1 || true
     echo "fixtures: /sdcard/Download — in the app tap Add, then pick Downloads in the picker"
 
-# Shut the running emulator down cleanly (adb emu kill)
+# Shut every running emulator down cleanly (adb emu kill per instance)
 android-emulator-stop:
-    @"{{android_home}}/platform-tools/adb" emu kill && echo "emulator: stopped" || echo "emulator: not running"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADB="{{android_home}}/platform-tools/adb"
+    SERIALS="$("$ADB" devices | awk '/^emulator-.*device$/{print $1}')"
+    if [ -z "$SERIALS" ]; then echo "emulator: not running"; exit 0; fi
+    for S in $SERIALS; do "$ADB" -s "$S" emu kill && echo "emulator: stopped $S"; done
+    for _ in $(seq 1 30); do "$ADB" devices | grep -q '^emulator-.*device$' || break; sleep 1; done
+    "$ADB" devices | grep -q '^emulator-.*device$' \
+        && { echo "emulator: some instance did not stop within 30s"; exit 1; } \
+        || true
+
+# Boot BOTH emulator instances for the sharded instrumented matrix: taletrek
+# on :5554 + taletrek2 on :5556 (created if missing — same image, no new
+# downloads), headless, cold, -dns-server per G31. Idempotent — already-up
+# instances are reused. ~2-3 GB extra RAM. Stop all: android-emulator-stop.
+android-emulators-up:
+    @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} bash scripts/emulators-up.sh
 
 # Reopen the headless emulator's screen mirror by hand (scrcpy) — the serve
 # recipes open one automatically; this is for after you've closed it. The
