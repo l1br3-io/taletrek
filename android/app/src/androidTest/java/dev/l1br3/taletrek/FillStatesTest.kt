@@ -4,13 +4,13 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.l1br3.taletrek.data.BookShelf
 import dev.l1br3.taletrek.ffi.openBook
 import dev.l1br3.taletrek.playback.ExoPlayerPort
 import dev.l1br3.taletrek.playback.PlayerBridge
 import dev.l1br3.taletrek.playback.ProgressiveSegmentSource
 import dev.l1br3.taletrek.playback.SegmentCache
 import dev.l1br3.taletrek.playback.TrekKernelPlayer
-import dev.l1br3.taletrek.data.BookShelf
 import dev.l1br3.taletrek.service.FillPhase
 import dev.l1br3.taletrek.service.FillingBookMonitor
 import dev.l1br3.taletrek.service.PendingImportResume
@@ -170,7 +170,8 @@ class FillStatesTest {
     @Test
     fun aOpenedBeforeSubmitSeesTheFillGoLiveAndPlays() {
         val voices = File(files, "voices")
-        dev.l1br3.taletrek.ffi.ffiResolveVoice(null, voices.path, SilentDownload)
+        dev.l1br3.taletrek.ffi
+            .ffiResolveVoice(null, voices.path, SilentDownload)
         val books = freshDir("books-a")
         val store = freshDir("store-a")
         val source = doc("fill-states-a.txt")
@@ -241,7 +242,8 @@ class FillStatesTest {
     @Test
     fun bCancelKeepsMaterialRelaunchNeverAutoResumesManualSeals() {
         val voices = File(files, "voices")
-        dev.l1br3.taletrek.ffi.ffiResolveVoice(null, voices.path, SilentDownload)
+        dev.l1br3.taletrek.ffi
+            .ffiResolveVoice(null, voices.path, SilentDownload)
         val books = freshDir("books-b")
         val store = freshDir("store-b")
         val source = doc("fill-states-b.txt")
@@ -296,7 +298,8 @@ class FillStatesTest {
     @Test
     fun cAForeignTextOnlyBookStallsWhileAnotherConverts() {
         val voices = File(files, "voices")
-        dev.l1br3.taletrek.ffi.ffiResolveVoice(null, voices.path, SilentDownload)
+        dev.l1br3.taletrek.ffi
+            .ffiResolveVoice(null, voices.path, SilentDownload)
 
         // Book A: cancelled mid-fill in an earlier run — a text-only
         // bundle with recovery material, NOT the live fill.
@@ -393,7 +396,9 @@ class FillStatesTest {
         instrumentation: android.app.Instrumentation,
         block: () -> T,
     ): T {
-        val ref = java.util.concurrent.atomic.AtomicReference<T>()
+        val ref =
+            java.util.concurrent.atomic
+                .AtomicReference<T>()
         instrumentation.runOnMainSync { ref.set(block()) }
         return ref.get()
     }
