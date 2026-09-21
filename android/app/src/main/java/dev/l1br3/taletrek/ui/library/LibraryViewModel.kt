@@ -51,6 +51,7 @@ data class LibraryUiState(
  */
 class LibraryViewModel(
     private val repo: BooksRepo,
+    private val remove: suspend (BookShelf) -> Unit,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(LibraryUiState())
     val ui: StateFlow<LibraryUiState> = _ui.asStateFlow()
@@ -138,14 +139,18 @@ class LibraryViewModel(
     fun confirmDelete() {
         val book = _ui.value.pendingDelete ?: return
         _ui.update { it.copy(pendingDelete = null) }
-        viewModelScope.launch { repo.delete(book) }
+        viewModelScope.launch { remove(book) }
     }
 
     companion object {
-        /** The activity-scoped factory (the repo is constructed once, in the activity). */
-        fun factory(repo: BooksRepo): ViewModelProvider.Factory =
+        /** The activity-scoped factory (the repo + removal policy are
+         *  constructed once, in the activity). */
+        fun factory(
+            repo: BooksRepo,
+            remove: suspend (BookShelf) -> Unit,
+        ): ViewModelProvider.Factory =
             viewModelFactory {
-                initializer { LibraryViewModel(repo) }
+                initializer { LibraryViewModel(repo, remove) }
             }
     }
 }

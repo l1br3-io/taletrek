@@ -71,6 +71,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        live = this
         positionStore = PositionStore.fromContext(this)
         // Process-start store registration: the FFI player upgrades a
         // text-only index to playable only while a store is registered —
@@ -131,6 +132,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        live = null
         if (focusHeld) abandonFocus()
         noisyRouter.release() // before the bridge dies — never a dangling receiver
         mediaSession.release()
@@ -399,9 +401,24 @@ class PlaybackService : MediaSessionService() {
             }
         }
 
-    private companion object {
-        const val FULL_VOLUME = 1f
-        const val DUCK_VOLUME = 0.2f
+    companion object {
+        private const val FULL_VOLUME = 1f
+        private const val DUCK_VOLUME = 0.2f
+
+        /** The live instance — the delete flow's pause seam (null when
+         *  the service is down; the null check just makes the no-op
+         *  honest). */
+        @Volatile
+        private var live: PlaybackService? = null
+
+        /** Pause playback of [path] if it's the open book — the delete
+         *  flow's hook so a removed book stops narrating. Routed through
+         *  the kernel like every pause (never a behind-its-back ExoPlayer
+         *  pause); no-op when the service is idle or another book is open. */
+        fun pauseIfPlaying(path: String) {
+            val service = live ?: return
+            if (service.openPath == path) service.bridge?.userPause()
+        }
     }
 
     /** Persist a position change (fire-and-forget on the store's IO scope). */

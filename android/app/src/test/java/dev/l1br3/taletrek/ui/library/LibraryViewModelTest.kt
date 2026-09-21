@@ -33,12 +33,13 @@ import java.io.IOException
 class LibraryViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private val repo = FakeRepo()
+    private val removals = mutableListOf<BookShelf>()
     private lateinit var vm: LibraryViewModel
 
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
-        vm = LibraryViewModel(repo)
+        vm = LibraryViewModel(repo) { removals += it }
     }
 
     @After
@@ -50,7 +51,7 @@ class LibraryViewModelTest {
     fun aFreshViewModelStartsLoading() {
         // Observed strictly between construction and the first scan —
         // no dispatcher advance (the collector would land immediately).
-        val fresh = LibraryViewModel(repo)
+        val fresh = LibraryViewModel(repo) { }
         assertTrue(fresh.ui.value.loading)
     }
 
@@ -101,22 +102,22 @@ class LibraryViewModelTest {
         }
 
     @Test
-    fun deleteNeedsConfirmationAndOnlyThenDeletes() =
+    fun deleteNeedsConfirmationAndOnlyThenRemoves() =
         runTest(dispatcher) {
             val book = shelf("bk_a")
             vm.requestDelete(book)
             assertEquals(book, vm.ui.value.pendingDelete)
-            assertTrue(repo.deleted.isEmpty())
+            assertTrue(removals.isEmpty())
 
             vm.cancelDelete()
             assertNull(vm.ui.value.pendingDelete)
-            assertTrue(repo.deleted.isEmpty())
+            assertTrue(removals.isEmpty())
 
             vm.requestDelete(book)
             vm.confirmDelete()
             advanceUntilIdle()
             assertNull(vm.ui.value.pendingDelete)
-            assertEquals(listOf(book), repo.deleted)
+            assertEquals(listOf(book), removals)
         }
 
     @Test

@@ -26,6 +26,8 @@ import dev.l1br3.taletrek.data.BooksRepository
 import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.data.SourceImport
 import dev.l1br3.taletrek.data.VoiceStore
+import dev.l1br3.taletrek.playback.PlaybackService
+import dev.l1br3.taletrek.service.BookRemoval
 import dev.l1br3.taletrek.service.FillingBookMonitor
 import dev.l1br3.taletrek.service.KernelDirs
 import dev.l1br3.taletrek.service.PendingImportResume
@@ -71,10 +73,21 @@ class MainActivity : ComponentActivity() {
         positionStore = PositionStore.fromContext(this)
         val pendingStore = PendingJobStore(filesDir)
         val repo = BooksRepository(this, positionStore)
+        val removal =
+            BookRemoval(
+                repo = repo,
+                pendingStore = pendingStore,
+                filling = FillingBookMonitor.filling,
+                active = SynthService.active,
+                requestCancel = {
+                    startService(Intent(this, SynthService::class.java).setAction(SynthService.ACTION_CANCEL))
+                },
+                pausePlayback = { path -> PlaybackService.pauseIfPlaying(path) },
+            )
         libraryViewModel =
             ViewModelProvider(
                 this,
-                LibraryViewModel.factory(repo),
+                LibraryViewModel.factory(repo) { book -> removal.remove(book) },
             )[LibraryViewModel::class.java]
         voiceStore = VoiceStore.fromContext(this)
         importViewModel =

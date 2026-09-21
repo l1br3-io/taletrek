@@ -60,6 +60,7 @@ import dev.l1br3.taletrek.data.ExportFiles
 import dev.l1br3.taletrek.data.ExportKind
 import dev.l1br3.taletrek.data.PickedLane
 import dev.l1br3.taletrek.data.SourceImport
+import dev.l1br3.taletrek.service.FillPhase
 import dev.l1br3.taletrek.service.FillingBookMonitor
 import dev.l1br3.taletrek.service.SynthService
 import dev.l1br3.taletrek.service.SynthUiState
@@ -418,10 +419,21 @@ fun LibraryScreen(
     }
 
     ui.pendingDelete?.let { book ->
+        // Delete takes the processing down too — say so when it will.
+        val processingCopy =
+            when (fillingBook?.takeIf { it.path == book.path }?.phase) {
+                FillPhase.Live -> " Its conversion will be cancelled."
+                is FillPhase.Paused -> " Its unfinished conversion will be discarded."
+                null -> ""
+            }
         AlertDialog(
             onDismissRequest = viewModel::cancelDelete,
             title = { Text("Delete book?") },
-            text = { Text("\"${book.title}\" and its saved position will be removed from this device.") },
+            text = {
+                Text(
+                    "\"${book.title}\" and its saved position will be removed from this device.$processingCopy",
+                )
+            },
             confirmButton = {
                 TextButton(onClick = viewModel::confirmDelete) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
