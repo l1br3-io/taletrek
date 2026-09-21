@@ -135,4 +135,63 @@ class PendingImportResumeTest {
             assertTrue(started.isEmpty())
             assertEquals(source.absolutePath, store.load()?.request?.sourcePath)
         }
+
+    @Test
+    fun aCancelledMarkerNeverAutoSubmitsAndSurvives() =
+        runTest {
+            pendingWith()
+            store.stampTerminal(PendingTerminal.CANCELLED)
+            resume().resumeWith(listOf(shelf("bk_new", audio = false)))
+            assertTrue(started.isEmpty())
+            assertEquals(PendingTerminal.CANCELLED, store.load()?.terminalReason)
+        }
+
+    @Test
+    fun aFailedMarkerNeverAutoSubmitsAndSurvives() =
+        runTest {
+            pendingWith()
+            store.stampTerminal(PendingTerminal.FAILED)
+            resume().resumeWith(listOf(shelf("bk_new", audio = false)))
+            assertTrue(started.isEmpty())
+            assertEquals(PendingTerminal.FAILED, store.load()?.terminalReason)
+        }
+
+    @Test
+    fun manualResumeSubmitsAStalledMarker() =
+        runTest {
+            pendingWith("/files/books/bk_old.taletrek")
+            store.stampTerminal(PendingTerminal.CANCELLED)
+            positions["bk_new"] = FfiPosition(chapter = 2u, index = 5u, offset = 1.5)
+            resume().resumeManually(listOf(shelf("bk_old", audio = true), shelf("bk_new", audio = false)))
+            assertEquals(FfiAnchor(chapter = 2u, paragraph = 5u), started.single().initialAnchor)
+            assertEquals(source.absolutePath, started.single().sourcePath)
+        }
+
+    @Test
+    fun manualResumeSubmitsAnUnspentMarkerToo() =
+        runTest {
+            pendingWith()
+            resume().resumeManually(listOf(shelf("bk_new", audio = false)))
+            assertEquals(source.absolutePath, started.single().sourcePath)
+        }
+
+    @Test
+    fun manualResumeWithAnEvictedSourceClearsTheMarker() =
+        runTest {
+            pendingWith()
+            store.stampTerminal(PendingTerminal.CANCELLED)
+            assertTrue(source.delete())
+            resume().resumeManually(listOf(shelf("bk_new", audio = false)))
+            assertTrue(started.isEmpty())
+            assertNull(store.load())
+        }
+
+    @Test
+    fun manualResumeWhileConvertingNeverSubmits() =
+        runTest {
+            pendingWith()
+            converting = true
+            resume().resumeManually(listOf(shelf("bk_new", audio = false)))
+            assertTrue(started.isEmpty())
+        }
 }

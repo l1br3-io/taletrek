@@ -12,6 +12,13 @@ import java.io.File
  * reader left off. The one ambiguity (several new text-only books — a
  * desktop bundle imported mid-job) resolves to book start: the reader
  * re-anchors live via `set_anchor` once opened.
+ *
+ * Two doors, one policy: [resumeWith] is the *automatic* relaunch path
+ * and fires only for an unspent marker (process death — no terminal
+ * recorded); a marker stamped Cancelled/Failed resumes through
+ * [resumeManually] only (the reader's / the library row's Resume) — a
+ * user's cancel is never silently un-cancelled, and an offline failure
+ * doesn't become a relaunch retry loop.
  */
 class PendingImportResume(
     private val store: PendingJobStore,
@@ -19,8 +26,16 @@ class PendingImportResume(
     private val isConverting: () -> Boolean,
     private val startJob: (SynthJobRequest) -> Unit,
 ) {
-    /** Attempt one resume — submits only when a pending job is resumable. */
+    /** The relaunch attempt — submits only an unspent, resumable record. */
     suspend fun resumeWith(books: List<BookShelf>) {
+        if (store.load()?.terminalReason != null) return
+        resubmit(books)
+    }
+
+    /** The affordance attempt — any resumable record, stamped or not. */
+    suspend fun resumeManually(books: List<BookShelf>) = resubmit(books)
+
+    private suspend fun resubmit(books: List<BookShelf>) {
         val pending = store.load() ?: return
         if (!File(pending.request.sourcePath).isFile) {
             store.clear()

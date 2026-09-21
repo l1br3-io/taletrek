@@ -61,4 +61,38 @@ class PendingJobStoreTest {
         store.save(job(source = "/cache/second"))
         assertEquals("/cache/second", store.load()?.request?.sourcePath)
     }
+
+    @Test
+    fun stampTerminalKeepsTheJobAndRecordsTheReason() {
+        val store = store()
+        store.save(job())
+        store.stampTerminal(PendingTerminal.CANCELLED)
+        val loaded = store.load()
+        assertEquals(job(), loaded?.copy(terminalReason = null))
+        assertEquals(PendingTerminal.CANCELLED, loaded?.terminalReason)
+    }
+
+    @Test
+    fun stampTerminalOnAMissingMarkerIsANoOp() {
+        val store = store()
+        store.stampTerminal(PendingTerminal.FAILED)
+        assertNull(store.load())
+    }
+
+    @Test
+    fun aLegacyRecordWithoutTheTerminalKeyLoadsAsUnspent() {
+        val dir = tmp.newFolder()
+        val store = PendingJobStore(dir)
+        store.save(job())
+        // The installed base predates the key — strip it and reload.
+        val file = dir.resolve("pending_synthjob.properties")
+        val withoutTerminal =
+            file
+                .readLines()
+                .filterNot { it.startsWith("terminal") }
+                .joinToString("\n", postfix = "\n")
+        file.writeText(withoutTerminal)
+        assertEquals(null, store.load()?.terminalReason)
+        assertEquals(job(), store.load())
+    }
 }

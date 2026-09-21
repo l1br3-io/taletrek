@@ -221,15 +221,16 @@ fun LibraryScreen(
         importViewModel.dismissError()
     }
 
-    // The job's terminal state spends the source copy and refreshes the
+    // The job's terminal state applies the terminal policy (Done spends
+    // recovery material; Cancel/Failed stamp + keep) and refreshes the
     // shelf (the bundle lands via filesDir/books — the scan's root).
     LaunchedEffect(synthState) {
-        when (synthState) {
+        when (val state = synthState) {
             is SynthUiState.Done,
             is SynthUiState.Failed,
             SynthUiState.Cancelled,
             -> {
-                importViewModel.onJobTerminal()
+                importViewModel.onJobTerminal(state)
                 viewModel.rescan()
             }
             else -> {}

@@ -1,7 +1,9 @@
 package dev.l1br3.taletrek.ui.library
 
 import dev.l1br3.taletrek.service.PendingJobStore
+import dev.l1br3.taletrek.service.PendingTerminal
 import dev.l1br3.taletrek.service.SynthJobRequest
+import dev.l1br3.taletrek.service.SynthUiState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -130,9 +132,32 @@ class ImportViewModelTest {
             advanceUntilIdle()
             assertTrue(deleted.isEmpty())
             assertNotNull(pendingStore.load())
-            vm.onJobTerminal()
+            vm.onJobTerminal(SynthUiState.Done("bk_new", "/files/books/bk_new.taletrek"))
             assertEquals(listOf(copied.absolutePath), deleted)
             assertNull(pendingStore.load())
+        }
+
+    @Test
+    fun aCancelledTerminalKeepsTheMarkerStampedAndTheSource() =
+        runTest(StandardTestDispatcher()) {
+            val vm = vm(StandardTestDispatcher(testScheduler))
+            vm.onSourcePicked("content://picked")
+            advanceUntilIdle()
+            vm.onJobTerminal(SynthUiState.Cancelled)
+            assertTrue(deleted.isEmpty())
+            assertEquals(PendingTerminal.CANCELLED, pendingStore.load()?.terminalReason)
+            assertEquals(copied.absolutePath, pendingStore.load()?.request?.sourcePath)
+        }
+
+    @Test
+    fun aFailedTerminalKeepsTheMarkerStampedAndTheSource() =
+        runTest(StandardTestDispatcher()) {
+            val vm = vm(StandardTestDispatcher(testScheduler))
+            vm.onSourcePicked("content://picked")
+            advanceUntilIdle()
+            vm.onJobTerminal(SynthUiState.Failed("resolve", "offline"))
+            assertTrue(deleted.isEmpty())
+            assertEquals(PendingTerminal.FAILED, pendingStore.load()?.terminalReason)
         }
 
     @Test
@@ -156,7 +181,7 @@ class ImportViewModelTest {
                 ),
             )
             val vm = vm(StandardTestDispatcher(testScheduler))
-            vm.onJobTerminal()
+            vm.onJobTerminal(SynthUiState.Done("bk_new", "/files/books/bk_new.taletrek"))
             assertEquals(listOf(copied.absolutePath), deleted)
             assertNull(pendingStore.load())
         }

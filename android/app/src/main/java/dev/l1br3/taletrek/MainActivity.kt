@@ -135,7 +135,7 @@ class MainActivity : ComponentActivity() {
                         onSourceConsumed = { pendingSourceUri = null },
                         onNavControllerReady = { navController = it },
                         onResumeSynth = {
-                            lifecycleScope.launch { resumePendingImport(pendingStore) }
+                            lifecycleScope.launch { resumePendingImport(pendingStore, manual = true) }
                         },
                     )
                 }
@@ -161,9 +161,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** One resume attempt over the scanned shelf (also the reader's
-     *  stalled-load affordance action). */
-    private suspend fun resumePendingImport(pendingStore: PendingJobStore) {
+    /** One resume attempt over the scanned shelf — `manual` routes the
+     *  reader's / row's Resume affordance (stalled markers included);
+     *  the relaunch path stays unspent-only. */
+    private suspend fun resumePendingImport(
+        pendingStore: PendingJobStore,
+        manual: Boolean = false,
+    ) {
         val resume =
             PendingImportResume(
                 store = pendingStore,
@@ -171,7 +175,8 @@ class MainActivity : ComponentActivity() {
                 isConverting = { SynthService.active.value?.isRunningPhase == true },
                 startJob = { request -> startForegroundService(request.toIntent(this@MainActivity)) },
             )
-        resume.resumeWith(libraryViewModel.ui.first { !it.loading }.books)
+        val books = libraryViewModel.ui.first { !it.loading }.books
+        if (manual) resume.resumeManually(books) else resume.resumeWith(books)
     }
 
     /** The bundle paths currently on disk — the pending marker's shelf snapshot. */

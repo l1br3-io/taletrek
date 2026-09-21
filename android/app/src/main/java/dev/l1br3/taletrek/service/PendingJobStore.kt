@@ -5,13 +5,25 @@ import java.io.File
 import java.util.Properties
 
 /**
+ * Why a pending job stopped without spending its marker — the terminal
+ * policy's recovery signal. `null` (absent) means unspent: the job is
+ * live or process death beat the terminal. Records written before the
+ * field existed load as unspent (tolerant read, installed-base compat).
+ */
+enum class PendingTerminal {
+    CANCELLED,
+    FAILED,
+}
+
+/**
  * The relaunch-resume record: the one in-flight import (the service's
  * job slot is single) persisted next to the library so process death
  * mid-job is recoverable. Saved at submit with a snapshot of the bundle
- * paths already in `books/`; spent (cleared) when the job reaches any
- * terminal state. The source copy's cache lifetime is the real clock —
- * an evicted source makes the record unresumable and the resume flow
- * clears it.
+ * paths already in `books/`; spent (cleared) only when the job reaches
+ * Done — Cancel/Failed stamp [PendingTerminal] instead and keep the
+ * recovery material (marker + source copy) for a manual resume. The
+ * source copy's cache lifetime is the real clock — an evicted source
+ * makes the record unresumable and the resume flow clears it.
  */
 class PendingJobStore(
     filesDir: File,
@@ -20,6 +32,7 @@ class PendingJobStore(
     data class PendingJob(
         val request: SynthJobRequest,
         val preExistingBookPaths: List<String>,
+        val terminalReason: PendingTerminal? = null,
     )
 
     private val file = File(filesDir, FILE_NAME)
@@ -41,6 +54,7 @@ class PendingJobStore(
             props.setProperty(KEY_ANCHOR_P, it.paragraph.toLong().toString())
         }
         props.setProperty(KEY_PREEXISTING, job.preExistingBookPaths.joinToString(SEP))
+        job.terminalReason?.let { props.setProperty(KEY_TERMINAL, it.name) }
         file.parentFile?.mkdirs()
         file.outputStream().use { props.store(it, null) }
     }
@@ -77,12 +91,25 @@ class PendingJobStore(
             preExistingBookPaths =
                 props.getProperty(KEY_PREEXISTING)?.split(SEP)?.filter { it.isNotEmpty() }
                     ?: emptyList(),
+            // Tolerant read: absent (installed base) or unknown values
+            // load as unspent — never crash on a future/foreign reason.
+            terminalReason =
+                props.getProperty(KEY_TERMINAL)?.let {
+                    runCatching { PendingTerminal.valueOf(it) }.getOrNull()
+                },
         )
     }
 
     /** Spend the record — the job ended (or became unresumable). */
     fun clear() {
         runCatching { file.delete() }
+    }
+
+    /** Stamp a non-Done terminal onto the record (no-op when absent). */
+    fun stampTerminal(reason: PendingTerminal) {
+        val current = load() ?: return
+        if (current.terminalReason == reason) return
+        save(current.copy(terminalReason = reason))
     }
 
     private companion object {
@@ -100,5 +127,6 @@ class PendingJobStore(
         const val KEY_ANCHOR_CH = "anchorChapter"
         const val KEY_ANCHOR_P = "anchorParagraph"
         const val KEY_PREEXISTING = "preExisting"
+        const val KEY_TERMINAL = "terminal"
     }
 }

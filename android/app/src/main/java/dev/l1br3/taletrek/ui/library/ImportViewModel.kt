@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import dev.l1br3.taletrek.service.PendingJobStore
+import dev.l1br3.taletrek.service.PendingTerminal
 import dev.l1br3.taletrek.service.SynthJobRequest
+import dev.l1br3.taletrek.service.SynthUiState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,9 +34,9 @@ sealed interface ImportUiState {
  * Zero decisions: a picked (or shared) source is copied and submitted as
  * the progressive job in one step — the voice (and, first run, espeak-ng
  * -data) resolves inside the job with progress. The source copy's
- * lifecycle is here: deleted when the job reaches any terminal state
- * ([onJobTerminal]), which also spends the pending marker — the
- * relaunch-resume record saved at submit.
+ * lifecycle is here: spent only when the job reaches Done; Cancel/Failed
+ * keep it with the pending marker ([onJobTerminal]) — the relaunch-resume
+ * record saved at submit, stamped instead of spent by a recoverable end.
  */
 class ImportViewModel(
     private val io: CoroutineDispatcher,
@@ -98,14 +100,24 @@ class ImportViewModel(
         }
     }
 
-    /** The job reached a terminal state — the source copy is spent and
-     *  the pending marker with it. The copy may belong to this process
-     *  (a pick) or ride the marker (a relaunch-resumed job). */
-    fun onJobTerminal() {
-        val marked = pendingStore.load()?.request?.sourcePath
-        (pendingSource ?: marked)?.let(deleteSource)
-        pendingSource = null
-        pendingStore.clear()
+    /** The job reached a terminal state — the terminal policy: **Done**
+     *  spends the recovery material (source copy deleted, marker spent —
+     *  the copy may belong to this process or ride the marker); a
+     *  Cancelled/Failed terminal *stamps* the marker and keeps both, so
+     *  one-tap recovery stays reachable (the fill pauses, it isn't
+     *  destroyed). */
+    fun onJobTerminal(state: SynthUiState) {
+        when (state) {
+            is SynthUiState.Done -> {
+                val marked = pendingStore.load()?.request?.sourcePath
+                (pendingSource ?: marked)?.let(deleteSource)
+                pendingSource = null
+                pendingStore.clear()
+            }
+            is SynthUiState.Failed -> pendingStore.stampTerminal(PendingTerminal.FAILED)
+            SynthUiState.Cancelled -> pendingStore.stampTerminal(PendingTerminal.CANCELLED)
+            else -> {}
+        }
     }
 
     /** The pending job's shelf snapshot — disambiguates filling rows
