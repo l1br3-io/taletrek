@@ -365,9 +365,83 @@ android-test:
 android-test-class filter:
     @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android testDebugUnitTest --tests "{{filter}}" ktlintCheck
 
-# Instrumented tests on connected device (kernel round-trip, Compose UI)
+# Instrumented matrix on connected devices (kernel round-trip, Compose UI).
+# With ≥2 devices up (just android-emulators-up) the matrix SHARDS: one
+# gradle build+install pass, then two parallel `am instrument` runs — one per
+# device — over class halves balanced by measured per-class time. Why hand-
+# rolled: AGP's multi-device connectedDebugAndroidTest DUPLICATES the full
+# suite on every device (measured 42/42 on both, wall ≈ single-device
+# serial), and its -Pandroid.testInstrumentationRunnerArguments.class mangles
+# comma lists (runs only the first class; raw am instrument handles them
+# fine) — details in docs/specs/fast-test-loops/baseline.md. Classes
+# discovered in the source tree but unknown to the halves are appended to the
+# lighter half (printed), and the run fails unless the halves' combined test
+# count equals the source's @Test total — the sharded gate can never
+# silently drop a suite. One device → the plain full gradle run, unchanged.
 android-instrumented:
-    @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android connectedDebugAndroidTest
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADB="{{android_home}}/platform-tools/adb"
+    DEVS="$(mktemp)"; trap 'rm -f "$DEVS"' EXIT
+    "$ADB" devices | awk '/^emulator-.*device$/{print $1}' > "$DEVS"
+    if [ "$(wc -l < "$DEVS")" -lt 2 ]; then
+        exec env JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} \
+            android/gradlew --project-dir android connectedDebugAndroidTest
+    fi
+    D1="$(sed -n 1p "$DEVS")"; D2="$(sed -n 2p "$DEVS")"
+    # Balanced halves (baseline per-class seconds in parentheses), A ≈ 108s / B ≈ 110s:
+    HALF_A="CorruptWalkTest(4) ExportTest(12) FillStatesTest(42) ImportScanTest(0.1) PlaybackWalkTest(6) ProgressiveListenTest(18) ReaderSyncTest(2) SourceImportMatrixTest(24)"
+    HALF_B="FfiSmokeTest(0) FirstRunTest(14) HardeningTest(17) PerfDatapointsTest(6) PositionStoreTest(0) ProgressiveResumeTest(38) ReaderScreenTest(11) RestoreFlowTest(0) SynthServiceSmokeTest(1) VoiceFlowTest(23)"
+    names() { for w in $1; do echo "${w%%(*}"; done; }
+    A="$(names "$HALF_A")"; B="$(names "$HALF_B")"
+    SRC=android/app/src/androidTest/java/dev/l1br3/taletrek
+    for f in "$SRC"/*Test.kt; do
+        n="$(basename "$f" .kt)"
+        grep -qx "$n" <<<"$A" || grep -qx "$n" <<<"$B" || {
+            if [ "$(grep -c . <<<"$B")" -le "$(grep -c . <<<"$A")" ]; then B="$B $n"; else A="$A $n"; fi
+            echo "shard: new class $n not in the balanced halves — appended to the lighter half (rebalance in the justfile when convenient)"
+        }
+    done
+    join_fqcn() { local out=""; for n in $1; do out+=",dev.l1br3.taletrek.$n"; done; echo "${out#,}"; }
+    # Expected total = every @Test in the source tree — the halves must sum to it
+    EXPECTED=$(grep -ho '@Test' "$SRC"/*Test.kt | wc -l)
+    # Build + install both APKs on every attached device in one gradle pass
+    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} \
+        android/gradlew --project-dir android installDebug installDebugAndroidTest >/dev/null
+    run_half() {  # $1 = serial, $2 = comma FQCNs → /tmp/taletrek-instrumented-<serial>.count
+        local T0=$SECONDS OUT="/tmp/taletrek-instrumented-$1.log"
+        if timeout 1800 "$ADB" -s "$1" shell am instrument -w -e class "$2" \
+            dev.l1br3.taletrek.test/androidx.test.runner.AndroidJUnitRunner > "$OUT" 2>&1 \
+            && grep -q '^OK (' "$OUT"; then
+            echo "$(grep -oE '\([0-9]+ tests?\)' "$OUT" | grep -oE '[0-9]+' | head -1) tests in $((SECONDS-T0))s"
+        else
+            echo FAIL
+        fi > "/tmp/taletrek-instrumented-$1.count"
+    }
+    echo "shard: $D1 ← $(echo $A | tr ' ' ',')  |  $D2 ← $(echo $B | tr ' ' ',')"
+    T0=$SECONDS
+    run_half "$D1" "$(join_fqcn "$A")" & P1=$!
+    run_half "$D2" "$(join_fqcn "$B")" & P2=$!
+    wait "$P1" || true; wait "$P2" || true
+    C1="$(cat "/tmp/taletrek-instrumented-$D1.count")"; C2="$(cat "/tmp/taletrek-instrumented-$D2.count")"
+    RC=0
+    [ "$C1" = FAIL ] && { RC=1; echo "shard: FAILED on $D1 — tail of /tmp/taletrek-instrumented-$D1.log:"; tail -25 "/tmp/taletrek-instrumented-$D1.log"; }
+    [ "$C2" = FAIL ] && { RC=1; echo "shard: FAILED on $D2 — tail of /tmp/taletrek-instrumented-$D2.log:"; tail -25 "/tmp/taletrek-instrumented-$D2.log"; }
+    N1=0; [ "$C1" != FAIL ] && N1="${C1%% *}"
+    N2=0; [ "$C2" != FAIL ] && N2="${C2%% *}"
+    N1="${N1:-0}"; N2="${N2:-0}"
+    TOTAL=$((N1 + N2))
+    echo "shard: $D1 ran $C1  |  $D2 ran $C2"
+    echo "shard: $TOTAL/$EXPECTED tests in $((SECONDS-T0))s (expected $EXPECTED)"
+    [ "$TOTAL" = "$EXPECTED" ] || { echo "shard: test count mismatch — a suite may have been dropped"; RC=1; }
+    exit $RC
+
+# Scoped instrumented dev loop: one test class (FQCN) on one device — for
+# iterating on a failing suite without paying the whole matrix. Targets every
+# connected device; set ANDROID_SERIAL=emulator-XXXX to pin one. Convenience
+# only — never replaces the full android-instrumented gate.
+android-instrumented-class cls:
+    @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class={{cls}}
 
 # ---- iOS (ios-app) ------------------------------------------------------------
 
