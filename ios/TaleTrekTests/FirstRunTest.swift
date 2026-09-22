@@ -2,10 +2,13 @@ import XCTest
 @testable import TaleTrek
 
 /// The fresh-visit story, exactly one owner (Android's `FirstRunTest`
-/// transposed): a cache-isolated full pipeline run against the REAL
-/// CDN — default voice (~63 MB) + espeak-ng-data (~9 MB) download with
-/// progress, in-job — then synth, book lands, opens with audio, and a
-/// TrekPlayer walk drains real decoded segments.
+/// transposed onto the progressive baseline): a cache-isolated full
+/// pipeline run against the REAL CDN — default voice (~63 MB) +
+/// espeak-ng-data (~9 MB) download with progress, in-job — then the
+/// **text-only book lands immediately**, audio fills at the anchor,
+/// `Playable` arrives while the job still reports progress
+/// (listen-before-completion), a TrekPlayer walk drains real decoded
+/// segments, and the seal completes the book.
 ///
 /// Skipped unless `TALETREK_FRESH_RUN=1` rides the environment: the
 /// CDN is Mac-local by design (CI runs the non-CDN suites only).
@@ -13,7 +16,7 @@ import XCTest
 /// wall time lands in the log for the ship notes).
 @MainActor
 final class FirstRunTest: XCTestCase {
-    func testFreshInstallConvertsAndPlaysEndToEnd() throws {
+    func testFreshInstallConvertsPlaysWhileFillingAndSeals() throws {
         guard ProcessInfo.processInfo.environment["TALETREK_FRESH_RUN"] == "1" else {
             throw XCTSkip(
                 "fresh-run owns the real CDN (~72 MB) — Mac-local by design. "
@@ -33,7 +36,8 @@ final class FirstRunTest: XCTestCase {
         let source = root.appendingPathComponent("story.txt")
         try Data(
             ("chapter one\n\nthe first paragraph says enough to synthesize.\n\n"
-                + "the second paragraph does too.\n").utf8
+                + "the second paragraph does too.\n\n"
+                + "the third keeps the fill going past the playable mark.\n").utf8
         ).write(to: source)
 
         let started = Date()
@@ -43,33 +47,54 @@ final class FirstRunTest: XCTestCase {
             queue.sync { events.append(event) }
         }
 
-        let done = expectation(description: "terminal")
-        var terminal = FfiPipelineState.idle
-        HandleSynthEngine().start(
-            config: SynthJobRequest(
+        // The store under the same isolation root (the resume source
+        // and the filling reader's read-through cache).
+        let storeDir = root.appendingPathComponent("store", isDirectory: true).path
+
+        // The controller drives; the recorder rides the observer seam
+        // through a tee so the real event stream is captured verbatim.
+        let engine = TeeEngine(inner: HandleSynthEngine()) { event in
+            recorder.onPipelineEvent(event: event)
+        }
+        let controller = SynthController(engine: engine, armer: UIKitBackgroundArmer())
+        controller.submit(
+            request: SynthJobRequest(
                 sourcePath: source.path,
                 hint: "story.txt",
                 voiceId: nil,
                 voiceCacheDir: ImportDirs.standard(booksDir: booksDir).voiceCacheDir,
                 espeakDir: ImportDirs.standard(booksDir: booksDir).espeakDir,
                 booksDir: booksDir.path,
+                storeDir: storeDir,
+                initialAnchor: nil,
                 jobs: 2,
                 generatorApp: "taletrek-ios"
-            ).toConfig(),
-            observer: recorder
-        ) { state in
-            terminal = state
-            done.fulfill()
+            ),
+            staged: source
+        )
+        guard case .preparing = controller.state else {
+            return XCTFail("expected the job to start preparing")
+        }
+        // Terminal = the controller leaves its running phases.
+        let done = expectation(description: "terminal")
+        let poller = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { timer in
+            Task { @MainActor in
+                if !controller.state.isRunningPhase, controller.state != .idle {
+                    timer.invalidate()
+                    done.fulfill()
+                }
+            }
         }
         wait(for: [done], timeout: 25 * 60)
+        poller.invalidate()
         let elapsed = Date().timeIntervalSince(started)
-        print("fresh-run: full audio convert in \(Int(elapsed)) s (CDN included)")
+        print("fresh-run: progressive convert in \(Int(elapsed)) s (CDN included)")
 
         let stream = queue.sync { events }
-        guard case let .finished(outcome) = terminal else {
-            return XCTFail("expected finished, got \(terminal)")
+        guard case let .done(bookId, bundlePath) = controller.state else {
+            return XCTFail("expected done, got \(controller.state)")
         }
-        XCTAssertFalse(outcome.textOnly)
+        let outcome = (bookId: bookId, bundlePath: bundlePath)
 
         // First-run caches actually landed (nothing was pre-warmed).
         XCTAssertTrue(
@@ -88,9 +113,25 @@ final class FirstRunTest: XCTestCase {
         }.count
         XCTAssertGreaterThan(steps, 0, "voice download streamed progress")
 
-        // The book opens with audio and real PCM decodes.
+        // The progressive story: the text bundle landed before any
+        // audio existed, Playable arrived, and synthesis was still
+        // running when it did (listen-before-completion).
+        let playableAt = stream.firstIndex {
+            if case .playable = $0 { return true }
+            return false
+        }
+        XCTAssertNotNil(playableAt, "Playable arrived — listenable mid-run")
+        if let playableAt {
+            let progressAfter = stream[playableAt...].contains {
+                if case .synthStep = $0 { return true }
+                return false
+            }
+            XCTAssertTrue(progressAfter, "synthesis continued past Playable")
+        }
+
+        // The sealed book opens with audio and real PCM decodes.
         let book = try openBook(path: outcome.bundlePath)
-        XCTAssertTrue(book.audioPresent)
+        XCTAssertTrue(book.audioPresent, "the seal produced a full bundle")
         let firstChapter = try XCTUnwrap(book.chapters.first)
         let firstParagraph = try XCTUnwrap(firstChapter.paragraphs.first)
         let decoded = try decodeSegment(
@@ -113,5 +154,53 @@ final class FirstRunTest: XCTestCase {
         }
         wait(for: [advanced], timeout: 30)
         timer.invalidate()
+    }
+}
+
+/// Wraps an engine so the observer stream is captured verbatim while
+/// the controller's own mapping rides untouched (the fresh-run test's
+/// recorder seam).
+final class TeeEngine: SynthEngine {
+    private let inner: SynthEngine
+    private let tee: (FfiPipelineEvent) -> Void
+
+    init(inner: SynthEngine, tee: @escaping (FfiPipelineEvent) -> Void) {
+        self.inner = inner
+        self.tee = tee
+    }
+
+    func start(
+        config: FfiPipelineConfig,
+        observer: PipelineObserver,
+        onTerminal: @escaping (FfiPipelineState) -> Void
+    ) {
+        inner.start(
+            config: config,
+            observer: TeeObserver(original: observer, tee: tee),
+            onTerminal: onTerminal
+        )
+    }
+
+    func cancel() {
+        inner.cancel()
+    }
+
+    func reanchor(_ anchor: FfiAnchor) {
+        inner.reanchor(anchor)
+    }
+}
+
+private final class TeeObserver: PipelineObserver {
+    private let original: PipelineObserver
+    private let tee: (FfiPipelineEvent) -> Void
+
+    init(original: PipelineObserver, tee: @escaping (FfiPipelineEvent) -> Void) {
+        self.original = original
+        self.tee = tee
+    }
+
+    func onPipelineEvent(event: FfiPipelineEvent) {
+        tee(event)
+        original.onPipelineEvent(event: event)
     }
 }

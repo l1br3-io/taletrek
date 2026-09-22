@@ -25,7 +25,7 @@ final class ProgressiveSegmentSource {
     init() {}
 
     func decoder(path: String, key: String) throws -> FfiDecodedAudio? {
-        switch readSegmentProgressive(path: path, key: key) {
+        switch try readSegmentProgressive(path: path, key: key) {
         case let .ready(bytes, _):
             return try decodeSegmentBytes(bytes: bytes)
         case .missing:
