@@ -21,7 +21,8 @@ pub struct FfiPipelineConfig {
     pub source_path: String,
     /// Source filename when known — title fallback + format hint.
     pub hint: Option<String>,
-    /// `true` = text-only bundle (no voice needed); `false` = full synth.
+    /// `true` = text-only bundle (no voice needed); `false` = full synth
+    /// (or progressive, when [`Self::progressive`] is set).
     pub text_only: bool,
     /// Curated voice id; `None` = the curated default.
     pub voice_id: Option<String>,
@@ -36,6 +37,33 @@ pub struct FfiPipelineConfig {
     pub jobs: u32,
     /// `generator.app` identity (e.g. `taletrek-android`).
     pub generator_app: String,
+    /// Progressive conversion (text bundle lands immediately, synth
+    /// streams into the segment store, drain seals a full bundle).
+    /// `None` = the batch behavior above; ignored when `text_only`.
+    pub progressive: Option<FfiProgressiveConfig>,
+}
+
+/// Progressive-specific pipeline configuration.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiProgressiveConfig {
+    /// Segment store root (e.g. `<cacheDir>/taletrek/segments`) — shared
+    /// across books and runs; the resume source.
+    pub store_dir: String,
+    /// Where synthesis aims first: the reader's stored resume position.
+    /// `None` = book start. Movable live via
+    /// [`PipelineHandle::set_anchor`].
+    pub initial_anchor: Option<FfiAnchor>,
+}
+
+/// A playback position the scheduler aims audio production at — chapter and
+/// paragraph indices into the book (the identity the kernel reader's
+/// positions reduce to).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct FfiAnchor {
+    /// Chapter index into the bundle's chapter list.
+    pub chapter: u32,
+    /// Paragraph index within that chapter.
+    pub paragraph: u32,
 }
 
 /// What a successful run produced.
@@ -53,6 +81,9 @@ pub struct FfiPipelineOutcome {
     pub paragraphs: u32,
     /// Distinct audio segments (0 for text-only).
     pub segments: u32,
+    /// `true` when the progressive variant sealed (text bundle replaced by
+    /// the full one). Always `false` for text-only/full.
+    pub sealed: bool,
 }
 
 /// The handle's snapshot state — poll-friendly mirror of the run. The same
@@ -89,6 +120,9 @@ pub enum FfiPipelinePhase {
     Synthesizing,
     /// Writing the bundle.
     Writing,
+    /// Merging store segments into the final full bundle (progressive
+    /// only): the queue drained, the book is sealing.
+    Sealing,
 }
 
 /// Events streamed to [`PipelineObserver`].
@@ -117,6 +151,12 @@ pub enum FfiPipelineEvent {
         /// Total paragraphs.
         total: u32,
     },
+    /// Progressive only: ≥ 30 s of audio exists at the anchor — surface
+    /// "start listening" while synthesis continues.
+    Playable,
+    /// Progressive only: the sealed full bundle atomically replaced the
+    /// text-only one; the job finishes immediately after.
+    Sealed,
 }
 
 /// Consumer of pipeline events.
@@ -170,6 +210,12 @@ impl taletrek_synth::PiperRunner for LazySherpaRunner {
             .expect("inner constructed above")
             .predict(voice_model, text)
     }
+
+    /// Forward the sherpa arena bound — split planning asks before the lazy
+    /// inner runner exists.
+    fn max_synth_chars(&self) -> usize {
+        taletrek_synth::SHERPA_MAX_SYNTH_CHARS
+    }
 }
 
 /// The convert job as an object: `new(config)` → `start(observer)` →
@@ -206,6 +252,7 @@ fn error_kind(err: &taletrek_worker::PipelineError) -> &'static str {
         taletrek_worker::PipelineError::Resolve(_) => "resolve",
         taletrek_worker::PipelineError::Espeak(_) => "espeak",
         taletrek_worker::PipelineError::Stamp(_) => "stamp",
+        taletrek_worker::PipelineError::Store(_) => "store",
         taletrek_worker::PipelineError::Cancelled => "cancelled",
         taletrek_worker::PipelineError::Write { .. } => "write",
     }
@@ -219,6 +266,7 @@ fn outcome_record(outcome: &PipelineOutcome) -> FfiPipelineOutcome {
         chapters: u32::try_from(outcome.chapters).unwrap_or(u32::MAX),
         paragraphs: u32::try_from(outcome.paragraphs).unwrap_or(u32::MAX),
         segments: u32::try_from(outcome.segments).unwrap_or(u32::MAX),
+        sealed: outcome.sealed,
     }
 }
 
@@ -240,6 +288,11 @@ impl taletrek_worker::PipelineReporter for ObserverReporter {
             PipelineEvent::Phase(taletrek_worker::PipelinePhase::Writing) => {
                 FfiPipelineEvent::Phase(FfiPipelinePhase::Writing)
             }
+            PipelineEvent::Phase(taletrek_worker::PipelinePhase::Sealing) => {
+                FfiPipelineEvent::Phase(FfiPipelinePhase::Sealing)
+            }
+            PipelineEvent::Playable => FfiPipelineEvent::Playable,
+            PipelineEvent::Sealed => FfiPipelineEvent::Sealed,
             PipelineEvent::Parsed {
                 chapters,
                 paragraphs,
@@ -280,11 +333,24 @@ impl PipelineHandle {
             PipelineVariant::TextOnly {
                 voice_id: config.voice_id.clone(),
             }
+        } else if let Some(progressive) = &config.progressive {
+            PipelineVariant::Progressive {
+                voice_id: config.voice_id.clone(),
+                store_dir: PathBuf::from(&progressive.store_dir),
+            }
         } else {
             PipelineVariant::Full {
                 voice_id: config.voice_id.clone(),
             }
         };
+        let initial_anchor = config
+            .progressive
+            .as_ref()
+            .and_then(|p| p.initial_anchor)
+            .map(|a| taletrek_worker::ProgressiveAnchor {
+                chapter: a.chapter,
+                paragraph: a.paragraph,
+            });
         Ok(PipelineSpec {
             source,
             hint: config.hint.clone(),
@@ -302,6 +368,7 @@ impl PipelineHandle {
             books_dir: PathBuf::from(&config.books_dir),
             make_runner,
             encoder: Arc::new(taletrek_synth::NativeOpusEncoder::new()),
+            initial_anchor,
         })
     }
 
@@ -380,6 +447,20 @@ impl PipelineHandle {
         }
     }
 
+    /// Move the scheduling anchor (progressive only): synthesis re-aims at
+    /// the new position — the horizon near it becomes the priority tier.
+    /// In-flight chunks finish (cancellation is the only preemption). A
+    /// no-op before [`start`](Self::start) (set `initial_anchor` on the
+    /// config instead) and for non-progressive jobs.
+    pub fn set_anchor(&self, anchor: FfiAnchor) {
+        if let Some(job) = self.job.lock().expect("job lock").as_ref() {
+            job.set_anchor(taletrek_worker::ProgressiveAnchor {
+                chapter: anchor.chapter,
+                paragraph: anchor.paragraph,
+            });
+        }
+    }
+
     /// Snapshot state (poll-friendly; the terminal state mirrors the run's
     /// end).
     pub fn state(&self) -> FfiPipelineState {
@@ -451,6 +532,7 @@ mod tests {
             books_dir: dir.join("books").display().to_string(),
             jobs: 1,
             generator_app: "taletrek-ffi-test".to_string(),
+            progressive: None,
         }
     }
 
@@ -625,6 +707,24 @@ mod tests {
     }
 
     #[test]
+    fn lazy_sherpa_runner_forwards_the_sherpa_chunk_cap_pre_construction() {
+        // The arena bound is a locked spec decision (120 chars): the lazy
+        // wrapper must advertise it before the inner runner exists, or split
+        // planning feeds 400-char chunks and the ORT arena snaps to its
+        // high-water mark (the LMK crash class). Found by the bench-synth
+        // baseline (progressive-synth task 001).
+        let runner = LazySherpaRunner::new(std::path::PathBuf::from("/nonexistent"));
+        assert!(
+            runner.inner.is_none(),
+            "cap must be answerable without constructing the engine"
+        );
+        assert_eq!(
+            runner.max_synth_chars(),
+            taletrek_synth::SHERPA_MAX_SYNTH_CHARS
+        );
+    }
+
+    #[test]
     fn espeak_failure_surfaces_typed_espeak_kind_through_the_handle() {
         let dir = tempfile::tempdir().unwrap();
         seed_voice_cache(dir.path());
@@ -661,5 +761,344 @@ mod tests {
         fn on_pipeline_event(&self, event: FfiPipelineEvent) {
             self.0.on_pipeline_event(event);
         }
+    }
+
+    // ---- progressive surface (progressive-synth task 008) ----
+
+    /// The store-registration tests mutate a process global — serialize
+    /// them against each other (std Mutex guard, no new deps).
+    static STORE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A slow stub: 31 s of PCM per segment with a 10 ms predict delay —
+    /// long enough to trip PLAYABLE_SECONDS, slow enough for the test to
+    /// catch the text bundle mid-run.
+    struct LongSlowRunner;
+
+    impl PiperRunner for LongSlowRunner {
+        fn predict(
+            &mut self,
+            _voice_model: &Path,
+            _text: &str,
+        ) -> Result<Vec<u8>, taletrek_synth::SynthError> {
+            std::thread::sleep(Duration::from_millis(30));
+            let secs = 31.0_f64;
+            let pcm_len = (16_000.0 * 2.0 * secs) as u32;
+            let mut wav = canonical_wav();
+            wav.truncate(36);
+            wav.extend_from_slice(b"data");
+            wav.extend_from_slice(&pcm_len.to_le_bytes());
+            wav.resize(44 + pcm_len as usize, 0x00);
+            Ok(wav)
+        }
+    }
+
+    fn progressive_config(dir: &Path) -> FfiPipelineConfig {
+        let mut cfg = config(dir, false);
+        cfg.progressive = Some(FfiProgressiveConfig {
+            store_dir: dir.join("segments").display().to_string(),
+            initial_anchor: None,
+        });
+        cfg
+    }
+
+    #[test]
+    fn progressive_run_round_trips_with_playable_and_sealed_events() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_voice_cache(dir.path());
+
+        let handle = Arc::new(PipelineHandle::new(progressive_config(dir.path())));
+        let observer = Arc::new(RecordingObserver::default());
+        Arc::clone(&handle)
+            .start_with_factory(
+                Box::new(ArcObserver(Arc::clone(&observer))),
+                Arc::new(|| Box::new(LongSlowRunner) as Box<dyn PiperRunner + Send>),
+            )
+            .expect("start");
+
+        let state = wait_for_terminal(&handle);
+        let FfiPipelineState::Finished(outcome) = state else {
+            panic!("expected Finished, got {state:?}");
+        };
+        assert!(outcome.sealed, "outcome = {outcome:?}");
+        assert!(!outcome.text_only);
+        assert_eq!(outcome.segments, 2);
+
+        let events = observer.events.lock().unwrap().clone();
+        let position = |target: FfiPipelineEvent| {
+            events
+                .iter()
+                .position(|e| *e == target)
+                .unwrap_or_else(|| panic!("{target:?} missing from {events:?}"))
+        };
+        let playable = position(FfiPipelineEvent::Playable);
+        let sealing = position(FfiPipelineEvent::Phase(FfiPipelinePhase::Sealing));
+        let sealed = position(FfiPipelineEvent::Sealed);
+        assert!(playable < sealing, "Playable before Sealing: {events:?}");
+        assert!(sealing < sealed, "Sealing before Sealed: {events:?}");
+
+        // The sealed bundle opens and reads progressively.
+        let bundle =
+            taletrek_synth::read_book_bundle(&std::fs::read(&outcome.bundle_path).unwrap())
+                .unwrap();
+        assert!(bundle.manifest.audio.present);
+    }
+
+    #[test]
+    fn read_segment_progressive_distinguishes_not_ready_ready_and_missing() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        seed_voice_cache(dir.path());
+
+        let handle = Arc::new(PipelineHandle::new(progressive_config(dir.path())));
+        Arc::clone(&handle)
+            .start_with_factory(
+                Box::new(ArcObserver(Arc::new(RecordingObserver::default()))),
+                Arc::new(|| Box::new(LongSlowRunner) as Box<dyn PiperRunner + Send>),
+            )
+            .expect("start");
+
+        // Catch the book mid-fill: the text bundle exists before synth
+        // completes (progressive text-early). Poll for it.
+        let books = dir.path().join("books");
+        let mut text_bundle: Option<PathBuf> = None;
+        for _ in 0..200 {
+            if let Ok(entries) = std::fs::read_dir(&books) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if name.ends_with(".taletrek") {
+                        text_bundle = Some(entry.path());
+                        break;
+                    }
+                }
+            }
+            if text_bundle.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let bundle_path = text_bundle.expect("text bundle lands before synth completes");
+        // While still running: a real key is NotReady, a bogus one Missing.
+        let (manifest, chapters) = taletrek_synth::read_book_metadata(&bundle_path).unwrap();
+        assert!(!manifest.audio.present, "still filling at catch time");
+        let key = taletrek_synth::cache_key(&manifest.book.voice_id, &chapters[0].paragraphs[0]);
+        if matches!(handle.state(), FfiPipelineState::Running) {
+            assert_eq!(
+                crate::read_segment_progressive(bundle_path.display().to_string(), key.clone())
+                    .unwrap(),
+                crate::FfiSegmentStatus::NotReady,
+                "expected key answers NotReady while the book fills"
+            );
+        }
+        assert_eq!(
+            crate::read_segment_progressive(
+                bundle_path.display().to_string(),
+                "voice:1:deadbeef".to_string()
+            )
+            .unwrap(),
+            crate::FfiSegmentStatus::Missing,
+            "a key the book never references is Missing"
+        );
+
+        wait_for_terminal(&handle);
+        // Sealed: the real key is Ready (WAV codec), the bogus one Missing.
+        match crate::read_segment_progressive(bundle_path.display().to_string(), key) {
+            Ok(crate::FfiSegmentStatus::Ready { bytes, codec }) => {
+                // The FFI production path encodes with the native Opus
+                // encoder — sealed segments are OGG.
+                assert!(bytes.starts_with(b"OggS"));
+                assert_eq!(codec, "opus");
+            }
+            other => panic!("expected Ready after seal, got {other:?}"),
+        }
+        assert_eq!(
+            crate::read_segment_progressive(
+                bundle_path.display().to_string(),
+                "voice:1:deadbeef".to_string()
+            )
+            .unwrap(),
+            crate::FfiSegmentStatus::Missing
+        );
+    }
+
+    #[test]
+    fn read_segment_progressive_serves_landed_segments_from_a_registered_store() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        seed_voice_cache(dir.path());
+
+        // A text-only bundle: the filling book, made deterministically.
+        let text_handle = Arc::new(PipelineHandle::new(config(dir.path(), true)));
+        let state = {
+            let observer = Arc::new(RecordingObserver::default());
+            Arc::clone(&text_handle)
+                .start_with_factory(Box::new(ArcObserver(Arc::clone(&observer))), stub_factory())
+                .expect("start");
+            wait_for_terminal(&text_handle)
+        };
+        let FfiPipelineState::Finished(outcome) = state else {
+            panic!("expected Finished, got {state:?}");
+        };
+        assert!(outcome.text_only);
+
+        let bundle_path = std::path::PathBuf::from(&outcome.bundle_path);
+        let (manifest, chapters) = taletrek_synth::read_book_metadata(&bundle_path).unwrap();
+        assert!(!manifest.audio.present);
+        let key = taletrek_synth::cache_key(&manifest.book.voice_id, &chapters[0].paragraphs[0]);
+
+        // No registered store (and a text-only bundle): expected → NotReady.
+        crate::set_segment_store(None);
+        assert_eq!(
+            crate::read_segment_progressive(bundle_path.display().to_string(), key.clone())
+                .unwrap(),
+            crate::FfiSegmentStatus::NotReady
+        );
+
+        // A registered store holding the key serves it: Ready, verbatim.
+        let store_dir = dir.path().join("segments");
+        let store = taletrek_worker::store::SegmentStore::open(&store_dir).unwrap();
+        store
+            .put(&taletrek_synth::bundle::AudioSegment {
+                key: key.clone(),
+                codec: taletrek_synth::bundle::AudioCodec::Wav,
+                bytes: b"RIFF-store".to_vec(),
+            })
+            .unwrap();
+        crate::set_segment_store(Some(store_dir.display().to_string()));
+        match crate::read_segment_progressive(bundle_path.display().to_string(), key.clone()) {
+            Ok(crate::FfiSegmentStatus::Ready { bytes, codec }) => {
+                assert_eq!(bytes, b"RIFF-store");
+                assert_eq!(codec, "wav");
+            }
+            other => panic!("expected Ready from the store, got {other:?}"),
+        }
+
+        // A registered store WITHOUT the key is still NotReady — and the
+        // registration resets cleanly.
+        let empty = dir.path().join("empty-store");
+        std::fs::create_dir_all(&empty).unwrap();
+        crate::set_segment_store(Some(empty.display().to_string()));
+        assert_eq!(
+            crate::read_segment_progressive(bundle_path.display().to_string(), key).unwrap(),
+            crate::FfiSegmentStatus::NotReady
+        );
+        crate::set_segment_store(None);
+    }
+
+    #[test]
+    fn text_only_books_become_playable_when_a_store_is_registered() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        seed_voice_cache(dir.path());
+
+        let text_handle = Arc::new(PipelineHandle::new(config(dir.path(), true)));
+        let state = {
+            let observer = Arc::new(RecordingObserver::default());
+            Arc::clone(&text_handle)
+                .start_with_factory(Box::new(ArcObserver(Arc::clone(&observer))), stub_factory())
+                .expect("start");
+            wait_for_terminal(&text_handle)
+        };
+        let FfiPipelineState::Finished(outcome) = state else {
+            panic!("expected Finished, got {state:?}");
+        };
+
+        let book = crate::open_book(outcome.bundle_path.clone()).unwrap();
+        assert!(!book.audio_present);
+
+        // Without a registered store the sequencer rests: text-only
+        // absorbs every event (the desktop-import contract).
+        crate::set_segment_store(None);
+        let resting = crate::TrekPlayer::new(book.clone());
+        assert_eq!(
+            resting.tick(crate::FfiPlayerEvent::Play),
+            crate::FfiPlayerAction::None
+        );
+
+        // A registered store upgrades the book to playable — the store
+        // supplies the audio the manifest doesn't (filling books).
+        let store_dir = dir.path().join("segments");
+        std::fs::create_dir_all(&store_dir).unwrap();
+        crate::set_segment_store(Some(store_dir.display().to_string()));
+        let playing = crate::TrekPlayer::new(book.clone());
+        let expected = book.chapters[0].paragraphs[0].segment_key.clone();
+        assert_eq!(
+            playing.tick(crate::FfiPlayerEvent::Play),
+            crate::FfiPlayerAction::LoadSegment {
+                key: expected,
+                offset: 0.0
+            }
+        );
+
+        // The restore constructor upgrades the same way (a filling
+        // session resumes where it left off).
+        let restored = crate::TrekPlayer::restore(
+            book,
+            crate::FfiPosition {
+                chapter: 0,
+                index: 1,
+                offset: 0.0,
+            },
+        );
+        assert!(matches!(
+            restored.tick(crate::FfiPlayerEvent::Play),
+            crate::FfiPlayerAction::LoadSegment { .. }
+        ));
+
+        crate::set_segment_store(None);
+    }
+
+    #[test]
+    fn set_anchor_is_accepted_mid_run_and_ignored_before_start() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_voice_cache(dir.path());
+        let handle = Arc::new(PipelineHandle::new(progressive_config(dir.path())));
+        // Before start: a no-op, not an error.
+        handle.set_anchor(FfiAnchor {
+            chapter: 0,
+            paragraph: 1,
+        });
+        Arc::clone(&handle)
+            .start_with_factory(
+                Box::new(ArcObserver(Arc::new(RecordingObserver::default()))),
+                Arc::new(|| Box::new(LongSlowRunner) as Box<dyn PiperRunner + Send>),
+            )
+            .expect("start");
+        // Mid-run: accepted (behavior pinned at the worker level).
+        handle.set_anchor(FfiAnchor {
+            chapter: 0,
+            paragraph: 1,
+        });
+        let state = wait_for_terminal(&handle);
+        assert!(matches!(state, FfiPipelineState::Finished(_)));
+    }
+
+    #[test]
+    fn batch_read_segment_behaves_exactly_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_voice_cache(dir.path());
+        let handle = Arc::new(PipelineHandle::new(config(dir.path(), false)));
+        Arc::clone(&handle)
+            .start_with_factory(
+                Box::new(ArcObserver(Arc::new(RecordingObserver::default()))),
+                stub_factory(),
+            )
+            .expect("start");
+        let FfiPipelineState::Finished(outcome) = wait_for_terminal(&handle) else {
+            panic!("expected Finished");
+        };
+
+        let (manifest, chapters) =
+            taletrek_synth::read_book_metadata(Path::new(&outcome.bundle_path)).unwrap();
+        let key = taletrek_synth::cache_key(&manifest.book.voice_id, &chapters[0].paragraphs[0]);
+        // The old read_segment: Some(bytes) for present keys, None for
+        // absent — unchanged.
+        assert!(crate::read_segment(outcome.bundle_path.clone(), key)
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            crate::read_segment(outcome.bundle_path.clone(), "voice:1:deadbeef".to_string())
+                .unwrap(),
+            None
+        );
     }
 }

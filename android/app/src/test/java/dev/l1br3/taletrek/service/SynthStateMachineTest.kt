@@ -1,10 +1,12 @@
 package dev.l1br3.taletrek.service
 
+import dev.l1br3.taletrek.ffi.FfiAnchor
 import dev.l1br3.taletrek.ffi.FfiPipelineConfig
 import dev.l1br3.taletrek.ffi.FfiPipelineEvent
 import dev.l1br3.taletrek.ffi.FfiPipelineOutcome
 import dev.l1br3.taletrek.ffi.FfiPipelinePhase
 import dev.l1br3.taletrek.ffi.FfiPipelineState
+import dev.l1br3.taletrek.ffi.FfiProgressiveConfig
 import dev.l1br3.taletrek.ffi.PipelineObserver
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -21,6 +23,7 @@ class SynthStateMachineTest {
     /** Scriptable fake: records start/cancel, replays events on demand. */
     private class FakeEngine : SynthEngine {
         val starts = mutableListOf<FfiPipelineConfig>()
+        val anchors = mutableListOf<FfiAnchor>()
         var cancelCount = 0
         var observer: PipelineObserver? = null
         var onTerminal: ((FfiPipelineState) -> Unit)? = null
@@ -39,6 +42,10 @@ class SynthStateMachineTest {
 
         override fun cancel() {
             cancelCount++
+        }
+
+        override fun reanchor(anchor: FfiAnchor) {
+            anchors += anchor
         }
 
         fun emit(event: FfiPipelineEvent) {
@@ -60,9 +67,10 @@ class SynthStateMachineTest {
         chapters = 2u,
         paragraphs = 5u,
         segments = if (textOnly) 0u else 5u,
+        sealed = false,
     )
 
-    private fun request() =
+    private fun request(initialAnchor: FfiAnchor? = null) =
         SynthJobRequest(
             sourcePath = "/cache/source.pdf",
             hint = "source.pdf",
@@ -70,8 +78,10 @@ class SynthStateMachineTest {
             voiceCacheDir = "/files/voices",
             espeakDir = "/files/espeak-ng-data",
             booksDir = "/files/books",
+            storeDir = "/cache/taletrek/segments",
             jobs = 2,
             generatorApp = "taletrek-android",
+            initialAnchor = initialAnchor,
         )
 
     @Test
@@ -153,5 +163,85 @@ class SynthStateMachineTest {
         assertEquals("/files/books", config.booksDir)
         assertEquals(2u, config.jobs)
         assertEquals("taletrek-android", config.generatorApp)
+    }
+
+    @Test
+    fun submitSendsTheProgressiveVariantWithStoreAndBookStartAnchor() {
+        val engine = FakeEngine()
+        val controller = SynthController(engine)
+        assertTrue(controller.submit(request()))
+        val progressive = engine.starts.single().progressive
+        assertEquals(
+            FfiProgressiveConfig(storeDir = "/cache/taletrek/segments", initialAnchor = null),
+            progressive,
+        )
+    }
+
+    @Test
+    fun submitCarriesAResumeAnchorIntoTheProgressiveConfig() {
+        val engine = FakeEngine()
+        val controller = SynthController(engine)
+        val anchor = FfiAnchor(chapter = 1u, paragraph = 4u)
+        assertTrue(controller.submit(request(initialAnchor = anchor)))
+        assertEquals(
+            anchor,
+            engine
+                .starts
+                .single()
+                .progressive
+                ?.initialAnchor,
+        )
+    }
+
+    @Test
+    fun playableMovesSynthesizingToFillingAndStepsKeepUpdatingItUntilSeal() {
+        val engine = FakeEngine()
+        val controller = SynthController(engine)
+        assertTrue(controller.submit(request()))
+
+        engine.emit(FfiPipelineEvent.Phase(FfiPipelinePhase.SYNTHESIZING))
+        engine.emit(FfiPipelineEvent.SynthStep(done = 2u, total = 9u))
+        assertEquals(SynthUiState.Synthesizing(2, 9), controller.state.value)
+
+        engine.emit(FfiPipelineEvent.Playable)
+        assertEquals(SynthUiState.Filling(2, 9), controller.state.value)
+
+        engine.emit(FfiPipelineEvent.SynthStep(done = 6u, total = 9u))
+        assertEquals(SynthUiState.Filling(6, 9), controller.state.value)
+
+        engine.emit(FfiPipelineEvent.Sealed)
+        assertEquals(SynthUiState.Writing, controller.state.value)
+
+        engine.terminal(FfiPipelineState.Finished(outcome()))
+        assertEquals(
+            SynthUiState.Done(bookId = "bk_abc", bundlePath = "/books/bk_abc.taletrek"),
+            controller.state.value,
+        )
+    }
+
+    @Test
+    fun fillingIsARunningPhaseRejectingDoubleSubmits() {
+        val engine = FakeEngine()
+        val controller = SynthController(engine)
+        assertTrue(controller.submit(request()))
+        engine.emit(FfiPipelineEvent.Phase(FfiPipelinePhase.SYNTHESIZING))
+        engine.emit(FfiPipelineEvent.Playable)
+        assertEquals(SynthUiState.Filling(0, 0), controller.state.value)
+        assertTrue(controller.isRunning())
+        assertFalse(controller.submit(request()))
+        assertEquals(1, engine.starts.size)
+
+        controller.cancel()
+        assertEquals(1, engine.cancelCount)
+        engine.terminal(FfiPipelineState.Cancelled)
+        assertEquals(SynthUiState.Cancelled, controller.state.value)
+    }
+
+    @Test
+    fun reanchorForwardsToTheEngine() {
+        val engine = FakeEngine()
+        val controller = SynthController(engine)
+        controller.reanchor(FfiAnchor(chapter = 2u, paragraph = 3u))
+        assertEquals(listOf(FfiAnchor(chapter = 2u, paragraph = 3u)), engine.anchors)
     }
 }

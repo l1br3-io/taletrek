@@ -1,5 +1,6 @@
 package dev.l1br3.taletrek.ui.library
 
+import dev.l1br3.taletrek.service.PendingJobStore
 import dev.l1br3.taletrek.service.SynthJobRequest
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -7,33 +8,46 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.io.File
 
 /**
  * The import flow over fakes — the JVM half of the split (ContentResolver
  * and startForegroundService stay behind seams). The gate is gone: a pick
- * submits the full job immediately; the only UI states are Idle | Failed.
+ * submits the progressive job immediately; the only UI states are Idle |
+ * Failed. The pending marker is the import flow's relaunch-resume record:
+ * saved at submit, spent at terminal.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ImportViewModelTest {
+    @get:Rule
+    val tmp = TemporaryFolder()
+
     private lateinit var copied: File
+    private lateinit var pendingStore: PendingJobStore
     private val started = mutableListOf<SynthJobRequest>()
     private val deleted = mutableListOf<String>()
     private var copyCalls = 0
     private var copyFails = false
     private var converting = false
+    private var libraryBookPaths = listOf("/files/books/bk_old.taletrek")
 
     @Before
     fun setUp() {
         copied = File.createTempFile("source", ".txt").apply { writeText("chapter one\n\nalpha") }
+        pendingStore = PendingJobStore(tmp.newFolder())
         started.clear()
         deleted.clear()
         copyCalls = 0
         copyFails = false
         converting = false
+        libraryBookPaths = listOf("/files/books/bk_old.taletrek")
     }
 
     private fun vm(
@@ -51,16 +65,19 @@ class ImportViewModelTest {
             pipelineJobs = pipelineJobs,
             startJob = { started += it },
             deleteSource = { deleted += it },
+            pendingStore = pendingStore,
+            libraryBookPaths = { libraryBookPaths },
             dirs =
                 ImportViewModel.ImportDirs(
                     voiceCacheDir = "/files/voices",
                     espeakDir = "/files/espeak",
                     booksDir = "/files/books",
+                    segmentStoreDir = "/cache/taletrek/segments",
                 ),
         )
 
     @Test
-    fun pickSubmitsTheFullJobImmediately() =
+    fun pickSubmitsTheProgressiveJobImmediately() =
         runTest(StandardTestDispatcher()) {
             val vm = vm(StandardTestDispatcher(testScheduler))
             vm.onSourcePicked("content://picked")
@@ -73,10 +90,25 @@ class ImportViewModelTest {
             assertEquals("/files/voices", request.voiceCacheDir)
             assertEquals("/files/espeak", request.espeakDir)
             assertEquals("/files/books", request.booksDir)
+            assertEquals("/cache/taletrek/segments", request.storeDir)
             assertEquals(2, request.jobs)
             assertEquals("taletrek-android", request.generatorApp)
+            assertNull(request.initialAnchor)
             assertEquals(ImportUiState.Idle, vm.ui.value)
             assertTrue("source lives until the job ends", deleted.isEmpty())
+        }
+
+    @Test
+    fun pickSavesThePendingMarkerAgainstTheLibrarySnapshot() =
+        runTest(StandardTestDispatcher()) {
+            val vm = vm(StandardTestDispatcher(testScheduler))
+            vm.onSourcePicked("content://picked")
+            advanceUntilIdle()
+
+            val pending = pendingStore.load()
+            assertNotNull(pending)
+            assertEquals(started.single(), pending?.request)
+            assertEquals(libraryBookPaths, pending?.preExistingBookPaths)
         }
 
     @Test
@@ -91,14 +123,42 @@ class ImportViewModelTest {
         }
 
     @Test
-    fun jobTerminalDeletesTheCopy() =
+    fun jobTerminalDeletesTheCopyAndSpendsTheMarker() =
         runTest(StandardTestDispatcher()) {
             val vm = vm(StandardTestDispatcher(testScheduler))
             vm.onSourcePicked("content://picked")
             advanceUntilIdle()
             assertTrue(deleted.isEmpty())
+            assertNotNull(pendingStore.load())
             vm.onJobTerminal()
             assertEquals(listOf(copied.absolutePath), deleted)
+            assertNull(pendingStore.load())
+        }
+
+    @Test
+    fun jobTerminalWithoutAPickSpendsTheMarkersSource() =
+        runTest(StandardTestDispatcher()) {
+            pendingStore.save(
+                PendingJobStore.PendingJob(
+                    request =
+                        SynthJobRequest(
+                            sourcePath = copied.absolutePath,
+                            hint = null,
+                            voiceId = null,
+                            voiceCacheDir = "/files/voices",
+                            espeakDir = "/files/espeak",
+                            booksDir = "/files/books",
+                            storeDir = "/cache/taletrek/segments",
+                            jobs = 2,
+                            generatorApp = "taletrek-android",
+                        ),
+                    preExistingBookPaths = emptyList(),
+                ),
+            )
+            val vm = vm(StandardTestDispatcher(testScheduler))
+            vm.onJobTerminal()
+            assertEquals(listOf(copied.absolutePath), deleted)
+            assertNull(pendingStore.load())
         }
 
     @Test
@@ -112,6 +172,7 @@ class ImportViewModelTest {
             assertTrue(failed is ImportUiState.Failed)
             assertEquals("no stream", (failed as ImportUiState.Failed).message)
             assertTrue(started.isEmpty())
+            assertNull(pendingStore.load())
             vm.dismissError()
             assertEquals(ImportUiState.Idle, vm.ui.value)
         }
@@ -126,6 +187,7 @@ class ImportViewModelTest {
             assertEquals("the guard fires before the copy", 0, copyCalls)
             assertTrue(started.isEmpty())
             assertTrue(deleted.isEmpty())
+            assertNull(pendingStore.load())
             val failed = vm.ui.value
             assertTrue(failed is ImportUiState.Failed)
             vm.dismissError()

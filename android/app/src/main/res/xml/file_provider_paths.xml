@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paths ExportFiles may hand out as shareable content:// URIs.
+     books/ = the user's library bundles (shared in place); exports/ =
+     on-demand merged audio, OS-reclaimable cache. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path
+        name="books"
+        path="books/" />
+    <cache-path
+        name="exports"
+        path="exports/" />
+</paths>

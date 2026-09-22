@@ -114,6 +114,14 @@ pub enum SynthError {
         reason: String,
     },
 
+    /// Whole-book audio merge (remux) failed: the bundle is text-only, its
+    /// codec is not Opus, or a segment's OGG payload is malformed/truncated.
+    #[error("audio merge failed: {reason}")]
+    Merge {
+        /// What went wrong (missing audio, bad container, missing segment).
+        reason: String,
+    },
+
     /// The input text normalized to empty (whitespace-only). Nothing to synth.
     #[error("synthesize_paragraph received text that normalized to empty")]
     EmptyText,

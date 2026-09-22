@@ -27,6 +27,7 @@
 pub mod pipeline;
 pub mod progress;
 pub mod stamp;
+pub mod store;
 pub mod synth_job;
 pub mod voices;
 
@@ -62,15 +63,20 @@ pub trait ProgressSink: Send + Sync {
 
 // Flat type re-exports — the primary public API.
 pub use pipeline::{
-    CancelFlag, CancellableRunner, PipelineError, PipelineEvent, PipelineJob, PipelineOutcome,
-    PipelinePhase, PipelineReporter, PipelineSpec, PipelineVariant, RunnerFactory,
+    estimate_audio_seconds, CancelFlag, CancellableRunner, PipelineError, PipelineEvent,
+    PipelineJob, PipelineOutcome, PipelinePhase, PipelineReporter, PipelineSpec, PipelineVariant,
+    ProgressiveAnchor, RunnerFactory, HORIZON_SECONDS, PLAYABLE_SECONDS, SPEECH_CHARS_PER_SECOND,
 };
 pub use progress::Progress;
 pub use stamp::{
     refuse_full_input, resynth_and_stamp, synth_and_stamp, synth_and_stamp_streaming,
     FullInputError, StampError,
 };
-pub use synth_job::{synth_all_paragraphs, synth_paragraphs_into, SegmentSink, SynthJobError};
+pub use store::{SegmentStore, StoreError};
+pub use synth_job::{
+    synth_all_paragraphs, synth_paragraphs_into, synth_paragraphs_into_dynamic,
+    ParagraphOrderPolicy, ParagraphPlanView, SegmentSink, SynthJobError,
+};
 pub use voices::{
     default_cache_dir, ensure_espeak_data, find_curated, resolve_voice, EspeakError, ResolveError,
     ResolveOpts, UreqVoiceSource, Voice, VoiceQuality, VoiceSource, CURATED_VOICES,

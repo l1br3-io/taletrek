@@ -216,6 +216,99 @@ class ReaderViewModelTest {
             assertFalse(t.canNextChapter)
         }
 
+    @Test
+    fun openingAFillingBookAtItsStoredPositionAnchorsSynthesisThere() =
+        runTest(dispatcher) {
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 1, audio = false, initialPos = para(1, 0)) },
+                    transport = transport,
+                    isSynthJobActive = { true },
+                )
+            advanceUntilIdle()
+
+            assertEquals(listOf(1u to 0u), transport.reanchors)
+            assertTrue("a filling book is playable", vm.ui.value.transport.canPlayPause)
+        }
+
+    @Test
+    fun aFillingBookWithoutAStoredPositionOpensUnanchored() =
+        runTest(dispatcher) {
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    isSynthJobActive = { true },
+                )
+            advanceUntilIdle()
+
+            assertTrue(transport.reanchors.isEmpty())
+        }
+
+    @Test
+    fun seekingWhileFillingReanchorsSynthesisAtThePlayhead() =
+        runTest(dispatcher) {
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0, audio = false) },
+                    transport = transport,
+                    isSynthJobActive = { true },
+                )
+            advanceUntilIdle()
+
+            vm.onParagraphTapped(2)
+            vm.jumpToChapter(1)
+
+            assertEquals(listOf(0u to 2u, 1u to 0u), transport.reanchors)
+        }
+
+    @Test
+    fun seekingANarratedBookNeverAnchorsSynthesis() =
+        runTest(dispatcher) {
+            vm = opened()
+            vm.onParagraphTapped(2)
+            assertTrue(transport.reanchors.isEmpty())
+        }
+
+    @Test
+    fun bufferingMapsIntoDisabledTransportAndRecovers() =
+        runTest(dispatcher) {
+            vm = opened()
+            transport.emit(playing(para(0, 0)).copy(buffering = true))
+            advanceUntilIdle()
+
+            var t = vm.ui.value.transport
+            assertTrue(t.buffering)
+            assertFalse(t.canPlayPause)
+            assertFalse(t.canNextParagraph)
+
+            transport.emit(playing(para(0, 0)).copy(buffering = false))
+            advanceUntilIdle()
+            t = vm.ui.value.transport
+            assertFalse(t.buffering)
+            assertTrue(t.canPlayPause)
+        }
+
+    @Test
+    fun aStalledLoadWithADeadJobSurfacesTheResumeAffordance() =
+        runTest(dispatcher) {
+            vm =
+                ReaderViewModel(
+                    opener = { book(initialChapter = 0) },
+                    transport = transport,
+                    onResumeSynth = { transport.commands += "resumeSynth" },
+                )
+            transport.emit(playing(para(0, 0)).copy(stalled = true))
+            advanceUntilIdle()
+
+            val t = vm.ui.value.transport
+            assertTrue(t.stalled)
+            assertFalse(t.canPlayPause)
+
+            vm.resumeAudio()
+            assertEquals(listOf("resumeSynth", "retryLoad"), transport.commands)
+        }
+
     private suspend fun TestScope.opened(): ReaderViewModel {
         val vm = ReaderViewModel(opener = { book(initialChapter = 0) }, transport = transport)
         advanceUntilIdle()
@@ -225,6 +318,7 @@ class ReaderViewModelTest {
     private fun book(
         initialChapter: Int,
         audio: Boolean = true,
+        initialPos: FfiParagraphPos? = null,
     ) = OpenedBook(
         title = "Sample Book",
         bookId = "bk_sample",
@@ -236,6 +330,7 @@ class ReaderViewModelTest {
                 ReaderChapter("Chapter Two", listOf("O’Reilly books are well worth reading.")),
             ),
         initialChapter = initialChapter,
+        initialPos = initialPos,
     )
 
     private fun para(
@@ -260,6 +355,7 @@ class ReaderViewModelTest {
         val opened = mutableListOf<String>()
         val commands = mutableListOf<String>()
         val seeks = mutableListOf<Pair<UInt, UInt>>()
+        val reanchors = mutableListOf<Pair<UInt, UInt>>()
         private val _states = MutableStateFlow(SessionState(FfiPlayerStatus.IDLE, null, 0.0, 0u, null, null, true))
         override val states = _states.asStateFlow()
 
@@ -300,6 +396,17 @@ class ReaderViewModelTest {
             index: UInt,
         ) {
             seeks += chapter to index
+        }
+
+        override fun reanchor(
+            chapter: UInt,
+            index: UInt,
+        ) {
+            reanchors += chapter to index
+        }
+
+        override fun retryLoad() {
+            commands += "retryLoad"
         }
     }
 }

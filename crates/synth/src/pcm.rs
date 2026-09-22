@@ -67,6 +67,61 @@ pub fn concat_wav(buffers: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
+/// Playback duration (seconds) of an OGG Opus stream, read from the last
+/// page's granule position minus the `OpusHead` preskip (the 48 kHz granule
+/// clock) — a manual page walk, deliberately free of the `ogg` dependency
+/// so callers without feature `native-encode` (the worker's resume path
+/// timing store segments) can time encoded audio. Malformed input yields
+/// `0.0`; well-formed streams agree with the `ogg` reader to the sample.
+#[must_use]
+pub fn opus_duration_seconds(bytes: &[u8]) -> f64 {
+    let mut last_granule: Option<u64> = None;
+    let mut preskip: Option<u64> = None;
+    let mut at = 0usize;
+    while at + 27 <= bytes.len() {
+        if &bytes[at..at + 4] != b"OggS" {
+            at += 1;
+            continue;
+        }
+        let granule = u64::from_le_bytes(bytes[at + 6..at + 14].try_into().unwrap_or([0; 8]));
+        let nsegs = bytes[at + 26] as usize;
+        let table_end = at + 27 + nsegs;
+        if table_end > bytes.len() {
+            break;
+        }
+        // The OpusHead packet (when it starts here) carries preskip at
+        // packet offset 10..12; a packet beginning on this page starts
+        // after the lacing table, and the table's first entry is its
+        // length.
+        if preskip.is_none() && nsegs > 0 {
+            let first_len = bytes[at + 27] as usize;
+            let packet = table_end;
+            if first_len >= 19
+                && packet + first_len <= bytes.len()
+                && &bytes[packet..packet + 8] == b"OpusHead"
+            {
+                preskip = Some(u64::from(u16::from_le_bytes([
+                    bytes[packet + 10],
+                    bytes[packet + 11],
+                ])));
+            }
+        }
+        // Page payload size = sum of the lacing values.
+        let mut payload = 0usize;
+        for &lacing in &bytes[at + 27..table_end] {
+            payload += lacing as usize;
+        }
+        if granule != u64::MAX {
+            last_granule = Some(granule);
+        }
+        at = table_end + payload;
+    }
+    match (last_granule, preskip) {
+        (Some(granule), Some(skip)) if granule > skip => (granule - skip) as f64 / 48_000.0,
+        _ => 0.0,
+    }
+}
+
 /// Parse the playback duration (seconds) of a PCM WAV byte slice by reading the
 /// `fmt` and `data` chunk headers. Mirrors the SPA's `parseWavDuration`.
 ///
@@ -264,5 +319,31 @@ mod tests {
         assert!(pcm_view(&[0u8; 10]).is_none());
         // RIFF/WAVE magic but no chunks.
         assert!(pcm_view(b"RIFF\x00\x00\x00\x00WAVE").is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "native-encode")]
+    fn opus_duration_matches_the_ogg_parsers_answer() {
+        // The manual page-granule scan must agree with the `ogg` crate's
+        // packet reader (±1 sample) on real encoder output — the resume
+        // path times store segments by it.
+        use super::super::encode::Encoder as _;
+        use super::super::opus_native::tests as on;
+        let wav_bytes = on::wav_bytes(&on::sine(16_000, 0.75, 440.0), 16_000);
+        let opus = crate::opus_native::NativeOpusEncoder::new()
+            .encode(&wav_bytes)
+            .unwrap();
+        let manual = opus_duration_seconds(&opus);
+        assert!(
+            (manual - 0.75).abs() < 0.05,
+            "manual scan said {manual}s for 0.75s of audio"
+        );
+    }
+
+    #[test]
+    fn opus_duration_of_garbage_is_zero() {
+        assert_eq!(opus_duration_seconds(&[]), 0.0);
+        assert_eq!(opus_duration_seconds(b"not ogg at all"), 0.0);
+        assert_eq!(opus_duration_seconds(b"OggS"), 0.0);
     }
 }

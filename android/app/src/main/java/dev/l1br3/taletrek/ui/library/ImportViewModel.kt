@@ -3,6 +3,7 @@ package dev.l1br3.taletrek.ui.library
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import dev.l1br3.taletrek.service.PendingJobStore
 import dev.l1br3.taletrek.service.SynthJobRequest
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,10 +30,11 @@ sealed interface ImportUiState {
  * directly — one process-wide job slot, one source of truth.
  *
  * Zero decisions: a picked (or shared) source is copied and submitted as
- * the FULL job in one step — the voice (and, first run, espeak-ng-data)
- * resolves inside the job with progress. The source copy's lifecycle is
- * here: deleted when the job reaches any terminal state
- * ([onJobTerminal]).
+ * the progressive job in one step — the voice (and, first run, espeak-ng
+ * -data) resolves inside the job with progress. The source copy's
+ * lifecycle is here: deleted when the job reaches any terminal state
+ * ([onJobTerminal]), which also spends the pending marker — the
+ * relaunch-resume record saved at submit.
  */
 class ImportViewModel(
     private val io: CoroutineDispatcher,
@@ -42,6 +44,8 @@ class ImportViewModel(
     private val pipelineJobs: () -> Int,
     private val startJob: (SynthJobRequest) -> Unit,
     private val deleteSource: (path: String) -> Unit,
+    private val pendingStore: PendingJobStore,
+    private val libraryBookPaths: () -> List<String>,
     private val dirs: ImportDirs,
 ) : ViewModel() {
     private val _ui = MutableStateFlow<ImportUiState>(ImportUiState.Idle)
@@ -71,7 +75,7 @@ class ImportViewModel(
                     return@launch
                 }
             pendingSource = path
-            startJob(
+            val request =
                 SynthJobRequest(
                     sourcePath = path,
                     hint = hint,
@@ -79,16 +83,34 @@ class ImportViewModel(
                     voiceCacheDir = dirs.voiceCacheDir,
                     espeakDir = dirs.espeakDir,
                     booksDir = dirs.booksDir,
+                    storeDir = dirs.segmentStoreDir,
                     jobs = pipelineJobs(),
                     generatorApp = "taletrek-android",
+                )
+            pendingStore.save(
+                PendingJobStore.PendingJob(
+                    request = request,
+                    preExistingBookPaths = libraryBookPaths(),
                 ),
             )
+            startJob(request)
             _ui.value = ImportUiState.Idle
         }
     }
 
-    /** The job reached a terminal state — the source copy is spent. */
-    fun onJobTerminal() = deletePending()
+    /** The job reached a terminal state — the source copy is spent and
+     *  the pending marker with it. The copy may belong to this process
+     *  (a pick) or ride the marker (a relaunch-resumed job). */
+    fun onJobTerminal() {
+        val marked = pendingStore.load()?.request?.sourcePath
+        (pendingSource ?: marked)?.let(deleteSource)
+        pendingSource = null
+        pendingStore.clear()
+    }
+
+    /** The pending job's shelf snapshot — disambiguates filling rows
+     *  from desktop-made text-only imports. */
+    fun fillingJobShelfPaths(): Set<String> = pendingStore.load()?.preExistingBookPaths?.toSet() ?: emptySet()
 
     fun dismissError() {
         if (_ui.value is ImportUiState.Failed) _ui.value = ImportUiState.Idle
@@ -105,6 +127,7 @@ class ImportViewModel(
         val voiceCacheDir: String,
         val espeakDir: String,
         val booksDir: String,
+        val segmentStoreDir: String,
     )
 
     companion object {
@@ -119,6 +142,8 @@ class ImportViewModel(
             pipelineJobs: () -> Int,
             startJob: (SynthJobRequest) -> Unit,
             deleteSource: (path: String) -> Unit,
+            pendingStore: PendingJobStore,
+            libraryBookPaths: () -> List<String>,
             dirs: ImportDirs,
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
@@ -132,6 +157,8 @@ class ImportViewModel(
                         pipelineJobs,
                         startJob,
                         deleteSource,
+                        pendingStore,
+                        libraryBookPaths,
                         dirs,
                     ) as T
             }

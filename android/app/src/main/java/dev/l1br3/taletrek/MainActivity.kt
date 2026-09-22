@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -25,7 +26,10 @@ import dev.l1br3.taletrek.data.BooksRepository
 import dev.l1br3.taletrek.data.PositionStore
 import dev.l1br3.taletrek.data.SourceImport
 import dev.l1br3.taletrek.data.VoiceStore
+import dev.l1br3.taletrek.service.PendingImportResume
+import dev.l1br3.taletrek.service.PendingJobStore
 import dev.l1br3.taletrek.service.SynthJobRequest
+import dev.l1br3.taletrek.service.SynthService
 import dev.l1br3.taletrek.service.isRunningPhase
 import dev.l1br3.taletrek.service.pipelineJobsForDevice
 import dev.l1br3.taletrek.ui.library.ImportViewModel
@@ -39,6 +43,8 @@ import dev.l1br3.taletrek.ui.theme.TaletrekTheme
 import dev.l1br3.taletrek.ui.voices.VoiceScreen
 import dev.l1br3.taletrek.ui.voices.VoiceViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -59,6 +65,7 @@ class MainActivity : ComponentActivity() {
         // One store instance for the process — DataStore allows exactly
         // one active handle per file (see PositionStore).
         positionStore = PositionStore.fromContext(this)
+        val pendingStore = PendingJobStore(filesDir)
         libraryViewModel =
             ViewModelProvider(
                 this,
@@ -90,11 +97,14 @@ class MainActivity : ComponentActivity() {
                         startForegroundService(request.toIntent(this))
                     },
                     deleteSource = { path: String -> SourceImport.deleteQuietly(File(path)) },
+                    pendingStore = pendingStore,
+                    libraryBookPaths = { libraryBundlePaths() },
                     dirs =
                         ImportViewModel.ImportDirs(
                             voiceCacheDir = filesDir.resolve("voices").path,
                             espeakDir = filesDir.resolve("espeak-ng-data").path,
                             booksDir = filesDir.resolve("books").path,
+                            segmentStoreDir = File(cacheDir, "taletrek/segments").path,
                         ),
                 ),
             )[ImportViewModel::class.java]
@@ -108,6 +118,7 @@ class MainActivity : ComponentActivity() {
                     espeakDir = { filesDir.resolve("espeak-ng-data").path },
                 ),
             )[VoiceViewModel::class.java]
+        maybeResumePendingImport(pendingStore)
         handleViewIntent(intent)
         setContent {
             TaletrekTheme {
@@ -123,6 +134,9 @@ class MainActivity : ComponentActivity() {
                         onImportConsumed = { pendingImportUri = null },
                         onSourceConsumed = { pendingSourceUri = null },
                         onNavControllerReady = { navController = it },
+                        onResumeSynth = {
+                            lifecycleScope.launch { resumePendingImport(pendingStore) }
+                        },
                     )
                 }
             }
@@ -134,6 +148,39 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         handleViewIntent(intent)
     }
+
+    /**
+     * Process death mid-fill recovery: once the shelf scan lands, a
+     * resumable pending record re-submits its job (anchored at the
+     * stored reading position). Re-entry is safe — the service's single
+     * job slot rejects duplicates and the marker is spent on terminal.
+     */
+    private fun maybeResumePendingImport(pendingStore: PendingJobStore) {
+        lifecycleScope.launch {
+            resumePendingImport(pendingStore)
+        }
+    }
+
+    /** One resume attempt over the scanned shelf (also the reader's
+     *  stalled-load affordance action). */
+    private suspend fun resumePendingImport(pendingStore: PendingJobStore) {
+        val resume =
+            PendingImportResume(
+                store = pendingStore,
+                loadPosition = { positionStore.load(it) },
+                isConverting = { SynthService.active.value?.isRunningPhase == true },
+                startJob = { request -> startForegroundService(request.toIntent(this@MainActivity)) },
+            )
+        resume.resumeWith(libraryViewModel.ui.first { !it.loading }.books)
+    }
+
+    /** The bundle paths currently on disk — the pending marker's shelf snapshot. */
+    private fun libraryBundlePaths(): List<String> =
+        filesDir
+            .resolve("books")
+            .listFiles { f -> f.isFile && f.name.endsWith(".taletrek") }
+            ?.map { it.absolutePath }
+            .orEmpty()
 
     /**
      * Import-from-open: a file manager hands us a `.taletrek` VIEW intent
@@ -179,6 +226,7 @@ fun AppNav(
     onImportConsumed: () -> Unit,
     onSourceConsumed: () -> Unit,
     onNavControllerReady: (NavHostController) -> Unit,
+    onResumeSynth: () -> Unit,
 ) {
     val nav = rememberNavController()
     LaunchedEffect(nav) { onNavControllerReady(nav) }
@@ -213,6 +261,10 @@ fun AppNav(
                                 if (shelf != null) openBookForReading(context, shelf.path, positionStore) else null
                             },
                             transport = transport,
+                            isSynthJobActive = {
+                                SynthService.active.value?.isRunningPhase == true
+                            },
+                            onResumeSynth = onResumeSynth,
                         ),
                 )
             ReaderScreen(

@@ -60,6 +60,15 @@ pub enum Cmd {
         #[command(flatten)]
         common: CommonArgs,
     },
+    /// Hidden benchmark harness (progressive-synth task 001): convert a
+    /// document through the real synth engine and print a timing report
+    /// (wall, per-paragraph/chunk percentiles, synth/encode split, RTF).
+    #[command(hide = true)]
+    BenchSynth {
+        /// Bench flags.
+        #[command(flatten)]
+        args: BenchArgs,
+    },
 }
 
 /// Flags for `parse`.
@@ -120,6 +129,42 @@ pub struct CommonArgs {
     /// Override: encode via an `ffmpeg` subprocess binary (libopus) instead
     /// of the default in-process Opus encoder. Resolved from `PATH` when
     /// given as a bare name.
+    #[arg(long)]
+    pub ffmpeg: Option<String>,
+}
+
+/// Flags for the hidden `bench-synth` harness. A trimmed [`CommonArgs`]:
+/// no `--output` (the bench prints a report, not a bundle), plus the same
+/// engine overrides so either side can be benchmarked.
+#[derive(Args, Debug)]
+pub struct BenchArgs {
+    /// Input document: a source (`.epub`, `.txt`, `.html`, `.htm`, `.md`,
+    /// `.markdown`, `.docx`, `.pdf`) parsed in memory, or a text-only
+    /// `.taletrek` bundle.
+    #[arg(long)]
+    pub input: PathBuf,
+
+    /// Parallel synth jobs. Default: 2 for the in-process engine, the CPU
+    /// count for the `--piper` subprocess engine.
+    #[arg(long)]
+    pub jobs: Option<usize>,
+
+    /// Voice id (curated, e.g. `en_US-hfc_female-medium`). Downloaded on
+    /// first use. Omit for the curated default.
+    #[arg(long)]
+    pub voice: Option<String>,
+
+    /// Override: path to a Piper `.onnx` voice model. Skips download.
+    #[arg(long = "voice-path")]
+    pub voice_path: Option<PathBuf>,
+
+    /// Override: use a Piper subprocess binary for synthesis instead of the
+    /// default in-process engine (sherpa-onnx).
+    #[arg(long)]
+    pub piper: Option<String>,
+
+    /// Override: encode via an `ffmpeg` subprocess binary instead of the
+    /// default in-process Opus encoder.
     #[arg(long)]
     pub ffmpeg: Option<String>,
 }
@@ -326,6 +371,58 @@ mod tests {
         assert!(
             resynth_about.to_lowercase().contains("bundle"),
             "resynth --help must document that it is bundle-only, got: {resynth_about}"
+        );
+    }
+
+    #[test]
+    fn bench_synth_parses_minimal_with_defaults() {
+        let cli = Cli::parse_from(["taletrek-desktop", "bench-synth", "--input", "novel.epub"]);
+        let Some(Cmd::BenchSynth { args }) = cli.command else {
+            panic!("expected BenchSynth, got {:?}", cli.command);
+        };
+        assert_eq!(args.input, PathBuf::from("novel.epub"));
+        assert!(args.jobs.is_none());
+        assert!(args.voice.is_none());
+        assert!(args.voice_path.is_none());
+        assert!(args.piper.is_none());
+        assert!(args.ffmpeg.is_none());
+    }
+
+    #[test]
+    fn bench_synth_parses_jobs_and_engine_overrides() {
+        let cli = Cli::parse_from([
+            "taletrek-desktop",
+            "bench-synth",
+            "--input",
+            "novel.epub",
+            "--jobs",
+            "4",
+            "--voice",
+            "en_US-ryan-medium",
+            "--piper",
+            "piper",
+            "--ffmpeg",
+            "ffmpeg",
+        ]);
+        let Some(Cmd::BenchSynth { args }) = cli.command else {
+            panic!("expected BenchSynth");
+        };
+        assert_eq!(args.jobs, Some(4));
+        assert_eq!(args.voice.as_deref(), Some("en_US-ryan-medium"));
+        assert_eq!(args.piper.as_deref(), Some("piper"));
+        assert_eq!(args.ffmpeg.as_deref(), Some("ffmpeg"));
+    }
+
+    #[test]
+    fn bench_synth_is_hidden_from_help() {
+        // The harness is developer tooling — it must parse but never show in
+        // `--help` listings.
+        use clap::CommandFactory as _;
+        let cmd = Cli::command();
+        assert!(
+            cmd.find_subcommand("bench-synth")
+                .is_some_and(|c| c.is_hide_set()),
+            "bench-synth must exist and be hidden"
         );
     }
 }

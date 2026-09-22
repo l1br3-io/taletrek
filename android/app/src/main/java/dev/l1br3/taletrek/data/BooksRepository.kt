@@ -2,6 +2,7 @@ package dev.l1br3.taletrek.data
 
 import android.content.Context
 import android.net.Uri
+import dev.l1br3.taletrek.ffi.exportMergedAudio
 import dev.l1br3.taletrek.ffi.openBook
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,7 @@ import java.io.IOException
 data class BookShelf(
     val bookId: String,
     val title: String,
+    val author: String?,
     val chapterCount: Int,
     val audioPresent: Boolean,
     val path: String,
@@ -58,6 +60,14 @@ interface BooksRepo {
 
     /** Delete a book's file and its orphaned position (best-effort). */
     suspend fun delete(book: BookShelf)
+
+    /**
+     * Merge the book's audio into one gapless `.opus` under
+     * `cacheDir/exports/` and return it — generated on demand, I/O-bound;
+     * the caller shares/copies the file and the OS reclaims the cache.
+     * Throws on a text-only book or a failed merge.
+     */
+    suspend fun exportAudio(book: BookShelf): File
 }
 
 /**
@@ -90,6 +100,7 @@ class BooksRepository(
                             BookShelf(
                                 bookId = book.bookId,
                                 title = book.title,
+                                author = book.author,
                                 chapterCount = book.chapters.size,
                                 audioPresent = book.audioPresent,
                                 path = file.absolutePath,
@@ -127,6 +138,7 @@ class BooksRepository(
                     BookShelf(
                         bookId = book.bookId,
                         title = book.title,
+                        author = book.author,
                         chapterCount = book.chapters.size,
                         audioPresent = book.audioPresent,
                         path = dest.absolutePath,
@@ -147,7 +159,19 @@ class BooksRepository(
         }
     }
 
+    override suspend fun exportAudio(book: BookShelf): File =
+        withContext(ioDispatcher) {
+            // GOTCHA: exports live only in cacheDir/exports — never
+            // filesDir/books/, which stays exactly one bundle per book.
+            val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+            val dest = File(dir, "${book.bookId}$OPUS_EXT")
+            exportMergedAudio(book.path, dest.absolutePath)
+            if (!dest.isFile || dest.length() == 0L) throw IOException("merge produced no audio")
+            dest
+        }
+
     private companion object {
         const val BUNDLE_EXT = ".taletrek"
+        const val OPUS_EXT = ".opus"
     }
 }

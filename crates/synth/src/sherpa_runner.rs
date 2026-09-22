@@ -71,7 +71,11 @@ const ENGINE: &str = "sherpa-onnx";
 /// [`PiperRunner::max_synth_chars`] — see the module docs' cost model: RSS
 /// scales with the largest chunk ever fed (the ORT arena never shrinks), and
 /// 120 chars keeps a runner near ~300 MB steady-state.
-const SHERPA_MAX_SYNTH_CHARS: usize = 120;
+///
+/// Public because wrapper runners (the desktop's lazy `DesktopRunner`, the
+/// FFI's `LazySherpaRunner`) must forward the same cap from behind their
+/// laziness — the inner runner may not exist yet when the host asks.
+pub const SHERPA_MAX_SYNTH_CHARS: usize = 120;
 
 /// Piper-json inference defaults, used when the json omits a scale.
 const DEFAULT_NOISE_SCALE: f32 = 0.667;

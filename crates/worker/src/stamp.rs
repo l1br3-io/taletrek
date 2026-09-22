@@ -107,7 +107,12 @@ pub fn refuse_full_input(bundle: &BookBundle, label: &str) -> Result<(), FullInp
 /// (dedup'd) segment count, and the `generator_app` the caller passed at the
 /// running crate version. This is the one stamping implementation both entry
 /// points route through — the single-stamping-path invariant.
-fn stamp_manifest_fields(
+/// Stamp `manifest` to reflect a completed synth run: audio present, the
+/// encoder's codec, the current norm version, the dedup'd segment count, and
+/// the caller's `generator.app` at the running crate version. Shared by the
+/// in-memory, streaming, and progressive-seal stamping paths — the ONE place
+/// a full manifest gets its audio block (the single-stamping-path invariant).
+pub(crate) fn stamp_manifest_fields(
     manifest: &mut Manifest,
     codec: AudioCodec,
     segment_count: u32,

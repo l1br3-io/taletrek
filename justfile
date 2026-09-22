@@ -13,21 +13,21 @@ default:
 
 # One-time setup: workspace deps + seeded voice/espeak-ng-data (native engine) + piper (overrides/e2e) into ~/.cache/taletrek
 setup:
-    pnpm install
-    pnpm setup:native
+    @pnpm install
+    @pnpm setup:native
 
 # SPA dev server → http://localhost:8253 (unique port; strict — no silent hopping)
 dev-web:
     @echo "→ TaleTrek SPA: http://localhost:8253"
-    pnpm dev
+    @pnpm dev
 
 # Desktop: synth a text-only bundle → full Opus bundle (in-process engines; voice auto-resolves from the seeded cache)
 synth INPUT OUTPUT:
-    cargo run -p taletrek-desktop -- synth --input {{INPUT}} --output {{OUTPUT}}
+    @cargo run -p taletrek-desktop -- synth --input {{INPUT}} --output {{OUTPUT}}
 
 # Desktop: re-voice an existing full bundle (in-process engines by default)
 resynth INPUT VOICE OUTPUT:
-    cargo run -p taletrek-desktop -- resynth --input {{INPUT}} --voice {{VOICE}} --output {{OUTPUT}}
+    @cargo run -p taletrek-desktop -- resynth --input {{INPUT}} --voice {{VOICE}} --output {{OUTPUT}}
 
 # Convenience: synth the committed fixture → /tmp/book.synth.taletrek
 synth-fixture:
@@ -35,7 +35,7 @@ synth-fixture:
 
 # Desktop: parse a source document (txt/md/html/epub/docx/pdf) → text-only .taletrek bundle
 parse INPUT OUTPUT:
-    cargo run -p taletrek-desktop -- parse --input {{INPUT}} --output {{OUTPUT}}
+    @cargo run -p taletrek-desktop -- parse --input {{INPUT}} --output {{OUTPUT}}
 
 # Convenience: parse the committed TXT fixture → /tmp/plain.taletrek
 parse-fixture:
@@ -48,28 +48,28 @@ chain-fixture:
 # Desktop GUI (egui): pick documents → queue → convert → .taletrek beside each
 # source (voice auto-resolves from the seeded cache or downloads on first use)
 gui:
-    cargo run -p taletrek-desktop -- gui
+    @cargo run -p taletrek-desktop -- gui
 
 # SPA tests (vitest)
 test-web:
-    pnpm test
+    @pnpm test
 
 # Rust workspace tests (hermetic — no piper/ffmpeg)
 test-rust:
-    cargo test --workspace
+    @cargo test --workspace
 
 # Real-piper/ffmpeg/sherpa e2e (the #[ignore]d tests) — gate env pre-wired to the setup cache
 test-e2e:
-    TALETREK_PIPER_BIN={{piper_bin}} TALETREK_VOICE_PATH={{voice_onnx}} TALETREK_ESPEAK_DATA={{cache_dir}}/espeak-ng-data cargo test --workspace --features taletrek-synth/sherpa -- --ignored --nocapture
+    @TALETREK_PIPER_BIN={{piper_bin}} TALETREK_VOICE_PATH={{voice_onnx}} TALETREK_ESPEAK_DATA={{cache_dir}}/espeak-ng-data cargo test --workspace --features taletrek-synth/sherpa -- --ignored --nocapture
 
 # SPA gates: lint + typecheck + test + build
 verify:
-    pnpm verify
+    @pnpm verify
 
 # Rust gates: clippy -D warnings + tests
 verify-rust:
-    cargo clippy --workspace --all-targets -- -D warnings
-    cargo test --workspace
+    @cargo clippy --workspace --all-targets -- -D warnings
+    @cargo test --workspace
 
 # --- Android (effort 4) --------------------------------------------------------
 
@@ -140,8 +140,8 @@ android-kernel:
 # One-time prerequisite: cargo install uniffi --features cli --version 0.32.0 --locked
 # (host cdylib carries the proc-macro metadata; Linux names it .so)
 android-bindings:
-    cargo build -p taletrek-ffi --lib
-    uniffi-bindgen generate --library target/debug/libtaletrek_ffi.so --language kotlin \
+    @cargo build -p taletrek-ffi --lib
+    @uniffi-bindgen generate --library target/debug/libtaletrek_ffi.so --language kotlin \
         --config crates/ffi/uniffi.toml --no-format --out-dir android/app/src/main/java
 
 # One-time setup for a fresh machine (Linux or macOS): JDK 21 + Android SDK/
@@ -151,23 +151,23 @@ android-bindings:
 # re-run until the summary says ready. Manual detail/fallback: docs/developing.md
 # § Android. Emulator-only subset: just android-emulator-setup.
 android-setup:
-    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} bash scripts/setup-android.sh
+    @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} bash scripts/setup-android.sh
 
 # One-time: emulator + system image + `taletrek` AVD (idempotent; ~1.5 GB download)
 android-emulator-setup:
-    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} bash scripts/setup-android-emulator.sh
+    @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} bash scripts/setup-android-emulator.sh
 
 # The daily dev command (dev-web's counterpart): build the debug APK, make
 # sure a headless emulator is up (cold-boot only if none), reinstall, and
 # force-stop + relaunch TaleTrek — then open the scrcpy mirror as the screen
 # (the emulator itself stays windowless). App-level restart, no emulator reboot
 android-serve-dev: android
-    just _android-serve fast
+    @just _android-serve fast
 
 # Clean-slate variant: also stops any running emulator and cold-boots fresh
 # (-no-snapshot — no quickboot resume) before reinstall + relaunch
 android-serve-fresh: android
-    just _android-serve fresh
+    @just _android-serve fresh
 
 # The single-command dev loop: initial build + relaunch, then watch Android
 # and kernel sources and rebuild + relaunch on every save (Ctrl-C to stop).
@@ -309,16 +309,16 @@ android-scrcpy:
 
 # Build debug APK (kernel + gradle assembleDebug)
 android: android-kernel
-    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android assembleDebug
+    @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android assembleDebug
 
 # Kotlin JVM unit tests + ktlint (gradlew testDebugUnitTest — pure-Kotlin only;
 # the .so does not load on the JVM — instrumented is where kernel code runs)
 android-test:
-    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android testDebugUnitTest ktlintCheck
+    @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android testDebugUnitTest ktlintCheck
 
 # Instrumented tests on connected device (kernel round-trip, Compose UI)
 android-instrumented:
-    JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android connectedDebugAndroidTest
+    @JAVA_HOME={{java_home}} ANDROID_HOME={{android_home}} android/gradlew --project-dir android connectedDebugAndroidTest
 
 # ---- iOS (ios-app) ------------------------------------------------------------
 
@@ -336,10 +336,10 @@ host_dylib := "libtaletrek_ffi." + if os() == "macos" { "dylib" } else { "so" }
 # `<module>FFI.modulemap` name is invisible to `import` (the CI trap).
 # One-time prerequisite: cargo install uniffi --features cli --version 0.32.0 --locked
 ios-bindings:
-    cargo build -p taletrek-ffi --lib
-    uniffi-bindgen generate --library target/debug/{{host_dylib}} --language swift \
+    @cargo build -p taletrek-ffi --lib
+    @uniffi-bindgen generate --library target/debug/{{host_dylib}} --language swift \
         --config crates/ffi/uniffi.toml --no-format --out-dir ios/TaleTrek/FFI
-    mv ios/TaleTrek/FFI/taletrek_ffiFFI.modulemap ios/TaleTrek/FFI/module.modulemap
+    @mv ios/TaleTrek/FFI/taletrek_ffiFFI.modulemap ios/TaleTrek/FFI/module.modulemap
 
 # iOS kernel static libs (device + simulator) + the sherpa xcframework, into
 # ios/TaleTrek/Vendor/ (gitignored — populated per machine, like jniLibs).
@@ -390,7 +390,7 @@ ios_sim_dest := env_var_or_default('IOS_SIM_DEST', 'platform=iOS Simulator,name=
 
 # Kernel + xcodebuild build (simulator)
 ios: ios-kernel
-    xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+    @xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
         -destination 'generic/platform=iOS Simulator' build
 
 # Swift unit tests on the simulator (app-hosted — the kernel rides the app binary).
@@ -408,6 +408,6 @@ ios-ui-test: ios-kernel
 # list devices) + DEVELOPMENT_TEAM; then install:
 #   xcrun devicectl device install app --device "$IOS_DEVICE_ID" <product path>
 ios-install:
-    xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+    @xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
         -destination "platform=iOS,id=${IOS_DEVICE_ID:?set IOS_DEVICE_ID}" \
         DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:?set DEVELOPMENT_TEAM}" build

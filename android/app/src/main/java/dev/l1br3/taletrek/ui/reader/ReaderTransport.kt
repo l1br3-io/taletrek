@@ -44,6 +44,15 @@ interface ReaderTransport {
         chapter: UInt,
         index: UInt,
     )
+
+    /** Re-aim the live synth job at the playhead (progressive books). */
+    fun reanchor(
+        chapter: UInt,
+        index: UInt,
+    )
+
+    /** Re-run the stalled segment load after a resume. */
+    fun retryLoad()
 }
 
 /**
@@ -169,5 +178,22 @@ class MediaControllerTransport(
                 putLong(SessionCommands.EXTRA_INDEX, index.toLong())
             },
         )
+    }
+
+    override fun reanchor(
+        chapter: UInt,
+        index: UInt,
+    ) {
+        controller?.sendCustomCommand(
+            SessionCommands.REANCHOR,
+            Bundle().apply {
+                putLong(SessionCommands.EXTRA_CHAPTER, chapter.toLong())
+                putLong(SessionCommands.EXTRA_INDEX, index.toLong())
+            },
+        )
+    }
+
+    override fun retryLoad() {
+        controller?.sendCustomCommand(SessionCommands.RETRY_LOAD, Bundle.EMPTY)
     }
 }

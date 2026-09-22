@@ -65,6 +65,7 @@ class PerfDatapointsTest {
         voiceCacheDir = File(files, "voices").path,
         espeakDir = File(files, "espeak-ng-data").path,
         booksDir = books.path,
+        storeDir = File(files, "segments/pool-$jobs").path,
         jobs = jobs,
         generatorApp = "taletrek-android",
     )
@@ -105,6 +106,7 @@ class PerfDatapointsTest {
                     booksDir = File(files, "books/ram").path,
                     jobs = 2u,
                     generatorApp = "taletrek-perf",
+                    progressive = null,
                 ),
             )
         handle.start(

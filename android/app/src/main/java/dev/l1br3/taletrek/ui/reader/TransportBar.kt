@@ -5,13 +5,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,7 +29,9 @@ import androidx.compose.ui.unit.dp
  * The transport bar: six forwards, zero decisions. Every button is a
  * one-line event out; enabled/playing state arrives derived from the
  * kernel's snapshot. Text-only books render it inert with the
- * explanatory hint (the spec's parity with desktop/web).
+ * explanatory hint (the spec's parity with desktop/web). A filling
+ * book's held loads render as buffering (spinner, transport inert) or
+ * the stalled affordance (resume preparing audio).
  */
 @Suppress("FunctionName") // Compose factory convention — PascalCase composables
 @Composable
@@ -37,6 +42,7 @@ fun TransportBar(
     onNextParagraph: () -> Unit,
     onPrevChapter: () -> Unit,
     onNextChapter: () -> Unit,
+    onResumeSynth: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
@@ -60,12 +66,22 @@ fun TransportBar(
                     enabled = state.canPrevParagraph,
                     onClick = onPrevParagraph,
                 )
-                TransportButton(
-                    icon = if (state.playing) PauseIcon else Icons.Default.PlayArrow,
-                    label = if (state.playing) "Pause" else "Play",
-                    enabled = state.canPlayPause,
-                    onClick = onPlayPause,
-                )
+                if (state.buffering) {
+                    CircularProgressIndicator(
+                        modifier =
+                            Modifier
+                                .size(28.dp)
+                                .semantics { contentDescription = "Preparing audio" },
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    TransportButton(
+                        icon = if (state.playing) PauseIcon else Icons.Default.PlayArrow,
+                        label = if (state.playing) "Pause" else "Play",
+                        enabled = state.canPlayPause,
+                        onClick = onPlayPause,
+                    )
+                }
                 TransportButton(
                     icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     label = "Next paragraph",
@@ -79,13 +95,34 @@ fun TransportBar(
                     onClick = onNextChapter,
                 )
             }
-            if (!state.canPlayPause) {
-                Text(
-                    "Text-only bundle — no audio to play.",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
+            when {
+                state.buffering -> {
+                    Text(
+                        "Preparing audio…",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                state.stalled -> {
+                    Text(
+                        "Audio stopped preparing.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    OutlinedButton(onClick = onResumeSynth, modifier = Modifier.padding(top = 6.dp)) {
+                        Text("Resume preparing audio")
+                    }
+                }
+                !state.canPlayPause -> {
+                    Text(
+                        "Text-only bundle — no audio to play.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
             }
         }
     }

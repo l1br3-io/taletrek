@@ -60,6 +60,7 @@ import kotlinx.coroutines.flow.filterIsInstance
 fun ReaderScreen(
     viewModel: ReaderViewModel,
     onBack: () -> Unit,
+    onResumeSynth: () -> Unit = {},
 ) {
     val ui by viewModel.ui.collectAsState()
     var outlineOpen by remember { mutableStateOf(false) }
@@ -160,6 +161,7 @@ fun ReaderScreen(
                         onNextParagraph = viewModel::nextParagraph,
                         onPrevChapter = viewModel::prevChapter,
                         onNextChapter = viewModel::nextChapter,
+                        onResumeSynth = onResumeSynth,
                     )
                 }
             }

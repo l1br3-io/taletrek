@@ -500,6 +500,9 @@ fn humanize_synth(e: &SynthError) -> String {
         SynthError::NativeEncode { reason } => {
             format!("Encoding the audio failed: {reason}")
         }
+        SynthError::Merge { reason } => {
+            format!("Merging the book's audio failed: {reason}")
+        }
         SynthError::EmptyText => "A paragraph had no speakable text after cleanup.".to_string(),
         SynthError::Cancelled => "Cancelled.".to_string(),
     }

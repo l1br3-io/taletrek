@@ -17,8 +17,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -31,6 +33,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -52,12 +55,16 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.l1br3.taletrek.data.BookShelf
+import dev.l1br3.taletrek.data.ExportFiles
+import dev.l1br3.taletrek.data.ExportKind
 import dev.l1br3.taletrek.data.PickedLane
 import dev.l1br3.taletrek.data.SourceImport
 import dev.l1br3.taletrek.service.SynthService
 import dev.l1br3.taletrek.service.SynthUiState
 import dev.l1br3.taletrek.service.isRunningPhase
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.IOException
 
 /**
  * The app's front door: every book the kernel can read out of
@@ -81,6 +88,7 @@ fun LibraryScreen(
     val importUi by importViewModel.ui.collectAsState()
     val synthState by SynthService.active.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    var searchOpen by remember { mutableStateOf(false) }
 
     // Terminal convert feedback (Done/Failed/Cancelled) lingers as a
     // dismissible card; the flag resets when the next job starts.
@@ -88,6 +96,23 @@ fun LibraryScreen(
     LaunchedEffect(synthState) {
         if (synthState?.isRunningPhase == true) terminalDismissed = false
     }
+
+    // The filling book's text bundle lands mid-run (progressive writes
+    // it before any audio) — rescan once per job when synth starts so
+    // the row appears; the seal's terminal rescan completes it.
+    var fillScanned by remember { mutableStateOf(false) }
+    LaunchedEffect(synthState) {
+        val state = synthState
+        val running = state is SynthUiState.Synthesizing || state is SynthUiState.Filling
+        if (running && !fillScanned) {
+            fillScanned = true
+            viewModel.rescan()
+        }
+        if (state == null || !state.isRunningPhase) fillScanned = false
+    }
+
+    // The pending job's shelf snapshot — the filling-row disambiguator.
+    val fillingShelfPaths = remember { importViewModel.fillingJobShelfPaths() }
 
     val notifPermission =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -124,6 +149,47 @@ fun LibraryScreen(
         }
     }
 
+    // Save flows: CreateDocument pickers registered once; the pending
+    // target is remembered so the callback knows what to stream where.
+    var saveBundleTarget by remember { mutableStateOf<BookShelf?>(null) }
+    var saveAudioTarget by remember { mutableStateOf<Pair<BookShelf, File>?>(null) }
+
+    val saveBundleLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ExportKind.BUNDLE.mime)) { uri ->
+            val book = saveBundleTarget
+            saveBundleTarget = null
+            if (uri != null && book != null) {
+                scope.launch {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            File(book.path).inputStream().use { it.copyTo(out) }
+                        } ?: throw IOException("could not open the chosen location")
+                    } catch (e: Exception) {
+                        viewModel.onExportFailed(e.message ?: e.javaClass.simpleName)
+                    }
+                }
+            }
+        }
+    val saveAudioLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ExportKind.AUDIO.mime)) { uri ->
+            val target = saveAudioTarget
+            saveAudioTarget = null
+            if (uri != null && target != null) {
+                val (_, temp) = target
+                scope.launch {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            temp.inputStream().use { it.copyTo(out) }
+                        } ?: throw IOException("could not open the chosen location")
+                        temp.delete()
+                    } catch (e: Exception) {
+                        temp.delete()
+                        viewModel.onExportFailed(e.message ?: e.javaClass.simpleName)
+                    }
+                }
+            }
+        }
+
     // Convert-from-open: a source-document VIEW/OPEN_WITH intent.
     LaunchedEffect(pendingSourceUri) {
         pendingSourceUri?.let {
@@ -137,6 +203,14 @@ fun LibraryScreen(
         ui.importError?.let {
             snackbarHostState.showSnackbar("Couldn't import: $it")
             viewModel.dismissImportError()
+        }
+    }
+
+    // Export failures (merge or save-copy) surface the same way.
+    LaunchedEffect(ui.exportError) {
+        ui.exportError?.let {
+            snackbarHostState.showSnackbar("Couldn't export: $it")
+            viewModel.dismissExportError()
         }
     }
 
@@ -168,6 +242,20 @@ fun LibraryScreen(
                 title = { Text("Library") },
                 actions = {
                     IconButton(
+                        onClick = {
+                            // Collapsing the search restores the full shelf.
+                            if (searchOpen) viewModel.onQueryChange("")
+                            searchOpen = !searchOpen
+                        },
+                        modifier =
+                            Modifier.semantics { contentDescription = "Search your books" },
+                    ) {
+                        Icon(
+                            if (searchOpen) Icons.Default.Close else Icons.Default.Search,
+                            contentDescription = null,
+                        )
+                    }
+                    IconButton(
                         onClick = onOpenVoices,
                         modifier =
                             Modifier.semantics { contentDescription = "Manage voices" },
@@ -183,24 +271,44 @@ fun LibraryScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // The live search row — pinned under the bar, ephemeral state.
+            if (searchOpen) {
+                OutlinedTextField(
+                    value = ui.query,
+                    onValueChange = viewModel::onQueryChange,
+                    singleLine = true,
+                    placeholder = { Text("Search your books") },
+                    trailingIcon = {
+                        if (ui.query.isNotEmpty()) {
+                            IconButton(onClick = { viewModel.onQueryChange("") }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear search")
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             // The in-page convert surface — pinned above the body in
             // EVERY state (empty first-run library included), not just
-            // the notification's shade. Running phases always show;
-            // terminal ones stay until dismissed.
+            // the notification's shade. One row per book: once the job's
+            // filling row is on the shelf, running progress lives on the
+            // row and the card hides; before the row exists it is the
+            // only feedback, and terminal cards linger until dismissed.
             val convertState = synthState
-            if (convertState != null && convertState !is SynthUiState.Idle) {
-                if (convertState.isRunningPhase || !terminalDismissed) {
-                    ConvertProgressCard(
-                        state = convertState,
-                        onCancel = {
-                            context.startService(
-                                Intent(context, SynthService::class.java)
-                                    .setAction(SynthService.ACTION_CANCEL),
-                            )
-                        },
-                        onDismiss = { terminalDismissed = true },
-                    )
-                }
+            val fillingRowOnShelf =
+                convertState != null &&
+                    ui.books.any { fillingRowUi(it, convertState, fillingShelfPaths).filling }
+            if (convertState != null && convertCardVisible(convertState, fillingRowOnShelf, terminalDismissed)) {
+                ConvertProgressCard(
+                    state = convertState,
+                    onCancel = {
+                        context.startService(
+                            Intent(context, SynthService::class.java)
+                                .setAction(SynthService.ACTION_CANCEL),
+                        )
+                    },
+                    onDismiss = { terminalDismissed = true },
+                )
             }
             when {
                 ui.loading -> {
@@ -232,6 +340,20 @@ fun LibraryScreen(
                         }
                     }
                 }
+                ui.visible.isEmpty() -> {
+                    // A full shelf filtered down to nothing — distinct from
+                    // the first-run state above.
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "No books match \"${ui.query.trim()}\".",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 else -> {
                     LazyColumn(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -247,11 +369,57 @@ fun LibraryScreen(
                                 )
                             }
                         }
-                        items(ui.books, key = { it.bookId }) { book ->
+                        items(ui.visible, key = { it.bookId }) { book ->
+                            val filling = fillingRowUi(book, synthState, fillingShelfPaths)
                             BookRow(
                                 book = book,
+                                preparingAudio = ui.exporting == book,
+                                filling = filling.filling,
+                                fillingDetail = filling.detail,
+                                onCancelFill = {
+                                    context.startService(
+                                        Intent(context, SynthService::class.java)
+                                            .setAction(SynthService.ACTION_CANCEL),
+                                    )
+                                },
                                 onOpen = { onOpenBook(book) },
                                 onRequestDelete = { viewModel.requestDelete(book) },
+                                onShareBundle = {
+                                    context.startActivity(
+                                        ExportFiles.shareIntent(
+                                            context,
+                                            File(book.path),
+                                            ExportKind.BUNDLE.mime,
+                                            "Share \"${book.title}\"",
+                                        ),
+                                    )
+                                },
+                                onSaveBundle = {
+                                    saveBundleTarget = book
+                                    saveBundleLauncher.launch(
+                                        ExportFiles.suggestedFileName(book.bookId, book.title, ExportKind.BUNDLE),
+                                    )
+                                },
+                                onShareAudio = {
+                                    viewModel.onExportAudio(book) { file ->
+                                        context.startActivity(
+                                            ExportFiles.shareIntent(
+                                                context,
+                                                file,
+                                                ExportKind.AUDIO.mime,
+                                                "Share \"${book.title}\" (audio)",
+                                            ),
+                                        )
+                                    }
+                                },
+                                onSaveAudio = {
+                                    viewModel.onExportAudio(book) { file ->
+                                        saveAudioTarget = book to file
+                                        saveAudioLauncher.launch(
+                                            ExportFiles.suggestedFileName(book.bookId, book.title, ExportKind.AUDIO),
+                                        )
+                                    }
+                                },
                             )
                         }
                     }
@@ -310,6 +478,13 @@ private fun ConvertProgressCard(
             is SynthUiState.Synthesizing ->
                 "Synthesizing audio" to
                     if (state.total > 0) "${state.done} of ${state.total} paragraphs" else "Starting…"
+            is SynthUiState.Filling ->
+                "Preparing audio" to
+                    if (state.total > 0) {
+                        "Listening available · ${state.done} of ${state.total} paragraphs"
+                    } else {
+                        "Listening available"
+                    }
             SynthUiState.Writing -> "Finishing" to "Writing bundle…"
             is SynthUiState.Done -> "Book ready" to "Added to your library"
             is SynthUiState.Failed -> "Conversion failed" to state.message
@@ -321,6 +496,8 @@ private fun ConvertProgressCard(
             is SynthUiState.DownloadingVoice ->
                 if (state.total > 0) ((state.done * 100) / state.total).toInt() else null
             is SynthUiState.Synthesizing ->
+                if (state.total > 0) (state.done * 100) / state.total else null
+            is SynthUiState.Filling ->
                 if (state.total > 0) (state.done * 100) / state.total else null
             else -> null
         }
@@ -359,17 +536,34 @@ private fun ConvertProgressCard(
 @Composable
 private fun BookRow(
     book: BookShelf,
+    preparingAudio: Boolean,
+    filling: Boolean,
+    fillingDetail: String?,
+    onCancelFill: () -> Unit,
     onOpen: () -> Unit,
     onRequestDelete: () -> Unit,
+    onShareBundle: () -> Unit,
+    onSaveBundle: () -> Unit,
+    onShareAudio: () -> Unit,
+    onSaveAudio: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     ListItem(
         headlineContent = { Text(book.title, style = MaterialTheme.typography.titleMedium) },
         supportingContent = {
-            Text(
-                "${book.chapterCount} chapter${if (book.chapterCount == 1) "" else "s"}",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Column {
+                Text(
+                    "${book.chapterCount} chapter${if (book.chapterCount == 1) "" else "s"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                fillingDetail?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         },
         trailingContent = {
             Box {
@@ -377,6 +571,62 @@ private fun BookRow(
                     Icon(Icons.Default.MoreVert, contentDescription = "Book actions")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    // The card is hidden while this row carries the job —
+                    // cancel lives here (plus the service notification).
+                    if (filling) {
+                        DropdownMenuItem(
+                            text = { Text("Cancel audio preparation") },
+                            leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onCancelFill()
+                            },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("Share bundle") },
+                        onClick = {
+                            menuOpen = false
+                            onShareBundle()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Save bundle") },
+                        onClick = {
+                            menuOpen = false
+                            onSaveBundle()
+                        },
+                    )
+                    if (book.audioPresent) {
+                        if (preparingAudio) {
+                            // Transient merge state — visible but inert.
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "Preparing audio…",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                },
+                                onClick = {},
+                                enabled = false,
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text("Share audio") },
+                                onClick = {
+                                    menuOpen = false
+                                    onShareAudio()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Save audio") },
+                                onClick = {
+                                    menuOpen = false
+                                    onSaveAudio()
+                                },
+                            )
+                        }
+                    }
                     DropdownMenuItem(
                         text = { Text("Delete") },
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },

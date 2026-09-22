@@ -3,12 +3,33 @@
 //! budgets more than anywhere): segments stream per paragraph via
 //! [`read_segment`].
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use taletrek_reader::{BookIndex, ChapterIndex, ParagraphIndex};
 use taletrek_synth::{read_audio_segment, read_book_metadata};
 
 use crate::error::FfiError;
+
+/// The process-global segment store root — where [`read_segment_progressive`]
+/// serves landed segments for filling (text-only) bundles. The host app
+/// registers the store its pipeline jobs synth into (one store is the
+/// design: content-addressed, shared across books); `None` until then.
+static SEGMENT_STORE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Register (or clear) the segment store the progressive read seam serves
+/// filling books from. Call with the same directory the pipeline's
+/// progressive config carries; `None` unregisters.
+#[uniffi::export]
+pub fn set_segment_store(dir: Option<String>) {
+    *SEGMENT_STORE.lock().expect("segment store mutex") = dir.map(PathBuf::from);
+}
+
+/// Whether a segment store is registered — the host's statement that
+/// filling-book playback is available (the player honors it).
+pub(crate) fn segment_store_registered() -> bool {
+    SEGMENT_STORE.lock().expect("segment store mutex").is_some()
+}
 
 /// One paragraph as foreign callers see it — the reader's
 /// [`ParagraphIndex`] flattened.
@@ -42,6 +63,8 @@ pub struct FfiBook {
     pub book_id: String,
     /// Book title.
     pub title: String,
+    /// Author, when the manifest knows one (library search matches on it).
+    pub author: Option<String>,
     /// The voice the manifest advertises (`book.voiceId`) — what a later
     /// re-voice would replace; the pipeline's import flow surfaces it.
     pub voice_id: String,
@@ -58,6 +81,7 @@ pub struct FfiBook {
 pub fn open_book(path: String) -> Result<FfiBook, FfiError> {
     let (manifest, chapters) = read_book_metadata(Path::new(&path))?;
     let mut book: FfiBook = BookIndex::new(&manifest, &chapters).into();
+    book.author = manifest.book.author;
     book.voice_id = manifest.book.voice_id;
     Ok(book)
 }
@@ -68,6 +92,72 @@ pub fn open_book(path: String) -> Result<FfiBook, FfiError> {
 #[uniffi::export]
 pub fn read_segment(path: String, key: String) -> Result<Option<Vec<u8>>, FfiError> {
     Ok(read_audio_segment(Path::new(&path), &key)?.map(|seg| seg.bytes))
+}
+
+/// The typed answer to "can I play paragraph `key` right now?" — the
+/// progressive reader's read seam. [`FfiSegmentStatus::Ready`] carries the
+/// segment; [`FfiSegmentStatus::NotReady`] means the key is *expected* (the
+/// book is filling: a text-only bundle whose chapters reference the key —
+/// the job is alive or resumable); [`FfiSegmentStatus::Missing`] means the
+/// bundle is sealed/full and the key is genuinely absent (corrupt archive
+/// or a foreign key — never a wait-worthy state).
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum FfiSegmentStatus {
+    /// The segment's bytes + codec extension (`opus`/`wav`/`m4a`).
+    Ready {
+        /// Encoded audio bytes, verbatim.
+        bytes: Vec<u8>,
+        /// Codec extension (`opus`/`wav`/`m4a`) — what `decode_segment`
+        /// expects alongside the bytes.
+        codec: String,
+    },
+    /// Expected but not synthesized yet — the book is filling; the caller
+    /// may block briefly (buffering UX) or surface resume.
+    NotReady,
+    /// The sealed bundle has no such segment — not coming.
+    Missing,
+}
+
+/// The progressive read seam: [`read_segment`] split by *why* it's absent.
+/// See [`FfiSegmentStatus`] for the semantics.
+#[uniffi::export]
+pub fn read_segment_progressive(path: String, key: String) -> Result<FfiSegmentStatus, FfiError> {
+    let path = Path::new(&path);
+    let (manifest, chapters) = read_book_metadata(path)?;
+    if manifest.audio.present {
+        return Ok(match read_audio_segment(path, &key)? {
+            Some(seg) => FfiSegmentStatus::Ready {
+                bytes: seg.bytes,
+                codec: seg.codec.ext().to_string(),
+            },
+            None => FfiSegmentStatus::Missing,
+        });
+    }
+    // Text-only (filling): the key is NotReady exactly when the book's own
+    // chapters reference it — the manifest voice namespaces the key. A
+    // landed store segment upgrades the answer to Ready: the reader plays
+    // while the book fills.
+    let expected = chapters.iter().any(|ch| {
+        ch.paragraphs
+            .iter()
+            .any(|p| taletrek_synth::cache_key(&manifest.book.voice_id, p) == key)
+    });
+    Ok(if expected {
+        let store_dir = SEGMENT_STORE.lock().expect("segment store mutex").clone();
+        store_dir
+            .and_then(|dir| {
+                taletrek_worker::SegmentStore::open(&dir)
+                    .ok()
+                    .and_then(|store| store.get(&key).ok().flatten())
+            })
+            .map(|seg| FfiSegmentStatus::Ready {
+                bytes: seg.bytes,
+                codec: seg.codec.ext().to_string(),
+            })
+            .unwrap_or(FfiSegmentStatus::NotReady)
+    } else {
+        FfiSegmentStatus::Missing
+    })
 }
 
 /// Rebuild the kernel's [`BookIndex`] from the flattened records — the
@@ -104,7 +194,8 @@ impl From<BookIndex> for FfiBook {
             book_id: index.book_id,
             title: index.title,
             // Filled by `open_book` from the manifest — `BookIndex` (the
-            // reader core) doesn't carry voice identity.
+            // reader core) doesn't carry voice or author identity.
+            author: None,
             voice_id: String::new(),
             audio_present: index.audio_present,
             chapters: index.chapters.iter().map(flat_chapter).collect(),

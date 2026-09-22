@@ -17,6 +17,8 @@
 pub mod bundle;
 pub mod cache_key;
 pub mod encode;
+#[cfg(feature = "native-encode")]
+pub mod merge;
 pub mod normalize;
 #[cfg(feature = "native-encode")]
 pub mod opus_native;
@@ -53,6 +55,8 @@ pub use synth::{
 };
 
 #[cfg(feature = "native-encode")]
+pub use merge::merge_bundle_audio;
+#[cfg(feature = "native-encode")]
 pub use opus_native::NativeOpusEncoder;
 #[cfg(feature = "sherpa")]
-pub use sherpa_runner::{default_espeak_data_dir, SherpaRunner};
+pub use sherpa_runner::{default_espeak_data_dir, SherpaRunner, SHERPA_MAX_SYNTH_CHARS};

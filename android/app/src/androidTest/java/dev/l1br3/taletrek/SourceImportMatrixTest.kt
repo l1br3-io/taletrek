@@ -65,6 +65,7 @@ class SourceImportMatrixTest {
         voiceCacheDir = File(files, "voices").absolutePath,
         espeakDir = File(files, "espeak-ng-data").absolutePath,
         booksDir = books.absolutePath,
+        storeDir = File(files, "segments/${books.name}").path,
         jobs = 2,
         generatorApp = "taletrek-android",
     )

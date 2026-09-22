@@ -2,21 +2,39 @@
 //! into content-addressed audio segments using a bounded `rayon` pool.
 //!
 //! This module is pure orchestration — all synth logic (normalize → split →
-//! Piper → concat → encode) lives in [`taletrek_synth::synthesize_paragraph`].
-//! The engine here:
+//! Piper → concat → encode) lives in [`taletrek_synth::synthesize_paragraph`]
+//! and the crate functions it composes from. The engine here:
 //! - flattens every chapter's paragraphs into one work list,
-//! - splits it into at most `jobs` contiguous chunks and runs them through a
-//!   `rayon` thread pool sized by `--jobs`,
-//! - constructs **one** [`taletrek_synth::PiperRunner`] per chunk via
-//!   `make_runner` (the per-thread cost model: a runner that owns a loaded
-//!   model — sherpa — loads it once per chunk, never per paragraph; the
-//!   stateless subprocess runner is unaffected), and
-//! - shares a single `&E` [`taletrek_synth::Encoder`] by reference
+//! - **plans every paragraph up front** (cache key, sentence chunks under the
+//!   engine's effective cap, normalized char weight) — planning needs the cap
+//!   before any predict could apply it, so the first pool runner doubles as
+//!   the cap probe (constructed eagerly, never an extra construction),
+//! - enqueues **sentence-chunk tasks** in LPT order (longest paragraph's
+//!   chunks first) drained by a shared pool — work stealing across chunk
+//!   granularity is what kills the straggler tail a contiguous-chunk engine
+//!   cannot, and
+//! - constructs **at most** `min(jobs, tasks)` [`taletrek_synth::PiperRunner`]s
+//!   eagerly into a checkout/checkin fleet (the per-thread cost model: a
+//!   runner that owns a loaded model — sherpa — loads it once per fleet slot,
+//!   never per paragraph; the stateless subprocess runner is unaffected),
+//!   sharing a single `&E` [`taletrek_synth::Encoder`] by reference
 //!   (`encode(&self)` is stateless).
 //!
-//! On the first paragraph that errors, the whole run aborts (rayon short-
-//! circuits `collect::<Result<..>>`). Continue-on-error (`--keep-going`) is a
-//! follow-up; v1 aborts.
+//! Per-paragraph assembly stays the delivery unit: whichever worker predicts
+//! a paragraph's last chunk concatenates the shared partial slots (chunk
+//! order, not completion order — deterministic bytes), encodes, reports
+//! progress, and delivers — so segments and cache keys are byte-identical to
+//! the per-paragraph pipeline. In-flight memory is bounded by at most one
+//! partially-assembled paragraph per worker (`jobs` × largest-paragraph WAV),
+//! a rounding error next to the N model arenas that stay the real envelope.
+//!
+//! On the first chunk, encode, or sink error, the whole run aborts (rayon
+//! short-circuits `try_for_each`). A paragraph that normalizes to empty
+//! fails at the planning stage — before any synth work happens.
+//! Continue-on-error (`--keep-going`) is a follow-up; v1 aborts. Host
+//! cancellation stays cooperative and per-chunk: the host's runner decorator
+//! checks its flag before every predict (finer granularity than the old
+//! per-paragraph check) and raises [`SynthError::Cancelled`].
 //!
 //! # Streaming vs. accumulation
 //!
@@ -24,12 +42,12 @@
 //! segment is handed to a shared [`SegmentSink`] **by value** instead of being
 //! accumulated — so a sink that writes straight to disk (the streaming
 //! `BundleWriter`) keeps peak memory at one segment, not the whole book's
-//! audio. Dedup is the **sink's** job: the engine still synthesizes and
-//! delivers every occurrence of an identical paragraph; a collapsing sink
-//! (the streaming writer's written-keys set, or the collecting wrapper below)
-//! keeps one. [`synth_all_paragraphs`] is the legacy accumulating flavor — a
-//! thin wrapper collecting the sink's deliveries into a `HashMap` — kept for
-//! library nesting, tests, and small/compat paths.
+//! audio. The engine's planning stage dedups by cache key: each distinct key
+//! is synthesized and delivered **exactly once** (identical paragraphs are a
+//! free skip, not a re-synthesis), so a repetitive book pays for its
+//! distinct text only. [`synth_all_paragraphs`] is the legacy accumulating
+//! flavor — a thin wrapper collecting the sink's deliveries into a `HashMap`
+//! — kept for library nesting, tests, and small/compat paths.
 //!
 //! Re-exported at the crate root ([`synth_all_paragraphs`],
 //! [`synth_paragraphs_into`], [`SegmentSink`], [`SynthJobError`]); hosts reach
@@ -38,14 +56,18 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 use rayon::prelude::*;
 use thiserror::Error;
 
-use taletrek_synth::synth::{synthesize_paragraph, PiperRunner, SynthError, SynthOptions};
-use taletrek_synth::{AudioSegment, BookBundle, BundleError, Encoder};
+use taletrek_synth::pcm::concat_wav;
+use taletrek_synth::synth::{PiperRunner, SynthError};
+use taletrek_synth::{
+    cache_key, normalize_for_speech, split_for_speech, AudioSegment, BookBundle, BundleError,
+    Encoder, MAX_SYNTH_CHARS,
+};
 
 use crate::ProgressSink;
 
@@ -79,31 +101,37 @@ pub enum SynthJobError {
 
 /// The boxed delivery closure [`SegmentSink`] wraps: `(key, segment) ->
 /// Result<(), BundleError>`, `Send` so pool chunks share it.
-type SegmentDeliver = Box<dyn FnMut(String, AudioSegment) -> Result<(), BundleError> + Send>;
+type SegmentDeliver<'a> =
+    Box<dyn FnMut(String, AudioSegment) -> Result<(), BundleError> + Send + 'a>;
 
 /// Shared delivery target for [`synth_paragraphs_into`]: pool threads hand
 /// each finished segment to the wrapped closure **by value**, one call per
-/// completed paragraph.
+/// distinct key.
 ///
 /// The closure is boxed behind a `Mutex` (interior mutability is what makes
 /// `&SegmentSink` shareable across rayon chunks — `FnMut` cannot be `Sync` on
 /// its own). The sink is **fallible**: an `Err` aborts the run as
 /// [`SynthJobError::Sink`], so a disk-full or corrupt-write unwinds the pool
-/// exactly like a synthesis failure. Dedup is the sink's responsibility — the
-/// engine delivers every occurrence.
-pub struct SegmentSink {
-    deliver: Mutex<SegmentDeliver>,
+/// exactly like a synthesis failure. The engine's planning stage already
+/// dedups — each distinct key arrives exactly once (a sink may still keep
+/// its own written-keys guard defensively).
+///
+/// The lifetime parameter lets a sink borrow host context (a progress
+/// reporter, a shared tracker) instead of cloning it behind `Arc` —
+/// `SegmentSink::new` accepts any closure bounded by `'a`, and `'static`
+/// closures (the common case) infer as before.
+pub struct SegmentSink<'a> {
+    deliver: Mutex<SegmentDeliver<'a>>,
+    _borrow: std::marker::PhantomData<&'a ()>,
 }
 
-impl SegmentSink {
-    /// Wrap a delivery closure. `Send + 'static` because the closure may
-    /// capture owned handles (e.g. an `Arc<Mutex<BundleWriter<_>>>`) that the
-    /// caller keeps a clone of to retrieve after the run.
-    pub fn new(
-        f: impl FnMut(String, AudioSegment) -> Result<(), BundleError> + Send + 'static,
-    ) -> Self {
+impl<'a> SegmentSink<'a> {
+    /// Wrap a delivery closure. `Send` so pool threads share it; the
+    /// lifetime bound (not `'static`) lets the closure borrow host context.
+    pub fn new(f: impl FnMut(String, AudioSegment) -> Result<(), BundleError> + Send + 'a) -> Self {
         Self {
             deliver: Mutex::new(Box::new(f)),
+            _borrow: std::marker::PhantomData,
         }
     }
 
@@ -127,18 +155,124 @@ fn collect_paragraphs(bundle: &BookBundle) -> Vec<&str> {
         .collect()
 }
 
+/// One paragraph occurrence's planned work: the content-addressed key over
+/// the ORIGINAL text (byte-parity with [`taletrek_synth::cache_key`]), the
+/// sentence chunks the pool will predict (split under the engine's effective
+/// cap), and the normalized char count used as the LPT weight.
+struct PlannedParagraph {
+    key: String,
+    chunks: Vec<String>,
+    weight: usize,
+}
+
+/// One chunk's assembly slot: the predicted WAV lands in `data`; `claimed`
+/// marks the chunk as dispatched (pop or rescore) so a re-anchored queue
+/// rebuild never double-dispatches an in-flight or filled chunk.
+struct ChunkSlot {
+    data: Mutex<Option<Vec<u8>>>,
+    claimed: AtomicBool,
+}
+
+/// The shared assembly state for one paragraph occurrence: one slot per
+/// planned chunk (filled by whichever worker predicts it) plus a countdown
+/// of unfinished chunks. The worker that takes the countdown to zero
+/// assembles the segment (concat → encode → deliver + progress).
+struct PartialParagraph {
+    key: String,
+    slots: Vec<ChunkSlot>,
+    remaining: AtomicUsize,
+}
+
+/// One pool work item: predict `chunks[chunk]` of paragraph `para`.
+struct ChunkTask {
+    para: usize,
+    chunk: usize,
+}
+
+/// A host-supplied view of the planned work for scheduling policy: where
+/// the paragraph sits in reading order and how much text it carries. Built
+/// by the engine; consumed by [`ParagraphOrderPolicy`].
+#[derive(Debug, Clone, Copy)]
+pub struct ParagraphPlanView {
+    /// Index of the paragraph's first occurrence in book order over the
+    /// DEDUPED plan (0-based; reading order).
+    pub reading_index: usize,
+    /// Normalized character count — the work/size proxy.
+    pub normalized_chars: usize,
+}
+
+/// Scheduling policy: a total order over planned paragraph indices. The
+/// engine applies it before dispatch and again whenever the paired epoch
+/// counter changes (a host seek re-scores the pending queue; in-flight
+/// chunks always finish — cancellation is the only preemption). `None`
+/// everywhere means the engine's LPT default.
+pub type ParagraphOrderPolicy = Arc<dyn Fn(&[ParagraphPlanView]) -> Vec<usize> + Send + Sync>;
+
+/// How the engine orders paragraph dispatch.
+enum EngineOrdering {
+    /// Longest-processing-time-first (the batch default).
+    Lpt,
+    /// A host policy + the epoch that signals re-scoring.
+    Policy {
+        policy: ParagraphOrderPolicy,
+        epoch: Arc<AtomicU64>,
+    },
+}
+
+/// The lazily-matched runner fleet: `min(jobs, tasks)` runners constructed
+/// EAGERLY before dispatch (the first doubles as the planning cap probe),
+/// checked out per chunk task and checked back in after the predict. A
+/// checkout blocks while the fleet is exhausted — never constructs beyond
+/// the budget, so `make_runner` fires at most `jobs` times per run.
+struct RunnerPool<R> {
+    idle: Mutex<Vec<R>>,
+    available: Condvar,
+}
+
+impl<R> RunnerPool<R> {
+    /// Seed with the eagerly-constructed fleet.
+    fn seeded(fleet: Vec<R>) -> Self {
+        Self {
+            idle: Mutex::new(fleet),
+            available: Condvar::new(),
+        }
+    }
+
+    /// Take an idle runner, blocking until one is available.
+    fn checkout(&self) -> R {
+        let mut idle = self.idle.lock().expect("runner pool mutex");
+        loop {
+            if let Some(runner) = idle.pop() {
+                return runner;
+            }
+            idle = self
+                .available
+                .wait(idle)
+                .expect("runner pool mutex poisoned");
+        }
+    }
+
+    /// Return a runner and wake one waiter.
+    fn checkin(&self, runner: R) {
+        self.idle.lock().expect("runner pool mutex").push(runner);
+        self.available.notify_one();
+    }
+}
+
 /// Synthesize every paragraph across all chapters of `bundle`, handing each
 /// finished segment to `sink` **by value** — the streaming shape. See the
-/// [module docs](self#streaming-vs-accumulation) for the accumulation
-/// contrast; the chunking/pool/cost-model/abort/progress behavior is
-/// identical to [`synth_all_paragraphs`]:
+/// [module docs](self#the-shared-runner-pool) for the scheduling model; the
+/// contract below is unchanged from the contiguous-chunk engine:
 /// - `voice_id` is the cache-key namespace; `voice_model` is the resolved
 ///   `.onnx` path on disk.
-/// - `make_runner` fires once **per chunk** (at most `jobs` constructions).
+/// - `make_runner` fires at most `min(jobs, chunk tasks)` times per run (one
+///   construction per pool runner — the per-thread cost model).
 /// - `encoder` is shared `&E` across all tasks.
 /// - `jobs` bounds the pool (clamped to `>= 1`).
 /// - aborts on the first paragraph *or sink* error →
-///   [`SynthJobError::Synth`] / [`SynthJobError::Sink`].
+///   [`SynthJobError::Synth`] / [`SynthJobError::Sink`]. A paragraph that
+///   normalizes to empty fails at the **planning** stage (before any synth
+///   happens — no wasted work, no deliveries).
 /// - `progress`, when `Some`, emits a `synth [done/total] pct%` line after
 ///   each successful paragraph (before delivery).
 #[allow(clippy::too_many_arguments)] // mirrors synth_all_paragraphs + the sink param
@@ -157,7 +291,60 @@ where
     E: Encoder + Sync,
     F: Fn() -> R + Sync,
 {
+    synth_paragraphs_into_dynamic(
+        bundle,
+        voice_id,
+        voice_model,
+        make_runner,
+        encoder,
+        jobs,
+        progress,
+        None,
+        None,
+        sink,
+    )
+}
+
+/// [`synth_paragraphs_into`] with a host scheduling policy: when
+/// `(policy, epoch)` is `Some`, paragraph dispatch order comes from
+/// `policy` (initially and again after every epoch change — the host bumps
+/// the counter to re-score the pending queue; in-flight chunks finish,
+/// cancellation remains the only preemption). The engine's LPT default
+/// applies otherwise. Both must be `Some` together or `None` together.
+#[allow(clippy::too_many_arguments)] // the dynamic seam adds the policy pair
+pub fn synth_paragraphs_into_dynamic<R, E, F>(
+    bundle: &BookBundle,
+    voice_id: &str,
+    voice_model: &Path,
+    make_runner: F,
+    encoder: &E,
+    jobs: usize,
+    progress: Option<&dyn ProgressSink>,
+    policy: Option<ParagraphOrderPolicy>,
+    epoch: Option<Arc<AtomicU64>>,
+    sink: &SegmentSink,
+) -> Result<(), SynthJobError>
+where
+    R: PiperRunner + Send,
+    E: Encoder + Sync,
+    F: Fn() -> R + Sync,
+{
+    let ordering = match (policy, epoch) {
+        (None, None) => EngineOrdering::Lpt,
+        (Some(policy), Some(epoch)) => EngineOrdering::Policy { policy, epoch },
+        (None, Some(_)) | (Some(_), None) => {
+            // Pairing bug on the host side; LPT is the safe fallback.
+            EngineOrdering::Lpt
+        }
+    };
+
     let paragraphs = collect_paragraphs(bundle);
+    if paragraphs.is_empty() {
+        // Degenerate empty work list (also: the progressive resume path
+        // with a fully-seeded store): no pool, no cap probe, no runner
+        // constructions — nothing to synthesize.
+        return Ok(());
+    }
 
     // Bound the pool at `--jobs` (clamped to >= 1; `num_threads(0)` would
     // panic). The default `num_cpus` is resolved by the caller.
@@ -167,52 +354,232 @@ where
         .build()
         .map_err(|source| SynthJobError::PoolBuild { jobs, source })?;
 
+    // The first runner doubles as the planning cap probe: it is constructed
+    // eagerly (one of the <= jobs constructions — never an extra one) and
+    // seeds the fleet. Planning needs the effective engine cap BEFORE any
+    // predict could apply it, and this is the one runner that legitimately
+    // exists at planning time.
+    let probe = make_runner();
+    let cap = MAX_SYNTH_CHARS.min(probe.max_synth_chars());
+
+    // Plan every paragraph occurrence up front, in book order, DEDUPING by
+    // cache key: each distinct key is synthesized exactly once (identical
+    // paragraphs — refrains, boilerplate — used to re-synthesize per
+    // occurrence and left collapsing to the sink). Planning mirrors
+    // synthesize_paragraph's own key/normalize/split steps over the same
+    // crate functions, so planned chunks are byte-identical to what the
+    // per-paragraph pipeline would have split (pinned by test).
+    let mut planned: Vec<PlannedParagraph> = Vec::with_capacity(paragraphs.len());
+    let mut seen_keys: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(paragraphs.len());
+    for text in &paragraphs {
+        let cleaned = normalize_for_speech(text);
+        if cleaned.is_empty() {
+            return Err(SynthJobError::Synth(SynthError::EmptyText));
+        }
+        let key = cache_key(voice_id, text);
+        if !seen_keys.insert(key.clone()) {
+            continue;
+        }
+        planned.push(PlannedParagraph {
+            key,
+            chunks: split_for_speech(&cleaned, cap),
+            weight: cleaned.chars().count(),
+        });
+    }
+
+    // Dispatch order: the host policy when one is supplied (the pipeline's
+    // anchor/horizon tiering), else LPT (longest-processing-time-first —
+    // the classic batch makespan heuristic; stable ties keep book order so
+    // jobs=1 stays deterministic). `planned` is already in reading order,
+    // so `reading_index == planned index`.
+    let views: Vec<ParagraphPlanView> = planned
+        .iter()
+        .enumerate()
+        .map(|(i, p)| ParagraphPlanView {
+            reading_index: i,
+            normalized_chars: p.weight,
+        })
+        .collect();
+    let order: Vec<usize> = match &ordering {
+        EngineOrdering::Policy { policy, .. } => policy(&views),
+        EngineOrdering::Lpt => {
+            let mut order: Vec<usize> = (0..planned.len()).collect();
+            order.sort_unstable_by(|&a, &b| planned[b].weight.cmp(&planned[a].weight));
+            order
+        }
+    };
+
+    let partials: Vec<PartialParagraph> = planned
+        .iter()
+        .map(|p| PartialParagraph {
+            key: p.key.clone(),
+            slots: p
+                .chunks
+                .iter()
+                .map(|_| ChunkSlot {
+                    data: Mutex::new(None),
+                    claimed: AtomicBool::new(false),
+                })
+                .collect(),
+            remaining: AtomicUsize::new(p.chunks.len()),
+        })
+        .collect();
+
+    // Chunk tasks, paragraph-major in dispatch order (chunk order preserved
+    // within a paragraph — concat order must be deterministic).
+    let tasks: Vec<ChunkTask> = order
+        .iter()
+        .flat_map(|&para| {
+            (0..planned[para].chunks.len()).map(move |chunk| ChunkTask { para, chunk })
+        })
+        .collect();
+    let total_tasks = tasks.len();
+
+    // The eager fleet: min(jobs, tasks) runners, probe included. An empty
+    // bundle constructs none.
+    let fleet_size = tasks.len().min(jobs);
+    let mut fleet = Vec::with_capacity(fleet_size);
+    fleet.push(probe);
+    for _ in 1..fleet_size {
+        fleet.push(make_runner());
+    }
+    let runner_pool = RunnerPool::seeded(fleet);
+
     // Progress counter shared across worker threads. Relaxed ordering is
     // enough: each fetch_add yields a unique monotonic index; no other memory
     // needs synchronizing with it.
-    let total = paragraphs.len();
+    // Progress totals the DISTINCT segment count (planned paragraphs), so
+    // host percentage rendering needs no change under the dedup pre-pass.
+    let total = planned.len();
     let done = AtomicUsize::new(0);
 
-    // Split into at most `jobs` chunks: ceil(total/jobs) paragraphs each, so
-    // `make_runner` fires at most `jobs` times per run (one construction per
-    // chunk — the per-thread cost model). Chunk size floors at 1 (fewer
-    // paragraphs than jobs → one chunk per paragraph, never per job slot);
-    // `par_chunks(0)` would panic.
-    let chunk_size = total.div_ceil(jobs).max(1);
+    // The shared pending queue (work stealing = shared pops). When a host
+    // epoch changed since the last pop, the queue is re-scored under the
+    // same lock: pending (unclaimed, unfinished) chunk tasks rebuild
+    // paragraph-major in the policy's new order. In-flight chunks are
+    // claimed and simply finish — cancellation is the only preemption.
+    let queue: Mutex<std::collections::VecDeque<ChunkTask>> = Mutex::new(tasks.into());
+    let rescore = match &ordering {
+        EngineOrdering::Policy { policy, epoch } => Some((policy, epoch)),
+        EngineOrdering::Lpt => None,
+    };
+    let epoch_seen = AtomicU64::new(
+        rescore
+            .as_ref()
+            .map(|(_, e)| e.load(Ordering::Relaxed))
+            .unwrap_or(0),
+    );
 
-    // Run the chunked map inside our bounded pool. Each chunk constructs one
-    // runner (owned for the chunk's lifetime — `&mut R` can't cross threads)
-    // and processes its paragraphs sequentially, borrowing the shared `&E`
-    // encoder by ref. Each successful paragraph reports progress, then moves
-    // into the sink — nothing accumulates. `collect::<Result>` makes rayon
-    // short-circuit on the first chunk error → v1 "abort on first error".
-    let results: Result<Vec<()>, SynthJobError> = pool.install(|| {
-        paragraphs
-            .par_chunks(chunk_size)
-            .map(|chunk| {
-                let mut runner = make_runner();
-                for text in chunk {
-                    let mut opts = SynthOptions::new(voice_model, &mut runner, encoder);
-                    let synthesized = synthesize_paragraph(voice_id, text, &mut opts)
-                        .map_err(SynthJobError::Synth)?;
-                    if let Some(p) = progress {
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        p.synth_step(n, total);
+    // Drain the queue inside our bounded pool: any worker may predict any
+    // chunk (work stealing — the fine-grained units that kill the straggler
+    // tail), runners come from the shared fleet, and the worker that
+    // completes a paragraph assembles and delivers it. Each task checks its
+    // runner back in even on the error path (an aborted run must never
+    // strand a waiter on a leaked runner). `try_for_each` makes rayon
+    // short-circuit on the first error → v1 "abort on first error".
+    let run: Result<(), SynthJobError> = pool.install(|| {
+        (0..total_tasks).into_par_iter().try_for_each(|_| {
+            let task = {
+                let mut pending = queue.lock().expect("task queue mutex unpoisoned");
+                if let Some((policy, epoch)) = &rescore {
+                    let now = epoch.load(Ordering::Relaxed);
+                    if now != epoch_seen.load(Ordering::Relaxed) {
+                        epoch_seen.store(now, Ordering::Relaxed);
+                        rescore_queue(&mut pending, policy, &views, &partials);
                     }
-                    let seg = AudioSegment {
-                        key: synthesized.cache_key.clone(),
-                        codec: synthesized.codec,
-                        bytes: synthesized.audio,
-                    };
-                    sink.deliver(synthesized.cache_key, seg)
-                        .map_err(SynthJobError::Sink)?;
                 }
-                Ok(())
-            })
-            .collect()
+                pending.pop_front()
+            };
+            let Some(task) = task else {
+                return Ok(());
+            };
+
+            // Claim the chunk: a re-scored queue may list a chunk that
+            // another worker already popped (claim races are skips).
+            if partials[task.para].slots[task.chunk]
+                .claimed
+                .swap(true, Ordering::AcqRel)
+            {
+                return Ok(());
+            }
+
+            let text = &planned[task.para].chunks[task.chunk];
+            let predicted = {
+                let mut runner = runner_pool.checkout();
+                let result = runner.predict(voice_model, text);
+                runner_pool.checkin(runner);
+                result
+            };
+            let wav = predicted.map_err(SynthJobError::Synth)?;
+
+            let partial = &partials[task.para];
+            {
+                let mut slot = partial.slots[task.chunk]
+                    .data
+                    .lock()
+                    .expect("chunk slot mutex unpoisoned");
+                *slot = Some(wav);
+            }
+            if partial.remaining.fetch_sub(1, Ordering::SeqCst) != 1 {
+                return Ok(());
+            }
+
+            // Last chunk in: assemble this paragraph's segment. All slots
+            // are filled (the countdown hit zero), so the takes cannot miss.
+            let wavs: Vec<Vec<u8>> = partial
+                .slots
+                .iter()
+                .map(|s| {
+                    s.data
+                        .lock()
+                        .expect("chunk slot mutex unpoisoned")
+                        .take()
+                        .expect("every chunk present when the countdown hits zero")
+                })
+                .collect();
+            let merged = concat_wav(&wavs);
+            let audio = encoder.encode(&merged).map_err(SynthJobError::Synth)?;
+            let seg = AudioSegment {
+                key: partial.key.clone(),
+                codec: encoder.codec(),
+                bytes: audio,
+            };
+            if let Some(p) = progress {
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                p.synth_step(n, total);
+            }
+            sink.deliver(partial.key.clone(), seg)
+                .map_err(SynthJobError::Sink)?;
+            Ok(())
+        })
     });
 
-    results.map(|_| ())
+    run
+}
+
+/// Rebuild the pending queue in the policy's current order: paragraphs the
+/// policy ranks first contribute their unclaimed, unfinished chunk tasks
+/// (paragraph-major, chunk order preserved). Called under the queue lock
+/// after an epoch change.
+fn rescore_queue(
+    queue: &mut std::collections::VecDeque<ChunkTask>,
+    policy: &ParagraphOrderPolicy,
+    views: &[ParagraphPlanView],
+    partials: &[PartialParagraph],
+) {
+    let order = policy(views);
+    queue.clear();
+    for &para in &order {
+        if partials[para].remaining.load(Ordering::SeqCst) == 0 {
+            continue;
+        }
+        for (chunk, slot) in partials[para].slots.iter().enumerate() {
+            if !slot.claimed.load(Ordering::Acquire) {
+                queue.push_back(ChunkTask { para, chunk });
+            }
+        }
+    }
 }
 
 /// Synthesize every paragraph across all chapters of `bundle` into a
@@ -224,11 +591,9 @@ where
 ///
 /// - `voice_id` is the cache-key namespace (and ends up in the manifest's
 ///   `book.voiceId`); `voice_model` is the resolved `.onnx` path on disk.
-/// - `make_runner` is called once **per chunk** to produce a runner owned by
-///   that chunk for its whole lifetime. The work list is split into at most
-///   `jobs` contiguous chunks (ceil(total/jobs) paragraphs each), so at most
-///   `jobs` runner constructions happen per run — the per-thread cost model
-///   model-loaded runners (sherpa) need. Production passes a closure
+/// - `make_runner` fires at most `min(jobs, chunk tasks)` times per run (one
+///   construction per fleet runner — the per-thread cost model
+///   model-loaded runners (sherpa) need). Production passes a closure
 ///   constructing from the piper binary path or the voice model; tests pass a
 ///   closure returning a stub runner.
 /// - `encoder` is shared by `&E` across all tasks (`encode(&self)` is
@@ -291,8 +656,9 @@ mod tests {
 
     use taletrek_synth::synth::{PiperRunner, SynthError};
     use taletrek_synth::{
-        cache_key, AudioCodec, AudioMeta, BookBundle, BookMeta, ChapterText, Generator, Manifest,
-        ManifestKind, WavPassthrough, NORM_VERSION,
+        cache_key, normalize_for_speech, split_for_speech, AudioCodec, AudioMeta, BookBundle,
+        BookMeta, ChapterText, Generator, Manifest, ManifestKind, WavPassthrough, MAX_SYNTH_CHARS,
+        NORM_VERSION,
     };
 
     use crate::Progress;
@@ -671,6 +1037,225 @@ mod tests {
 
     // ---- synth_paragraphs_into (sink engine — streaming-synth) ----
 
+    /// A runner that records every predicted chunk text with the thread it
+    /// ran on — the observability seam for the scheduling tests (LPT order,
+    /// work stealing).
+    struct SchedulingRecorder {
+        predicts: std::sync::Arc<std::sync::Mutex<Vec<(String, std::thread::ThreadId)>>>,
+        cap: usize,
+        delay: std::time::Duration,
+    }
+
+    impl PiperRunner for SchedulingRecorder {
+        fn predict(&mut self, _voice_model: &Path, text: &str) -> Result<Vec<u8>, SynthError> {
+            if !self.delay.is_zero() {
+                std::thread::sleep(self.delay);
+            }
+            self.predicts
+                .lock()
+                .unwrap()
+                .push((text.to_string(), std::thread::current().id()));
+            Ok(canonical_wav(&[0x01, 0x02, 0x03, 0x04]))
+        }
+
+        fn max_synth_chars(&self) -> usize {
+            self.cap
+        }
+    }
+
+    /// A text-only bundle from paragraph strings (chapter-count sentinel).
+    fn paragraphs_bundle(paragraphs: &[&str]) -> BookBundle {
+        text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            paragraphs.iter().map(|p| (*p).to_string()).collect(),
+        )])
+    }
+
+    #[test]
+    fn chunks_of_one_long_paragraph_span_multiple_workers() {
+        // Work-stealing proof (task 002): one very long paragraph (many
+        // sentence chunks) at jobs=2 must have its chunks predicted by ≥ 2
+        // distinct workers — the fine-grained units that kill the straggler
+        // tail. Under the old contiguous-chunk engine a paragraph belonged
+        // to exactly one worker.
+        let long = "Alpha beta gamma delta epsilon zeta. ".repeat(40);
+        let bundle = paragraphs_bundle(&[&long]);
+
+        let predicts: std::sync::Arc<std::sync::Mutex<Vec<(String, std::thread::ThreadId)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = predicts.clone();
+        let (sink, deliveries) = RecordingSink::new().into_sink();
+
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            move || SchedulingRecorder {
+                predicts: seen.clone(),
+                cap: 60,
+                delay: std::time::Duration::from_millis(1),
+            },
+            &WavPassthrough,
+            2,
+            None,
+            &sink,
+        )
+        .expect("stub runner succeeds");
+
+        assert_eq!(deliveries.lock().unwrap().len(), 1, "one paragraph");
+        let records = predicts.lock().unwrap();
+        assert!(
+            records.len() > 10,
+            "fixture must split into many chunks (got {})",
+            records.len()
+        );
+        let threads: std::collections::HashSet<_> = records.iter().map(|(_, t)| *t).collect();
+        assert!(
+            threads.len() >= 2,
+            "the long paragraph's chunks must span ≥ 2 workers, got {} ({} chunks)",
+            threads.len(),
+            records.len()
+        );
+    }
+
+    #[test]
+    fn lpt_dispatches_the_longest_paragraph_before_shorter_ones() {
+        // LPT (task 002): at jobs=1 the queue is drained in dispatch order,
+        // so the longest paragraph's chunks must be predicted before any
+        // shorter paragraph's chunks, and the shortest paragraph's chunk
+        // must come last.
+        let long = format!(
+            "{} ",
+            "The longest paragraph tells a long tale. ".repeat(20)
+        );
+        let medium = "A medium paragraph tells a shorter tale. ".repeat(3);
+        let short = "Tiny.";
+        let bundle = paragraphs_bundle(&[short, long.as_str(), medium.as_str()]);
+
+        let predicts: std::sync::Arc<std::sync::Mutex<Vec<(String, std::thread::ThreadId)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = predicts.clone();
+        let (sink, _) = RecordingSink::new().into_sink();
+
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            move || SchedulingRecorder {
+                predicts: seen.clone(),
+                cap: MAX_SYNTH_CHARS,
+                delay: std::time::Duration::ZERO,
+            },
+            &WavPassthrough,
+            1,
+            None,
+            &sink,
+        )
+        .expect("stub runner succeeds");
+
+        let records = predicts.lock().unwrap();
+        let first = &records.first().expect("at least one predict").0;
+        assert!(
+            first.starts_with("The longest"),
+            "the longest paragraph must be dispatched first, got {first:?}"
+        );
+        let last = &records.last().expect("records").0;
+        assert_eq!(
+            last, "Tiny.",
+            "the shortest paragraph must be dispatched last"
+        );
+    }
+
+    #[test]
+    fn planned_chunks_match_the_runner_cap_exactly() {
+        // Parity pin: the engine's upfront planning must split with the same
+        // cap the engine would apply per-paragraph (min(MAX_SYNTH_CHARS,
+        // runner cap)) — predicted chunk texts equal split_for_speech of the
+        // normalized paragraph under that cap, byte for byte.
+        let paragraphs = vec![
+            "Short one.".to_string(),
+            format!("{} ", "Capped runner splits this. ".repeat(30)),
+        ];
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            paragraphs.clone(),
+        )]);
+        let cap = 42;
+
+        let predicts: std::sync::Arc<std::sync::Mutex<Vec<(String, std::thread::ThreadId)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = predicts.clone();
+        let (sink, _) = RecordingSink::new().into_sink();
+
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            move || SchedulingRecorder {
+                predicts: seen.clone(),
+                cap,
+                delay: std::time::Duration::ZERO,
+            },
+            &WavPassthrough,
+            2,
+            None,
+            &sink,
+        )
+        .expect("stub runner succeeds");
+
+        let records = predicts.lock().unwrap();
+        let predicted: Vec<&str> = records.iter().map(|(t, _)| t.as_str()).collect();
+        let expected: Vec<String> = paragraphs
+            .iter()
+            .flat_map(|p| split_for_speech(&normalize_for_speech(p), MAX_SYNTH_CHARS.min(cap)))
+            .collect();
+        // LPT reorders paragraphs — compare as multisets of chunk texts.
+        let mut predicted_owned: Vec<String> = predicted.iter().map(|s| (*s).to_string()).collect();
+        let mut expected_sorted = expected.clone();
+        predicted_owned.sort();
+        expected_sorted.sort();
+        assert_eq!(
+            predicted_owned, expected_sorted,
+            "planned chunks must equal the cap'd split of every paragraph"
+        );
+    }
+
+    #[test]
+    fn cancelled_predict_unwinds_the_pool_as_typed_cancelled() {
+        // Cancel granularity is per chunk (task 002): a runner raising the
+        // cooperative Cancelled error aborts the run with the same typed
+        // error the hosts map to "Cancelled".
+        struct CancelAfterOne;
+        impl PiperRunner for CancelAfterOne {
+            fn predict(&mut self, _m: &Path, _t: &str) -> Result<Vec<u8>, SynthError> {
+                Err(SynthError::Cancelled)
+            }
+        }
+        let bundle = paragraphs_bundle(&["One.", "Two.", "Three."]);
+        let (sink, deliveries) = RecordingSink::new().into_sink();
+
+        let err = synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || CancelAfterOne,
+            &WavPassthrough,
+            2,
+            None,
+            &sink,
+        )
+        .expect_err("cancelled must abort");
+        assert!(
+            matches!(err, SynthJobError::Synth(SynthError::Cancelled)),
+            "expected Synth(Cancelled), got {err:?}"
+        );
+        assert!(deliveries.lock().unwrap().is_empty());
+    }
+
     /// A recording sink: captures `(key, bytes-len)` per delivery. Fallibility
     /// is opt-in via `fail_after` — deliveries beyond that count return a
     /// `BundleError`, exercising the abort path.
@@ -689,7 +1274,7 @@ mod tests {
             }
         }
 
-        fn into_sink(self) -> (SegmentSink, Deliveries) {
+        fn into_sink(self) -> (SegmentSink<'static>, Deliveries) {
             let deliveries = self.deliveries.clone();
             let fail_after = self.fail_after;
             let sink = SegmentSink::new(move |key, seg| {
@@ -709,11 +1294,10 @@ mod tests {
     }
 
     #[test]
-    fn sink_engine_delivers_every_occurrence_dupes_included() {
-        // Dedup is the SINK's job now: the engine synthesizes and delivers
-        // every paragraph occurrence, so two identical paragraphs produce two
-        // deliveries (the recording sink sees both; a HashMap sink collapses
-        // them — pinned by the wrapper tests above).
+    fn sink_engine_delivers_each_distinct_key_exactly_once() {
+        // Dedup pre-pass (task 003): the engine synthesizes each distinct
+        // cache key once — two identical paragraphs produce ONE delivery
+        // (previously one per occurrence, with the sink left to collapse).
         let bundle = text_only_bundle(vec![ChapterText::new(
             "bk_test",
             0,
@@ -735,16 +1319,17 @@ mod tests {
         .expect("stub runner succeeds");
 
         let seen = deliveries.lock().unwrap();
-        assert_eq!(seen.len(), 3, "one delivery per paragraph occurrence");
-        // Delivery ORDER across parallel chunks is nondeterministic (the sink
-        // serializes but does not order) — assert the delivery multiset: the
-        // repeated paragraph delivered twice, the unique one once.
+        assert_eq!(
+            seen.len(),
+            2,
+            "one delivery per DISTINCT key (dupes pre-collapsed by the engine)"
+        );
         let repeat_key = cache_key("v", "Repeat me.");
         let unique_key = cache_key("v", "Unique.");
         assert_eq!(
             seen.iter().filter(|(k, _)| *k == repeat_key).count(),
-            2,
-            "identical paragraphs deliver every occurrence (dedup is the sink's)"
+            1,
+            "the repeated paragraph delivers once"
         );
         assert_eq!(
             seen.iter().filter(|(k, _)| *k == unique_key).count(),
@@ -756,6 +1341,81 @@ mod tests {
             canonical_wav(&[0x01, 0x02, 0x03, 0x04]).len(),
             "segments carry the synthesized bytes"
         );
+    }
+
+    #[test]
+    fn duplicates_synthesize_one_predict_set_per_distinct_chunk_set() {
+        // The predict-level proof: [A, B, A, A] with a recording runner →
+        // predicts exactly == A's chunks + B's chunks (A's set once, not
+        // three times), whatever the cap splits them into.
+        let a = format!("{} ", "The repeated paragraph says this. ".repeat(20));
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec![a.clone(), "Tiny one.".into(), a.clone(), a.clone()],
+        )]);
+
+        let predicts: std::sync::Arc<std::sync::Mutex<Vec<(String, std::thread::ThreadId)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = predicts.clone();
+        let (sink, deliveries) = RecordingSink::new().into_sink();
+
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            move || SchedulingRecorder {
+                predicts: seen.clone(),
+                cap: 60,
+                delay: std::time::Duration::from_millis(1),
+            },
+            &WavPassthrough,
+            2,
+            None,
+            &sink,
+        )
+        .expect("stub runner succeeds");
+
+        let a_chunks = split_for_speech(&normalize_for_speech(&a), 60).len();
+        let records = predicts.lock().unwrap();
+        assert_eq!(
+            records.len(),
+            a_chunks + 1,
+            "A's chunk set once ({a_chunks}) + B's single chunk"
+        );
+        assert_eq!(deliveries.lock().unwrap().len(), 2, "one delivery per key");
+    }
+
+    #[test]
+    fn progress_total_is_the_distinct_segment_count() {
+        // Progress semantics (task 003): total = distinct keys, so hosts'
+        // percentage rendering stays correct with no change. [A, B, A] →
+        // two synth steps over total 2.
+        let bundle = text_only_bundle(vec![ChapterText::new(
+            "bk_test",
+            0,
+            "Ch",
+            vec!["One.".into(), "Two.".into(), "One.".into()],
+        )]);
+
+        let captured = Captured::default();
+        let progress = Progress::new(Box::new(captured.clone()));
+        let (sink, _) = RecordingSink::new().into_sink();
+
+        synth_paragraphs_into(
+            &bundle,
+            "v",
+            Path::new("/dev/null"),
+            || StubRunner,
+            &WavPassthrough,
+            1, // deterministic step order
+            Some(&progress),
+            &sink,
+        )
+        .expect("synth succeeds");
+
+        assert_eq!(captured.take(), "synth [1/2] 50%\nsynth [2/2] 100%\n");
     }
 
     #[test]

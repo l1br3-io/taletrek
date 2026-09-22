@@ -29,7 +29,7 @@ use anyhow::bail;
 use anyhow::Result;
 
 use taletrek_synth::synth::{PiperRunner, SynthError};
-use taletrek_synth::{Encoder, OpusEncoder, SubprocessPiperRunner};
+use taletrek_synth::{Encoder, OpusEncoder, SubprocessPiperRunner, MAX_SYNTH_CHARS};
 
 /// Default `--jobs` for the in-process engine. T3's memory note: each runner
 /// holds a loaded ONNX model (~237 MB for the first incl. runtime init, ~212
@@ -195,6 +195,16 @@ impl PiperRunner for DesktopRunner {
             Inner::Piper(r) => r.predict(voice_model, text),
         }
     }
+
+    /// Forward the selected engine's cap — the sherpa bound must survive the
+    /// lazy wrapper, because split planning asks before any model loads.
+    fn max_synth_chars(&self) -> usize {
+        match &self.spec {
+            #[cfg(feature = "sherpa")]
+            RunnerSpec::Native => taletrek_synth::SHERPA_MAX_SYNTH_CHARS,
+            RunnerSpec::Piper(_) => MAX_SYNTH_CHARS,
+        }
+    }
 }
 
 /// Construct the sherpa runner over `voice_model`: espeak-ng-data at
@@ -326,5 +336,36 @@ mod tests {
         assert!(runner
             .predict(Path::new("/nonexistent/voice.onnx"), "hello")
             .is_err());
+    }
+
+    #[test]
+    fn native_runner_forwards_the_sherpa_chunk_cap_before_construction() {
+        // The arena bound (sherpa's 120-char cap, SHERPA_MAX_SYNTH_CHARS) must
+        // be visible through the lazy wrapper BEFORE the inner runner exists —
+        // split planning happens ahead of first predict. A wrapper that
+        // reported the trait default (400) would let 400-char chunks snap the
+        // ORT arena to its high-water mark (the LMK crash class).
+        let spec = RunnerSpec::select(None).expect("native default");
+        let runner = DesktopRunner::new(spec, Path::new("/nonexistent/voice.onnx"));
+        assert!(
+            runner.inner.is_none(),
+            "cap must be answerable without constructing the engine"
+        );
+        assert_eq!(
+            runner.max_synth_chars(),
+            taletrek_synth::SHERPA_MAX_SYNTH_CHARS
+        );
+        assert_eq!(runner.max_synth_chars(), 120);
+    }
+
+    #[test]
+    fn piper_runner_keeps_the_default_chunk_cap() {
+        let spec = RunnerSpec::select(Some("piper")).expect("subprocess");
+        let runner = DesktopRunner::new(spec, Path::new("/dev/null"));
+        assert_eq!(
+            runner.max_synth_chars(),
+            taletrek_synth::MAX_SYNTH_CHARS,
+            "subprocess piper keeps the 400-char default"
+        );
     }
 }
