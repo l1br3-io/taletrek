@@ -90,11 +90,11 @@ final class SynthEngineTests: XCTestCase {
         XCTAssertEqual(controller.state, .preparing(chapters: 1, paragraphs: 2))
         observer.onPipelineEvent(event: .downloadStep(bytesDone: 10, bytesTotal: 100))
         XCTAssertEqual(controller.state, .downloadingVoice(done: 10, total: 100))
-        observer.onPipelineEvent(event: .phase(phase: .synthesizing))
+        observer.onPipelineEvent(event: .phase(.synthesizing))
         XCTAssertEqual(controller.state, .synthesizing(done: 0, total: 0))
         observer.onPipelineEvent(event: .synthStep(done: 1, total: 2))
         XCTAssertEqual(controller.state, .synthesizing(done: 1, total: 2))
-        observer.onPipelineEvent(event: .phase(phase: .writing))
+        observer.onPipelineEvent(event: .phase(.writing))
         XCTAssertEqual(controller.state, .writing)
     }
 
@@ -136,7 +136,7 @@ final class SynthEngineTests: XCTestCase {
         XCTAssertEqual(engine.configs.count, 2)
         waitUntil("retry is running") { controller.state.isRunningPhase }
 
-        engine.onTerminal?(.finished(outcome: fixtureOutcome))
+        engine.onTerminal?(.finished(fixtureOutcome))
         waitUntil("the retry finished") { controller.state != .interrupted && !controller.state.isRunningPhase }
         if case .done = controller.state {} else {
             XCTFail("expected done, got \(controller.state)")
@@ -171,7 +171,7 @@ final class SynthEngineTests: XCTestCase {
         }
 
         XCTAssertTrue(controller.retry())
-        engine.onTerminal?(.finished(outcome: fixtureOutcome))
+        engine.onTerminal?(.finished(fixtureOutcome))
         waitUntil("done") {
             if case .done = controller.state { return true }
             return false
@@ -186,7 +186,7 @@ final class SynthEngineTests: XCTestCase {
         let signaled = expectation(description: "onFinished fired")
         controller.onFinished = { signaled.fulfill() }
 
-        engine.onTerminal?(.finished(outcome: fixtureOutcome))
+        engine.onTerminal?(.finished(fixtureOutcome))
         wait(for: [signaled], timeout: 5)
     }
 
