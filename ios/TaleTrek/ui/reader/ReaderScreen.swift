@@ -15,9 +15,22 @@ struct ReaderScreen: View {
     @State private var outlineOpen = false
     @Environment(\.scenePhase) private var scenePhase
 
-    init(path: String, store: PositionStore = .standard, onBack: @escaping () -> Void) {
-        _viewModel = StateObject(wrappedValue: ReaderViewModel(path: path, store: store))
+    /// The convert-side seams the filling-book reader needs: whether a
+    /// synth job is live (the not-ready hold's liveness), the live
+    /// job's anchor-mover, and the resume affordance's action. Defaults
+    /// inert (no live job — a sealed book never consults them).
+    init(
+        path: String,
+        store: PositionStore = .standard,
+        jobAlive: @escaping () -> Bool = { false },
+        onAnchorMoved: ((FfiAnchor) -> Void)? = nil,
+        onResumePreparing: (() -> Void)? = nil,
+        onBack: @escaping () -> Void
+    ) {
+        _viewModel = StateObject(wrappedValue: ReaderViewModel(path: path, store: store, jobAlive: jobAlive))
         self.onBack = onBack
+        _viewModel.wrappedValue.onAnchorMoved = onAnchorMoved
+        _viewModel.wrappedValue.onResumePreparing = onResumePreparing
     }
 
     var body: some View {
@@ -99,7 +112,21 @@ struct ReaderScreen: View {
         } else {
             VStack(spacing: 0) {
                 chapterPane(state)
-                if state.skipped > 0 {
+                if state.audioStalled {
+                    HStack(spacing: 12) {
+                        Text("Audio stopped preparing")
+                            .font(.caption)
+                            .foregroundStyle(Theme.muted)
+                        Button("Resume preparing audio") {
+                            viewModel.resumePreparingAudio()
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityIdentifier("resume-preparing")
+                    }
+                    .padding(.top, 4)
+                } else if state.skipped > 0 {
                     Text(
                         "\(state.skipped) segment\(state.skipped == 1 ? "" : "s") skipped — continuing"
                     )

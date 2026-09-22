@@ -170,6 +170,37 @@ final class PlaybackBridgeTests: XCTestCase {
         XCTAssertEqual(port.loads.map(\.key), ["k-One.", "k-Two."], "playback continues")
     }
 
+    func testTheTypedNotReadyStallsInsteadOfSkipping() {
+        let book = book(texts: ["One.", "Two."])
+        let port = RecordingPort()
+        let bridge = makeBridge(book, port: port, session: StubSession())
+
+        bridge.userPlay()
+        XCTAssertEqual(port.loads.count, 1)
+
+        var stallReports: [Bool] = []
+        bridge.onStallChanged = { stallReports.append($0) }
+
+        bridge.onSegmentFailed(key: "k-One.", error: SegmentNotReady.errorMarker)
+
+        XCTAssertEqual(bridge.snapshot.status, .paused, "parked paused — the kernel's own transition")
+        XCTAssertEqual(
+            bridge.snapshot.para?.index,
+            0,
+            "never the skip path — the paragraph holds"
+        )
+        XCTAssertEqual(bridge.snapshot.failures.skipped, 0, "nothing failed in the kernel's eyes")
+        XCTAssertEqual(port.stops, 1, "the pause ordered the stop")
+        XCTAssertTrue(bridge.stalled, "the resume affordance's fact")
+        XCTAssertEqual(stallReports, [true])
+
+        // Recovery: the resumed job's load lands — the stall clears on
+        // the ready ack, never touching the kernel.
+        bridge.onReady(key: "k-One.")
+        XCTAssertFalse(bridge.stalled)
+        XCTAssertEqual(stallReports, [true, false])
+    }
+
     func testASessionActivationFailureDrainsThroughTheSkipPathToBookEnd() {
         let book = book(texts: ["One.", "Two."])
         let port = RecordingPort()

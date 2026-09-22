@@ -32,6 +32,7 @@
 		AA0000000000000000000035 /* KernelSmokeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000029 /* KernelSmokeTest.swift */; };
 		AA0000000000000000000036 /* book-playable.taletrek in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000028 /* book-playable.taletrek */; };
 		AA0000000000000000000050 /* PlayerBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000040 /* PlayerBridge.swift */; };
+		AA00000000000000000000CE /* ProgressiveSegmentSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000CD /* ProgressiveSegmentSource.swift */; };
 		AA0000000000000000000051 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000041 /* AudioEngine.swift */; };
 		AA0000000000000000000052 /* AudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000042 /* AudioSession.swift */; };
 		AA0000000000000000000053 /* PlaybackBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000043 /* PlaybackBridgeTests.swift */; };
@@ -94,6 +95,7 @@
 		AA0000000000000000000028 /* book-playable.taletrek */ = {isa = PBXFileReference; lastKnownFileType = file; name = book-playable.taletrek; path = ../crates/synth/tests/fixtures/book-playable.taletrek; sourceTree = SOURCE_ROOT; };
 		AA0000000000000000000029 /* KernelSmokeTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KernelSmokeTest.swift; sourceTree = "<group>"; };
 		AA0000000000000000000040 /* PlayerBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerBridge.swift; sourceTree = "<group>"; };
+		AA00000000000000000000CD /* ProgressiveSegmentSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressiveSegmentSource.swift; sourceTree = "<group>"; };
 		AA0000000000000000000041 /* AudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngine.swift; sourceTree = "<group>"; };
 		AA0000000000000000000042 /* AudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSession.swift; sourceTree = "<group>"; };
 		AA0000000000000000000043 /* PlaybackBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackBridgeTests.swift; sourceTree = "<group>"; };
@@ -250,6 +252,7 @@
 				AA0000000000000000000041 /* AudioEngine.swift */,
 				AA0000000000000000000042 /* AudioSession.swift */,
 				AA000000000000000000007C /* NowPlayingController.swift */,
+				AA00000000000000000000CD /* ProgressiveSegmentSource.swift */,
 			);
 			path = playback;
 			sourceTree = "<group>";
@@ -451,6 +454,7 @@
 				AA0000000000000000000050 /* PlayerBridge.swift in Sources */,
 				AA0000000000000000000051 /* AudioEngine.swift in Sources */,
 				AA0000000000000000000052 /* AudioSession.swift in Sources */,
+				AA00000000000000000000CE /* ProgressiveSegmentSource.swift in Sources */,
 				AA0000000000000000000070 /* ReaderViewModel.swift in Sources */,
 				AA0000000000000000000071 /* ReaderScreen.swift in Sources */,
 				AA0000000000000000000072 /* TransportBar.swift in Sources */,

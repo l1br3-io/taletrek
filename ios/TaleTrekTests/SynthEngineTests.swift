@@ -13,6 +13,7 @@ final class SynthEngineTests: XCTestCase {
         var observer: PipelineObserver?
         var onTerminal: ((FfiPipelineState) -> Void)?
         private(set) var cancels = 0
+        private(set) var anchors: [FfiAnchor] = []
 
         func start(
             config: FfiPipelineConfig,
@@ -26,6 +27,10 @@ final class SynthEngineTests: XCTestCase {
 
         func cancel() {
             cancels += 1
+        }
+
+        func reanchor(_ anchor: FfiAnchor) {
+            anchors.append(anchor)
         }
     }
 
@@ -80,14 +85,20 @@ final class SynthEngineTests: XCTestCase {
 
         let config = try XCTUnwrap(engine.configs.first)
         XCTAssertEqual(config.hint, "story.txt")
-        XCTAssertFalse(config.textOnly, "iOS only ever submits the full audio job")
+        XCTAssertFalse(config.textOnly, "iOS only ever submits the audio job")
         XCTAssertNil(config.voiceId, "nil = the kernel's default voice")
         XCTAssertEqual(config.jobs, 2)
         XCTAssertEqual(config.generatorApp, "taletrek-ios")
         XCTAssertEqual(config.voiceCacheDir, "/v")
         XCTAssertEqual(config.espeakDir, "/e")
         XCTAssertEqual(config.booksDir, "/b")
-        XCTAssertTrue(config.sourcePath.contains("taletrek-sources"))
+        XCTAssertEqual(
+            config.progressive?.storeDir,
+            ImportDirs.standardStoreDir,
+            "every source import converts progressively — the store is the resume source"
+        )
+        XCTAssertNil(config.progressive?.initialAnchor, "no stored position: the book start")
+        XCTAssertTrue(config.sourcePath.contains("taletrek/sources"))
 
         XCTAssertEqual(controller.state, .preparing(chapters: nil, paragraphs: nil))
 
@@ -108,8 +119,20 @@ final class SynthEngineTests: XCTestCase {
         waitUntil("synth progress maps") {
             controller.state == .synthesizing(done: 1, total: 2)
         }
-        observer.onPipelineEvent(event: .phase(.writing))
-        waitUntil("writing phase maps") { controller.state == .writing }
+        // Playable flips the currency: the book is listenable, the rest
+        // of the run renders as filling.
+        observer.onPipelineEvent(event: .playable)
+        waitUntil("the playable flip lands") {
+            controller.state == .filling(done: 1, total: 2)
+        }
+        observer.onPipelineEvent(event: .synthStep(done: 2, total: 2))
+        waitUntil("filling progress maps") {
+            controller.state == .filling(done: 2, total: 2)
+        }
+        observer.onPipelineEvent(event: .phase(.sealing))
+        waitUntil("the seal renders as writing") { controller.state == .writing }
+        observer.onPipelineEvent(event: .sealed)
+        waitUntil("sealed still renders as writing") { controller.state == .writing }
     }
 
     func testSubmitWhileRunningIsRejected() throws {
@@ -204,6 +227,129 @@ final class SynthEngineTests: XCTestCase {
         wait(for: [signaled], timeout: 5)
     }
 
+    func testReanchorMovesTheLiveJobOnlyWhileRunning() throws {
+        let engine = FakeEngine()
+        let controller = SynthController(engine: engine, armer: FakeArmer())
+
+        controller.reanchor(FfiAnchor(chapter: 1, paragraph: 2))
+        XCTAssertEqual(engine.anchors, [], "idle: no job to aim")
+
+        XCTAssertTrue(controller.submit(source: try makeSource(), dirs: dirs))
+        controller.reanchor(FfiAnchor(chapter: 1, paragraph: 2))
+        controller.reanchor(FfiAnchor(chapter: 3, paragraph: 0))
+        XCTAssertEqual(
+            engine.anchors,
+            [FfiAnchor(chapter: 1, paragraph: 2), FfiAnchor(chapter: 3, paragraph: 0)],
+            "the anchor follows the playhead while the job fills"
+        )
+
+        engine.onTerminal?(.finished(fixtureOutcome))
+        waitUntil("done") {
+            if case .done = controller.state { return true }
+            return false
+        }
+        controller.reanchor(FfiAnchor(chapter: 0, paragraph: 0))
+        XCTAssertEqual(engine.anchors.count, 2, "terminal: the anchor seam goes quiet")
+    }
+
+    func testThePendingRecordRoundTripsTheRequest() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = SynthController.pendingRecordURL(booksDir: dir.path)
+
+        let request = SynthJobRequest(
+            sourcePath: "/cache/story.txt",
+            hint: "story.txt",
+            voiceId: nil,
+            voiceCacheDir: "/v",
+            espeakDir: "/e",
+            booksDir: dir.path,
+            storeDir: "/store",
+            initialAnchor: FfiAnchor(chapter: 1, paragraph: 4),
+            jobs: 2,
+            generatorApp: "taletrek-ios"
+        )
+        PendingImport.save(url, request)
+        XCTAssertEqual(PendingImport.load(url)?.request, request)
+
+        PendingImport.clear(url)
+        XCTAssertNil(PendingImport.load(url))
+    }
+
+    func testSubmitPersistsThePendingRecordAndTerminalsClearIt() throws {
+        let booksDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("books-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: booksDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: booksDir) }
+        let recordURL = SynthController.pendingRecordURL(booksDir: booksDir.path)
+
+        let engine = FakeEngine()
+        let controller = SynthController(engine: engine, armer: FakeArmer())
+        let dirs = ImportDirs(voiceCacheDir: "/v", espeakDir: "/e", booksDir: booksDir.path)
+        XCTAssertTrue(controller.submit(source: try makeSource(), dirs: dirs))
+        XCTAssertNotNil(PendingImport.load(recordURL), "the job survives process death on disk")
+
+        engine.onTerminal?(.finished(fixtureOutcome))
+        waitUntil("done") {
+            if case .done = controller.state { return true }
+            return false
+        }
+        XCTAssertNil(PendingImport.load(recordURL), "a terminal job is no longer pending")
+    }
+
+    func testResumePendingResubmitsOrClearsOnEviction() throws {
+        let booksDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("books-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: booksDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: booksDir) }
+        let recordURL = SynthController.pendingRecordURL(booksDir: booksDir.path)
+
+        // An evicted staged source clears the record without a job.
+        PendingImport.save(
+            recordURL,
+            SynthJobRequest(
+                sourcePath: booksDir.appendingPathComponent("gone.txt").path,
+                hint: "gone.txt",
+                voiceId: nil,
+                voiceCacheDir: "/v",
+                espeakDir: "/e",
+                booksDir: booksDir.path,
+                storeDir: "/store",
+                initialAnchor: nil,
+                jobs: 2,
+                generatorApp: "taletrek-ios"
+            )
+        )
+        let engine = FakeEngine()
+        let controller = SynthController(engine: engine, armer: FakeArmer())
+        controller.resumePending(booksDir: booksDir)
+        XCTAssertTrue(engine.configs.isEmpty, "nothing to resume from")
+        XCTAssertNil(PendingImport.load(recordURL))
+
+        // A surviving staged source re-submits — the same request,
+        // store-hit keys skip (the kernel's guarantee).
+        let staged = try makeSource()
+        let request = SynthJobRequest(
+            sourcePath: staged.path,
+            hint: "story.txt",
+            voiceId: nil,
+            voiceCacheDir: "/v",
+            espeakDir: "/e",
+            booksDir: booksDir.path,
+            storeDir: "/store",
+            initialAnchor: nil,
+            jobs: 2,
+            generatorApp: "taletrek-ios"
+        )
+        PendingImport.save(recordURL, request)
+        controller.resumePending(booksDir: booksDir)
+        XCTAssertEqual(engine.configs.count, 1)
+        XCTAssertEqual(engine.configs.first?.sourcePath, staged.path)
+        XCTAssertEqual(controller.state, .preparing(chapters: nil, paragraphs: nil))
+    }
+
     private var fixtureOutcome: FfiPipelineOutcome {
         FfiPipelineOutcome(
             bookId: "bk_x",
@@ -246,6 +392,8 @@ final class SynthPipelineIntegrationTests: XCTestCase {
             voiceCacheDir: booksDir.appendingPathComponent("voices").path,
             espeakDir: booksDir.appendingPathComponent("espeak-ng-data").path,
             booksDir: booksDir.path,
+            storeDir: booksDir.appendingPathComponent("store").path,
+            initialAnchor: nil,
             jobs: jobs,
             generatorApp: "taletrek-ios"
         )

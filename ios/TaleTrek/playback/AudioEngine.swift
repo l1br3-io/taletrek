@@ -71,9 +71,27 @@ typealias SegmentDecoder = (_ path: String, _ key: String) throws -> FfiDecodedA
 /// that left the engine before a command landed) and the kernel's
 /// defensive machine beneath both, a stale drain for a re-loaded
 /// identical segment is unrepresentable rather than merely unlikely.
+///
+/// # The not-ready hold (progressive books)
+///
+/// A filling book's decoder throws [`SegmentNotReady`] for segments the
+/// live job has not landed yet. The engine holds the load —
+/// re-attempting off the queue (`asyncAfter`, so port commands stay
+/// serviced) at a fixed cadence while `mayStillLand` says a job could
+/// still land it — then reports the **typed** not-ready failure (the
+/// bridge's resume affordance; never the kernel's skip). Generation
+/// checks every hop make a superseded hold vanish silently.
 final class AudioEngine: AudioPort {
     private let path: String
     private let decoder: SegmentDecoder
+
+    /// Whether a synth job that could still land a not-ready segment is
+    /// running — the not-ready hold's liveness seam (production: the
+    /// convert controller's running phase).
+    private let mayStillLand: () -> Bool
+
+    /// The not-ready re-attempt cadence.
+    private let holdInterval: TimeInterval = 0.25
 
     /// Serializes decode, graph edits, scheduling, and every callback
     /// emission — the engine's sole-sender discipline.
@@ -95,17 +113,33 @@ final class AudioEngine: AudioPort {
     /// in order, with their scheduled offsets.
     private var appliedLoads: [(key: String, offset: Double)] = []
 
-    init(path: String, decoder: @escaping SegmentDecoder) {
+    init(
+        path: String,
+        decoder: @escaping SegmentDecoder,
+        mayStillLand: @escaping () -> Bool = { false }
+    ) {
         self.path = path
         self.decoder = decoder
+        self.mayStillLand = mayStillLand
         engine.attach(node)
     }
 
-    /// Convenience initializer over the kernel's real decode hop.
+    /// Convenience initializer over the kernel's batch decode hop (the
+    /// sealed-bundle shape the walk tests and fresh-run prove).
     convenience init(path: String) {
         self.init(path: path) { bundlePath, key in
             try decodeSegment(path: bundlePath, key: key)
         }
+    }
+
+    /// Convenience initializer over the progressive source
+    /// (store-aware read + bytes decode + the not-ready hold) — the
+    /// production wiring; `jobAlive` is the hold's liveness seam.
+    convenience init(path: String, jobAlive: @escaping () -> Bool) {
+        let source = ProgressiveSegmentSource()
+        self.init(path: path, decoder: { bundlePath, key in
+            try source.decoder(path: bundlePath, key: key)
+        }, mayStillLand: jobAlive)
     }
 
     /// Wire the bridge this engine reports into (constructed before the
@@ -119,18 +153,36 @@ final class AudioEngine: AudioPort {
             guard let self else { return }
             self.generation &+= 1
             let gen = self.generation
-            do {
-                guard let audio = try self.decoder(self.path, key) else {
-                    self.deliver(.failed(key: key, error: "segment missing from bundle"), gen)
-                    return
-                }
-                guard gen == self.generation else { return }
-                try self.schedule(audio: audio, key: key, offset: offset, generation: gen)
-                self.appliedLoads.append((key: key, offset: offset))
-                self.deliver(.ready(key: key), gen)
-            } catch {
-                self.deliver(.failed(key: key, error: "\(error)"), gen)
+            self.attemptLoad(key: key, offset: offset, generation: gen)
+        }
+    }
+
+    /// One decode attempt (queue-only). A not-ready segment re-arms
+    /// itself off the queue (`asyncAfter` keeps commands serviced);
+    /// generation checks every hop make a superseded hold vanish.
+    private func attemptLoad(key: String, offset: Double, generation gen: Int) {
+        guard gen == generation else { return }
+        do {
+            guard let audio = try self.decoder(self.path, key) else {
+                self.deliver(.failed(key: key, error: "segment missing from bundle"), gen)
+                return
             }
+            guard gen == generation else { return }
+            try self.schedule(audio: audio, key: key, offset: offset, generation: gen)
+            self.appliedLoads.append((key: key, offset: offset))
+            self.deliver(.ready(key: key), gen)
+        } catch let notReady as SegmentNotReady {
+            if mayStillLand() {
+                queue.asyncAfter(deadline: .now() + holdInterval) { [weak self] in
+                    self?.attemptLoad(key: key, offset: offset, generation: gen)
+                }
+            } else {
+                // The typed not-ready — the bridge's resume affordance,
+                // never the kernel's skip.
+                self.deliver(.failed(key: key, error: SegmentNotReady.errorMarker), gen)
+            }
+        } catch {
+            self.deliver(.failed(key: key, error: "\(error)"), gen)
         }
     }
 

@@ -87,6 +87,7 @@ final class BooksRepoTests: XCTestCase {
                 BookShelf(
                     bookId: "bk_sample",
                     title: "Sample Book",
+                    author: nil,
                     chapterCount: 2,
                     audioPresent: true,
                     path: booksDir.appendingPathComponent("bk_sample.taletrek").path
@@ -152,5 +153,179 @@ final class BooksRepoTests: XCTestCase {
         )
         XCTAssertNil(store.load(storageKey: key), "the orphaned position goes with the file")
         XCTAssertEqual(repo.state.books, [])
+    }
+
+    // --- search (android-export-search parity) ----------------------------
+
+    private func shelf(_ title: String, author: String? = nil) -> BookShelf {
+        BookShelf(
+            bookId: "bk_\(title)",
+            title: title,
+            author: author,
+            chapterCount: 1,
+            audioPresent: true,
+            path: "/b/\(title).taletrek"
+        )
+    }
+
+    func testSearchMatchesTitleAndAuthorCaseInsensitively() {
+        let dune = shelf("Dune", author: "Frank Herbert")
+        let messiah = shelf("Dune Messiah", author: "Frank Herbert")
+        let martian = shelf("The Martian", author: "Andy Weir")
+
+        XCTAssertTrue(dune.matches(query: "dune"), "title, case-insensitive")
+        XCTAssertTrue(messiah.matches(query: "DUNE"), "substring, either side")
+        XCTAssertTrue(dune.matches(query: "  herbert  "), "author, whitespace-tolerant")
+        XCTAssertTrue(martian.matches(query: "weir"), "author match")
+        XCTAssertFalse(martian.matches(query: "herbert"))
+        XCTAssertTrue(dune.matches(query: ""), "empty query = the full shelf")
+        XCTAssertTrue(dune.matches(query: "   "), "blank query = the full shelf")
+        XCTAssertFalse(dune.matches(query: "arrakis"))
+    }
+
+    func testFilteredBooksDerivesTheShelfUnderTheQuery() throws {
+        try copyFixture("book-playable", as: "bk_sample.taletrek")
+        let repo = BooksRepository(booksDir: booksDir, positions: store)
+
+        XCTAssertEqual(repo.filteredBooks("").count, 1, "empty query keeps the shelf")
+        XCTAssertEqual(repo.filteredBooks("sample").map(\.bookId), ["bk_sample"], "title hit")
+        XCTAssertEqual(repo.filteredBooks("nobody wrote this"), [], "no-match shelf is empty")
+    }
+
+    // --- export ------------------------------------------------------------
+
+    func testMergedAudioExportProducesOneNonEmptyOpus() throws {
+        try copyFixture("book-playable", as: "bk_sample.taletrek")
+        let repo = BooksRepository(booksDir: booksDir, positions: store)
+        let row = try XCTUnwrap(repo.state.books.first)
+
+        let exported = expectation(description: "merged audio prepared")
+        var prepared: URL?
+        repo.prepareAudioExport(row) { url in
+            prepared = url
+            exported.fulfill()
+        }
+        wait(for: [exported], timeout: 30)
+
+        let url = try XCTUnwrap(prepared, "the remux hands back its artifact")
+        XCTAssertEqual(url.lastPathComponent, "bk_sample.opus")
+        XCTAssertTrue(
+            url.path.hasPrefix(BooksRepository.exportsDir.path),
+            "merged audio lands under Caches/exports/"
+        )
+        let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int
+        XCTAssertGreaterThan(size ?? 0, 0, "the merged .opus is non-empty")
+        XCTAssertNil(repo.lastExportFailure)
+        XCTAssertNil(repo.exportingBookId, "the transient state clears")
+
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    func testFailedAudioExportSurfacesTypedFailureAndClearsTheSlot() throws {
+        // A corrupt "bundle" the scan already skipped — prepare it by
+        // hand through the same seam with a bogus path.
+        let repo = BooksRepository(booksDir: booksDir, positions: store)
+        let ghost = BookShelf(
+            bookId: "bk_ghost",
+            title: "Ghost",
+            author: nil,
+            chapterCount: 1,
+            audioPresent: true,
+            path: booksDir.appendingPathComponent("missing.taletrek").path
+        )
+
+        let failed = expectation(description: "failure surfaced")
+        var prepared: URL?
+        repo.prepareAudioExport(ghost) { url in
+            prepared = url
+            failed.fulfill()
+        }
+        wait(for: [failed], timeout: 30)
+
+        XCTAssertNil(prepared, "a failed remux produces nothing")
+        XCTAssertNotNil(repo.lastExportFailure, "the typed failure surfaces")
+        XCTAssertNil(repo.exportingBookId, "the slot frees for the next try")
+    }
+
+    // --- filling rows + convert card (android parity derivations) ------
+
+    private func fillingShelf(audio: Bool = false) -> BookShelf {
+        BookShelf(
+            bookId: "bk_f",
+            title: "Filling",
+            author: nil,
+            chapterCount: 1,
+            audioPresent: audio,
+            path: "/b/bk_f.taletrek"
+        )
+    }
+
+    func testFillingRowDerivationMatchesTheParityRules() {
+        let book = fillingShelf()
+        let live: SynthUiState = .synthesizing(done: 3, total: 9)
+
+        XCTAssertEqual(
+            fillingRowUi(book: fillingShelf(audio: true), active: live, preExistingPaths: []),
+            FillingRowUi(),
+            "an audio row is never filling"
+        )
+        XCTAssertEqual(
+            fillingRowUi(book: book, active: .idle, preExistingPaths: []),
+            FillingRowUi(),
+            "no live job: neutral"
+        )
+        XCTAssertEqual(
+            fillingRowUi(book: book, active: live, preExistingPaths: [book.path]),
+            FillingRowUi(),
+            "a pre-existing text-only import stays neutral"
+        )
+        XCTAssertEqual(
+            fillingRowUi(book: book, active: live, preExistingPaths: []).detail,
+            "Preparing audio · 3 of 9 paragraphs",
+            "a row the live job wrote renders the fill progress"
+        )
+        XCTAssertEqual(
+            fillingRowUi(book: book, active: .filling(done: 9, total: 9), preExistingPaths: []).detail,
+            "Preparing audio · 9 of 9 paragraphs",
+            "filling carries the same currency post-Playable"
+        )
+        XCTAssertNil(
+            fillingRowUi(book: book, active: .synthesizing(done: 0, total: 0), preExistingPaths: []).detail,
+            "unknown totals render without the counts"
+        )
+        XCTAssertEqual(
+            fillingRowUi(book: book, active: .downloadingVoice(done: 1, total: 2), preExistingPaths: []).detail,
+            nil,
+            "non-synth phases carry no paragraph counts"
+        )
+    }
+
+    func testConvertCardVisibilityFollowsOneRowPerBook() {
+        XCTAssertEqual(convertCardVisible(state: nil, fillingRowOnShelf: false, terminalDismissed: false), false)
+        XCTAssertEqual(convertCardVisible(state: .idle, fillingRowOnShelf: false, terminalDismissed: false), false)
+        XCTAssertEqual(
+            convertCardVisible(state: .preparing(chapters: nil, paragraphs: nil), fillingRowOnShelf: false, terminalDismissed: false),
+            true,
+            "parse/voice phases: the card is the only feedback"
+        )
+        XCTAssertEqual(
+            convertCardVisible(state: .filling(done: 1, total: 2), fillingRowOnShelf: true, terminalDismissed: false),
+            false,
+            "the filling row carries progress — the card hides"
+        )
+        XCTAssertEqual(
+            convertCardVisible(state: .filling(done: 1, total: 2), fillingRowOnShelf: false, terminalDismissed: false),
+            true,
+            "row not on the shelf yet: the card holds"
+        )
+        XCTAssertEqual(
+            convertCardVisible(state: .done(bookId: "b", bundlePath: "/b"), fillingRowOnShelf: true, terminalDismissed: false),
+            true,
+            "terminals keep the card until dismissed"
+        )
+        XCTAssertEqual(
+            convertCardVisible(state: .done(bookId: "b", bundlePath: "/b"), fillingRowOnShelf: true, terminalDismissed: true),
+            false
+        )
     }
 }

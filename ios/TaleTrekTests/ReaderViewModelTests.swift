@@ -330,6 +330,24 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.state.status, .idle)
     }
 
+    func testAFillingSessionUnlocksTheTextOnlyTransport() {
+        let book = book(chapterTexts: [["One.", "Two."]], audio: false)
+        let harness = makeViewModel(book, store: tempStore())
+        // Set before the enqueued open task runs — the live job makes
+        // this open a filling session.
+        harness.viewModel.jobAlive = { true }
+        waitUntil("opened") { !harness.viewModel.state.loading }
+
+        XCTAssertTrue(harness.viewModel.state.fillingSession, "text-only + live job")
+        XCTAssertTrue(harness.viewModel.state.transport.canPlayPause, "play-while-filling")
+
+        harness.viewModel.play()
+        waitUntil("the kernel loads through the store seam") {
+            harness.viewModel.state.status == .playing
+        }
+        XCTAssertEqual(harness.port.loads.map(\.key), ["k-0-0"])
+    }
+
     func testAMissingBookSurfacesTheMissingState() {
         let viewModel = ReaderViewModel(
             opener: { throw NSError(domain: "test", code: 1) },

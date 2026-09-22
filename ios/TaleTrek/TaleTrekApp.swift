@@ -28,15 +28,36 @@ struct TaleTrekApp: App {
         if ProcessInfo.processInfo.environment["TALETREK_RESET_POSITIONS"] != nil {
             PositionStore.resetStandard()
         }
+        // The segment store, wired at launch (the submit path
+        // re-registers per job — this is the belt-and-braces first
+        // path; store-aware reads work before any job runs).
+        setSegmentStore(dir: ImportDirs.standardStoreDir)
     }
 
     var body: some Scene {
         WindowGroup {
             Group {
                 if let openPath {
-                    ReaderScreen(path: openPath) {
-                        self.openPath = nil
-                    }
+                    ReaderScreen(
+                        path: openPath,
+                        jobAlive: { [weak synth] in synth?.state.isRunningPhase ?? false },
+                        onAnchorMoved: { [weak synth] anchor in
+                            synth?.reanchor(anchor)
+                        },
+                        onResumePreparing: { [weak synth] in
+                            guard let synth else { return }
+                            if synth.state.isRetryablePhase {
+                                _ = synth.retry()
+                            } else {
+                                synth.resumePending(
+                                    booksDir: URL(fileURLWithPath: library.booksDirPath)
+                                )
+                            }
+                        },
+                        onBack: {
+                            self.openPath = nil
+                        }
+                    )
                 } else {
                     LibraryScreen(repo: library, synth: synth, voices: voices) { path in
                         self.openPath = path
@@ -48,6 +69,11 @@ struct TaleTrekApp: App {
             // gate, no badge.
             .onOpenURL { url in
                 openShared(url)
+            }
+            // A pending import surviving process death re-submits here
+            // (the segment store makes resume cheap — done keys skip).
+            .onAppear {
+                synth.resumePending(booksDir: URL(fileURLWithPath: library.booksDirPath))
             }
             // Foreground-only conversion: backgrounding arms the grace;
             // expiry cancels cleanly into the retryable Interrupted.
