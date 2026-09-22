@@ -42,8 +42,10 @@ final class BooksRepository: ObservableObject {
     private let positions: PositionStore
 
     /// The production scan root — the UI tests' env override rides the
-    /// same seam the reader's `TALETREK_OPEN_BOOK` uses.
-    static var standardBooksDir: URL {
+    /// same seam the reader's `TALETREK_OPEN_BOOK` uses. Nonisolated:
+    /// the default-parameter reference below is evaluated outside the
+    /// actor (and the helper only touches ProcessInfo/FileManager).
+    nonisolated static var standardBooksDir: URL {
         if let override = ProcessInfo.processInfo.environment["TALETREK_BOOKS_DIR"] {
             return URL(fileURLWithPath: override)
         }
