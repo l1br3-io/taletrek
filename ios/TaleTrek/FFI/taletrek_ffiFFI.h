@@ -295,6 +295,11 @@ uint64_t uniffi_taletrek_ffi_fn_constructor_pipelinehandle_new(RustBuffer config
 void uniffi_taletrek_ffi_fn_method_pipelinehandle_cancel(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_METHOD_PIPELINEHANDLE_SET_ANCHOR
+#define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_METHOD_PIPELINEHANDLE_SET_ANCHOR
+void uniffi_taletrek_ffi_fn_method_pipelinehandle_set_anchor(uint64_t ptr, RustBuffer anchor, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_METHOD_PIPELINEHANDLE_START
 #define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_METHOD_PIPELINEHANDLE_START
 void uniffi_taletrek_ffi_fn_method_pipelinehandle_start(uint64_t ptr, uint64_t observer, RustCallStatus *_Nonnull out_status
@@ -360,9 +365,24 @@ RustBuffer uniffi_taletrek_ffi_fn_func_open_book(RustBuffer path, RustCallStatus
 RustBuffer uniffi_taletrek_ffi_fn_func_read_segment(RustBuffer path, RustBuffer key, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_READ_SEGMENT_PROGRESSIVE
+#define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_READ_SEGMENT_PROGRESSIVE
+RustBuffer uniffi_taletrek_ffi_fn_func_read_segment_progressive(RustBuffer path, RustBuffer key, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_SET_SEGMENT_STORE
+#define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_SET_SEGMENT_STORE
+void uniffi_taletrek_ffi_fn_func_set_segment_store(RustBuffer dir, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_DECODE_SEGMENT
 #define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_DECODE_SEGMENT
 RustBuffer uniffi_taletrek_ffi_fn_func_decode_segment(RustBuffer path, RustBuffer key, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_EXPORT_MERGED_AUDIO
+#define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_EXPORT_MERGED_AUDIO
+uint32_t uniffi_taletrek_ffi_fn_func_export_merged_audio(RustBuffer bundle_path, RustBuffer dest_path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_POSITION_STORAGE_KEY
@@ -668,9 +688,27 @@ uint16_t uniffi_taletrek_ffi_checksum_func_read_segment(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_READ_SEGMENT_PROGRESSIVE
+#define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_READ_SEGMENT_PROGRESSIVE
+uint16_t uniffi_taletrek_ffi_checksum_func_read_segment_progressive(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_SET_SEGMENT_STORE
+#define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_SET_SEGMENT_STORE
+uint16_t uniffi_taletrek_ffi_checksum_func_set_segment_store(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_DECODE_SEGMENT
 #define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_DECODE_SEGMENT
 uint16_t uniffi_taletrek_ffi_checksum_func_decode_segment(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_EXPORT_MERGED_AUDIO
+#define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_EXPORT_MERGED_AUDIO
+uint16_t uniffi_taletrek_ffi_checksum_func_export_merged_audio(void
     
 );
 #endif
@@ -713,6 +751,12 @@ uint16_t uniffi_taletrek_ffi_checksum_func_voice_catalog(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_METHOD_PIPELINEHANDLE_CANCEL
 #define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_METHOD_PIPELINEHANDLE_CANCEL
 uint16_t uniffi_taletrek_ffi_checksum_method_pipelinehandle_cancel(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_METHOD_PIPELINEHANDLE_SET_ANCHOR
+#define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_METHOD_PIPELINEHANDLE_SET_ANCHOR
+uint16_t uniffi_taletrek_ffi_checksum_method_pipelinehandle_set_anchor(void
     
 );
 #endif

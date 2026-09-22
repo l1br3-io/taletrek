@@ -1235,8 +1235,26 @@ fn unique_tmp_path(path: &Path) -> PathBuf {
 /// Whether `pid` names a live process. On Linux/Android (procfs mounted —
 /// every TaleTrek target) this is a stat away; anywhere else it conservatively
 /// reports alive so [`sweep_orphan_tmp`] never deletes what it can't judge.
+#[cfg(target_os = "linux")]
 fn pid_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// Non-Linux hosts (macOS — the ios-app effort's second dev machine)
+/// have no `/proc`: `ps -p` is the portable probe (exit 0 = the pid
+/// exists, 1 = not). A subprocess is fine here — the sweeper runs once
+/// per import over a handful of temps, and the crate forbids unsafe,
+/// which rules out a hand-declared kill(2).
+#[cfg(not(target_os = "linux"))]
+fn pid_alive(pid: u32) -> bool {
+    std::process::Command::new("ps")
+        .arg("-p")
+        .arg(pid.to_string())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 /// Delete streaming-temp leftovers in `dir` — files in the

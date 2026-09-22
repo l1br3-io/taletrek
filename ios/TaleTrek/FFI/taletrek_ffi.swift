@@ -653,6 +653,15 @@ public protocol PipelineHandleProtocol: AnyObject, Sendable {
     func cancel() 
     
     /**
+     * Move the scheduling anchor (progressive only): synthesis re-aims at
+     * the new position — the horizon near it becomes the priority tier.
+     * In-flight chunks finish (cancellation is the only preemption). A
+     * no-op before [`start`](Self::start) (set `initial_anchor` on the
+     * config instead) and for non-progressive jobs.
+     */
+    func setAnchor(anchor: FfiAnchor) 
+    
+    /**
      * Start the job on a worker thread; events stream to `observer` and
      * the terminal state lands in [`state`](Self::state). Errors if
      * already started (one-shot handle) or the source is unreadable.
@@ -744,6 +753,22 @@ open func cancel()  {try! rustCall() {
         uniffiCallStatus in
     uniffi_taletrek_ffi_fn_method_pipelinehandle_cancel(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Move the scheduling anchor (progressive only): synthesis re-aims at
+     * the new position — the horizon near it becomes the priority tier.
+     * In-flight chunks finish (cancellation is the only preemption). A
+     * no-op before [`start`](Self::start) (set `initial_anchor` on the
+     * config instead) and for non-progressive jobs.
+     */
+open func setAnchor(anchor: FfiAnchor)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_taletrek_ffi_fn_method_pipelinehandle_set_anchor(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiAnchor_lower(anchor),uniffiCallStatus
     )
 }
 }
@@ -1026,6 +1051,77 @@ public func FfiConverterTypeTrekPlayer_lower(_ value: TrekPlayer) -> UInt64 {
 
 
 /**
+ * A playback position the scheduler aims audio production at — chapter and
+ * paragraph indices into the book (the identity the kernel reader's
+ * positions reduce to).
+ */
+public struct FfiAnchor: Equatable, Hashable {
+    /**
+     * Chapter index into the bundle's chapter list.
+     */
+    public var chapter: UInt32
+    /**
+     * Paragraph index within that chapter.
+     */
+    public var paragraph: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Chapter index into the bundle's chapter list.
+         */chapter: UInt32, 
+        /**
+         * Paragraph index within that chapter.
+         */paragraph: UInt32) {
+        self.chapter = chapter
+        self.paragraph = paragraph
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiAnchor: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAnchor: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAnchor {
+        return
+            try FfiAnchor(
+                chapter: FfiConverterUInt32.read(from: &buf), 
+                paragraph: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiAnchor, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.chapter, into: &buf)
+        FfiConverterUInt32.write(value.paragraph, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAnchor_lift(_ buf: RustBuffer) throws -> FfiAnchor {
+    return try FfiConverterTypeFfiAnchor.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAnchor_lower(_ value: FfiAnchor) -> RustBuffer {
+    return FfiConverterTypeFfiAnchor.lower(value)
+}
+
+
+/**
  * A whole book as foreign callers see it — manifest display data plus
  * the navigable chapter/paragraph structure the UI renders against.
  */
@@ -1038,6 +1134,10 @@ public struct FfiBook: Equatable, Hashable {
      * Book title.
      */
     public var title: String
+    /**
+     * Author, when the manifest knows one (library search matches on it).
+     */
+    public var author: String?
     /**
      * The voice the manifest advertises (`book.voiceId`) — what a later
      * re-voice would replace; the pipeline's import flow surfaces it.
@@ -1062,6 +1162,9 @@ public struct FfiBook: Equatable, Hashable {
          * Book title.
          */title: String, 
         /**
+         * Author, when the manifest knows one (library search matches on it).
+         */author: String?, 
+        /**
          * The voice the manifest advertises (`book.voiceId`) — what a later
          * re-voice would replace; the pipeline's import flow surfaces it.
          */voiceId: String, 
@@ -1073,6 +1176,7 @@ public struct FfiBook: Equatable, Hashable {
          */chapters: [FfiChapter]) {
         self.bookId = bookId
         self.title = title
+        self.author = author
         self.voiceId = voiceId
         self.audioPresent = audioPresent
         self.chapters = chapters
@@ -1096,6 +1200,7 @@ public struct FfiConverterTypeFfiBook: FfiConverterRustBuffer {
             try FfiBook(
                 bookId: FfiConverterString.read(from: &buf), 
                 title: FfiConverterString.read(from: &buf), 
+                author: FfiConverterOptionString.read(from: &buf), 
                 voiceId: FfiConverterString.read(from: &buf), 
                 audioPresent: FfiConverterBool.read(from: &buf), 
                 chapters: FfiConverterSequenceTypeFfiChapter.read(from: &buf)
@@ -1105,6 +1210,7 @@ public struct FfiConverterTypeFfiBook: FfiConverterRustBuffer {
     public static func write(_ value: FfiBook, into buf: inout [UInt8]) {
         FfiConverterString.write(value.bookId, into: &buf)
         FfiConverterString.write(value.title, into: &buf)
+        FfiConverterOptionString.write(value.author, into: &buf)
         FfiConverterString.write(value.voiceId, into: &buf)
         FfiConverterBool.write(value.audioPresent, into: &buf)
         FfiConverterSequenceTypeFfiChapter.write(value.chapters, into: &buf)
@@ -1524,7 +1630,8 @@ public struct FfiPipelineConfig: Equatable, Hashable {
      */
     public var hint: String?
     /**
-     * `true` = text-only bundle (no voice needed); `false` = full synth.
+     * `true` = text-only bundle (no voice needed); `false` = full synth
+     * (or progressive, when [`Self::progressive`] is set).
      */
     public var textOnly: Bool
     /**
@@ -1552,6 +1659,12 @@ public struct FfiPipelineConfig: Equatable, Hashable {
      * `generator.app` identity (e.g. `taletrek-android`).
      */
     public var generatorApp: String
+    /**
+     * Progressive conversion (text bundle lands immediately, synth
+     * streams into the segment store, drain seals a full bundle).
+     * `None` = the batch behavior above; ignored when `text_only`.
+     */
+    public var progressive: FfiProgressiveConfig?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -1564,7 +1677,8 @@ public struct FfiPipelineConfig: Equatable, Hashable {
          * Source filename when known — title fallback + format hint.
          */hint: String?, 
         /**
-         * `true` = text-only bundle (no voice needed); `false` = full synth.
+         * `true` = text-only bundle (no voice needed); `false` = full synth
+         * (or progressive, when [`Self::progressive`] is set).
          */textOnly: Bool, 
         /**
          * Curated voice id; `None` = the curated default.
@@ -1584,7 +1698,12 @@ public struct FfiPipelineConfig: Equatable, Hashable {
          */jobs: UInt32, 
         /**
          * `generator.app` identity (e.g. `taletrek-android`).
-         */generatorApp: String) {
+         */generatorApp: String, 
+        /**
+         * Progressive conversion (text bundle lands immediately, synth
+         * streams into the segment store, drain seals a full bundle).
+         * `None` = the batch behavior above; ignored when `text_only`.
+         */progressive: FfiProgressiveConfig?) {
         self.sourcePath = sourcePath
         self.hint = hint
         self.textOnly = textOnly
@@ -1594,6 +1713,7 @@ public struct FfiPipelineConfig: Equatable, Hashable {
         self.booksDir = booksDir
         self.jobs = jobs
         self.generatorApp = generatorApp
+        self.progressive = progressive
     }
 
     
@@ -1620,7 +1740,8 @@ public struct FfiConverterTypeFfiPipelineConfig: FfiConverterRustBuffer {
                 espeakDir: FfiConverterString.read(from: &buf), 
                 booksDir: FfiConverterString.read(from: &buf), 
                 jobs: FfiConverterUInt32.read(from: &buf), 
-                generatorApp: FfiConverterString.read(from: &buf)
+                generatorApp: FfiConverterString.read(from: &buf), 
+                progressive: FfiConverterOptionTypeFfiProgressiveConfig.read(from: &buf)
         )
     }
 
@@ -1634,6 +1755,7 @@ public struct FfiConverterTypeFfiPipelineConfig: FfiConverterRustBuffer {
         FfiConverterString.write(value.booksDir, into: &buf)
         FfiConverterUInt32.write(value.jobs, into: &buf)
         FfiConverterString.write(value.generatorApp, into: &buf)
+        FfiConverterOptionTypeFfiProgressiveConfig.write(value.progressive, into: &buf)
     }
 }
 
@@ -1681,6 +1803,11 @@ public struct FfiPipelineOutcome: Equatable, Hashable {
      * Distinct audio segments (0 for text-only).
      */
     public var segments: UInt32
+    /**
+     * `true` when the progressive variant sealed (text bundle replaced by
+     * the full one). Always `false` for text-only/full.
+     */
+    public var sealed: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -1702,13 +1829,18 @@ public struct FfiPipelineOutcome: Equatable, Hashable {
          */paragraphs: UInt32, 
         /**
          * Distinct audio segments (0 for text-only).
-         */segments: UInt32) {
+         */segments: UInt32, 
+        /**
+         * `true` when the progressive variant sealed (text bundle replaced by
+         * the full one). Always `false` for text-only/full.
+         */sealed: Bool) {
         self.bookId = bookId
         self.bundlePath = bundlePath
         self.textOnly = textOnly
         self.chapters = chapters
         self.paragraphs = paragraphs
         self.segments = segments
+        self.sealed = sealed
     }
 
     
@@ -1732,7 +1864,8 @@ public struct FfiConverterTypeFfiPipelineOutcome: FfiConverterRustBuffer {
                 textOnly: FfiConverterBool.read(from: &buf), 
                 chapters: FfiConverterUInt32.read(from: &buf), 
                 paragraphs: FfiConverterUInt32.read(from: &buf), 
-                segments: FfiConverterUInt32.read(from: &buf)
+                segments: FfiConverterUInt32.read(from: &buf), 
+                sealed: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -1743,6 +1876,7 @@ public struct FfiConverterTypeFfiPipelineOutcome: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.chapters, into: &buf)
         FfiConverterUInt32.write(value.paragraphs, into: &buf)
         FfiConverterUInt32.write(value.segments, into: &buf)
+        FfiConverterBool.write(value.sealed, into: &buf)
     }
 }
 
@@ -1839,6 +1973,81 @@ public func FfiConverterTypeFfiPosition_lift(_ buf: RustBuffer) throws -> FfiPos
 #endif
 public func FfiConverterTypeFfiPosition_lower(_ value: FfiPosition) -> RustBuffer {
     return FfiConverterTypeFfiPosition.lower(value)
+}
+
+
+/**
+ * Progressive-specific pipeline configuration.
+ */
+public struct FfiProgressiveConfig: Equatable, Hashable {
+    /**
+     * Segment store root (e.g. `<cacheDir>/taletrek/segments`) — shared
+     * across books and runs; the resume source.
+     */
+    public var storeDir: String
+    /**
+     * Where synthesis aims first: the reader's stored resume position.
+     * `None` = book start. Movable live via
+     * [`PipelineHandle::set_anchor`].
+     */
+    public var initialAnchor: FfiAnchor?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Segment store root (e.g. `<cacheDir>/taletrek/segments`) — shared
+         * across books and runs; the resume source.
+         */storeDir: String, 
+        /**
+         * Where synthesis aims first: the reader's stored resume position.
+         * `None` = book start. Movable live via
+         * [`PipelineHandle::set_anchor`].
+         */initialAnchor: FfiAnchor?) {
+        self.storeDir = storeDir
+        self.initialAnchor = initialAnchor
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiProgressiveConfig: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiProgressiveConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiProgressiveConfig {
+        return
+            try FfiProgressiveConfig(
+                storeDir: FfiConverterString.read(from: &buf), 
+                initialAnchor: FfiConverterOptionTypeFfiAnchor.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiProgressiveConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.storeDir, into: &buf)
+        FfiConverterOptionTypeFfiAnchor.write(value.initialAnchor, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiProgressiveConfig_lift(_ buf: RustBuffer) throws -> FfiProgressiveConfig {
+    return try FfiConverterTypeFfiProgressiveConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiProgressiveConfig_lower(_ value: FfiProgressiveConfig) -> RustBuffer {
+    return FfiConverterTypeFfiProgressiveConfig.lower(value)
 }
 
 
@@ -2122,6 +2331,16 @@ enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
          * The underlying decode failure, one sentence.
          */detail: String
     )
+    /**
+     * A whole-book audio merge (export) failed: the bundle is text-only,
+     * its codec is not Opus, or a segment's OGG payload is malformed —
+     * the host surfaces this as "export failed" copy, never a crash.
+     */
+    case MergeFailed(
+        /**
+         * The underlying merge failure, one sentence.
+         */detail: String
+    )
 
     
 
@@ -2180,6 +2399,9 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
         case 9: return .DecodeFailed(
             detail: try FfiConverterString.read(from: &buf)
             )
+        case 10: return .MergeFailed(
+            detail: try FfiConverterString.read(from: &buf)
+            )
 
          default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2236,6 +2458,11 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
         
         case let .DecodeFailed(detail):
             writeInt(&buf, Int32(9))
+            FfiConverterString.write(detail, into: &buf)
+            
+        
+        case let .MergeFailed(detail):
+            writeInt(&buf, Int32(10))
             FfiConverterString.write(detail, into: &buf)
             
         }
@@ -2302,6 +2529,16 @@ public enum FfiPipelineEvent: Equatable, Hashable {
          * Total paragraphs.
          */total: UInt32
     )
+    /**
+     * Progressive only: ≥ 30 s of audio exists at the anchor — surface
+     * "start listening" while synthesis continues.
+     */
+    case playable
+    /**
+     * Progressive only: the sealed full bundle atomically replaced the
+     * text-only one; the job finishes immediately after.
+     */
+    case sealed
 
 
 
@@ -2335,6 +2572,10 @@ public struct FfiConverterTypeFfiPipelineEvent: FfiConverterRustBuffer {
         case 4: return .synthStep(done: try FfiConverterUInt32.read(from: &buf), total: try FfiConverterUInt32.read(from: &buf)
         )
         
+        case 5: return .playable
+        
+        case 6: return .sealed
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -2365,6 +2606,14 @@ public struct FfiConverterTypeFfiPipelineEvent: FfiConverterRustBuffer {
             FfiConverterUInt32.write(done, into: &buf)
             FfiConverterUInt32.write(total, into: &buf)
             
+        
+        case .playable:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .sealed:
+            writeInt(&buf, Int32(6))
+        
         }
     }
 }
@@ -2408,6 +2657,11 @@ public enum FfiPipelinePhase: Equatable, Hashable {
      * Writing the bundle.
      */
     case writing
+    /**
+     * Merging store segments into the final full bundle (progressive
+     * only): the queue drained, the book is sealing.
+     */
+    case sealing
 
 
 
@@ -2437,6 +2691,8 @@ public struct FfiConverterTypeFfiPipelinePhase: FfiConverterRustBuffer {
         
         case 4: return .writing
         
+        case 5: return .sealing
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -2459,6 +2715,10 @@ public struct FfiConverterTypeFfiPipelinePhase: FfiConverterRustBuffer {
         
         case .writing:
             writeInt(&buf, Int32(4))
+        
+        
+        case .sealing:
+            writeInt(&buf, Int32(5))
         
         }
     }
@@ -3071,6 +3331,109 @@ public func FfiConverterTypeFfiPlayerStatus_lower(_ value: FfiPlayerStatus) -> R
 
 
 /**
+ * The typed answer to "can I play paragraph `key` right now?" — the
+ * progressive reader's read seam. [`FfiSegmentStatus::Ready`] carries the
+ * segment; [`FfiSegmentStatus::NotReady`] means the key is *expected* (the
+ * book is filling: a text-only bundle whose chapters reference the key —
+ * the job is alive or resumable); [`FfiSegmentStatus::Missing`] means the
+ * bundle is sealed/full and the key is genuinely absent (corrupt archive
+ * or a foreign key — never a wait-worthy state).
+ */
+
+public enum FfiSegmentStatus: Equatable, Hashable {
+    
+    /**
+     * The segment's bytes + codec extension (`opus`/`wav`/`m4a`).
+     */
+    case ready(
+        /**
+         * Encoded audio bytes, verbatim.
+         */bytes: Data, 
+        /**
+         * Codec extension (`opus`/`wav`/`m4a`) — what `decode_segment`
+         * expects alongside the bytes.
+         */codec: String
+    )
+    /**
+     * Expected but not synthesized yet — the book is filling; the caller
+     * may block briefly (buffering UX) or surface resume.
+     */
+    case notReady
+    /**
+     * The sealed bundle has no such segment — not coming.
+     */
+    case missing
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiSegmentStatus: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSegmentStatus: FfiConverterRustBuffer {
+    typealias SwiftType = FfiSegmentStatus
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSegmentStatus {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .ready(bytes: try FfiConverterData.read(from: &buf), codec: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .notReady
+        
+        case 3: return .missing
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiSegmentStatus, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .ready(bytes,codec):
+            writeInt(&buf, Int32(1))
+            FfiConverterData.write(bytes, into: &buf)
+            FfiConverterString.write(codec, into: &buf)
+            
+        
+        case .notReady:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .missing:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSegmentStatus_lift(_ buf: RustBuffer) throws -> FfiSegmentStatus {
+    return try FfiConverterTypeFfiSegmentStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSegmentStatus_lower(_ value: FfiSegmentStatus) -> RustBuffer {
+    return FfiConverterTypeFfiSegmentStatus.lower(value)
+}
+
+
+
+/**
  * All voice-surface failures, flattened for the foreign side.
  */
 public 
@@ -3514,6 +3877,30 @@ fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeFfiAnchor: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAnchor?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiAnchor.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiAnchor.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeFfiDecodedAudio: FfiConverterRustBuffer {
     typealias SwiftType = FfiDecodedAudio?
 
@@ -3578,6 +3965,30 @@ fileprivate struct FfiConverterOptionTypeFfiPosition: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeFfiPosition.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiProgressiveConfig: FfiConverterRustBuffer {
+    typealias SwiftType = FfiProgressiveConfig?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiProgressiveConfig.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiProgressiveConfig.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -3735,6 +4146,31 @@ public func readSegment(path: String, key: String)throws  -> Data?  {
 })
 }
 /**
+ * The progressive read seam: [`read_segment`] split by *why* it's absent.
+ * See [`FfiSegmentStatus`] for the semantics.
+ */
+public func readSegmentProgressive(path: String, key: String)throws  -> FfiSegmentStatus  {
+    return try  FfiConverterTypeFfiSegmentStatus_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_taletrek_ffi_fn_func_read_segment_progressive(
+        FfiConverterString.lower(path),
+        FfiConverterString.lower(key),uniffiCallStatus
+    )
+})
+}
+/**
+ * Register (or clear) the segment store the progressive read seam serves
+ * filling books from. Call with the same directory the pipeline's
+ * progressive config carries; `None` unregisters.
+ */
+public func setSegmentStore(dir: String?)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_taletrek_ffi_fn_func_set_segment_store(
+        FfiConverterOptionString.lower(dir),uniffiCallStatus
+    )
+}
+}
+/**
  * Read one audio segment from the bundle at `path` and decode it to
  * PCM — the single hop a platform player needs when its own audio
  * stack cannot host the codec. `None` when the archive carries no
@@ -3748,6 +4184,22 @@ public func decodeSegment(path: String, key: String)throws  -> FfiDecodedAudio? 
     uniffi_taletrek_ffi_fn_func_decode_segment(
         FfiConverterString.lower(path),
         FfiConverterString.lower(key),uniffiCallStatus
+    )
+})
+}
+/**
+ * Merge the whole book's audio at `bundle_path` into one gapless OGG
+ * Opus file at `dest_path` (created/truncated by the call — hosts own
+ * choosing a location under their cache dir). Returns the number of
+ * distinct segments merged. A text-only bundle, a non-Opus codec, or a
+ * corrupt segment fails as [`FfiError::MergeFailed`], never a panic.
+ */
+public func exportMergedAudio(bundlePath: String, destPath: String)throws  -> UInt32  {
+    return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_taletrek_ffi_fn_func_export_merged_audio(
+        FfiConverterString.lower(bundlePath),
+        FfiConverterString.lower(destPath),uniffiCallStatus
     )
 })
 }
@@ -3851,7 +4303,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_taletrek_ffi_checksum_func_read_segment() != 37961) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_taletrek_ffi_checksum_func_read_segment_progressive() != 64574) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_taletrek_ffi_checksum_func_set_segment_store() != 44961) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_taletrek_ffi_checksum_func_decode_segment() != 39744) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_taletrek_ffi_checksum_func_export_merged_audio() != 4283) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_taletrek_ffi_checksum_func_position_storage_key() != 1146) {
@@ -3873,6 +4334,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_taletrek_ffi_checksum_method_pipelinehandle_cancel() != 47501) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_taletrek_ffi_checksum_method_pipelinehandle_set_anchor() != 770) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_taletrek_ffi_checksum_method_pipelinehandle_start() != 60633) {
