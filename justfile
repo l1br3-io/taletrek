@@ -393,10 +393,16 @@ ios: ios-kernel
     xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
         -destination 'generic/platform=iOS Simulator' build
 
-# Swift unit tests on the simulator (app-hosted — the kernel rides the app binary)
+# Swift unit tests on the simulator (app-hosted — the kernel rides the app binary).
+# TALETREK_FRESH_RUN=1 additionally runs the CDN-touching FirstRunTest (Mac-local).
 ios-test: ios-kernel
-    xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+    @xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
         -destination '{{ios_sim_dest}}' test
+
+# XCUITest integration suites on the simulator (reader/library UI over the real kernel).
+ios-ui-test: ios-kernel
+    @xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+        -destination '{{ios_sim_dest}}' -only-testing:TaleTrekUITests test
 
 # Build for a connected iPhone (dev signing): needs IOS_DEVICE_ID (xcrun devicectl
 # list devices) + DEVELOPMENT_TEAM; then install:

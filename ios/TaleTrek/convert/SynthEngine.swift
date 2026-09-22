@@ -24,10 +24,9 @@ struct ImportDirs: Equatable {
     /// library's scan root — the same URLs the kernel's other hosts use
     /// (bit-for-bit cross-app cache compatibility).
     static func standard(booksDir: URL) -> ImportDirs {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return ImportDirs(
-            voiceCacheDir: support.appendingPathComponent("voices").path,
-            espeakDir: support.appendingPathComponent("espeak-ng-data").path,
+        ImportDirs(
+            voiceCacheDir: HostDirs.voicesDir.path,
+            espeakDir: HostDirs.espeakDir.path,
             booksDir: booksDir.path
         )
     }

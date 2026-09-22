@@ -15,8 +15,7 @@ final class VoiceStore: ObservableObject {
     static let standard = VoiceStore(fileURL: VoiceStore.standardFileURL)
 
     static var standardFileURL: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("voice-selection")
+        HostDirs.supportRoot.appendingPathComponent("voice-selection")
     }
 
     private let fileURL: URL

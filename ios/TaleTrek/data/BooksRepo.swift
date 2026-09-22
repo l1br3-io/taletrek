@@ -49,8 +49,7 @@ final class BooksRepository: ObservableObject {
         if let override = ProcessInfo.processInfo.environment["TALETREK_BOOKS_DIR"] {
             return URL(fileURLWithPath: override)
         }
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("books")
+        return HostDirs.supportRoot.appendingPathComponent("books")
     }
 
     init(

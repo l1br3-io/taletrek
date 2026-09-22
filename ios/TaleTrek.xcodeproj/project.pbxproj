@@ -23,6 +23,8 @@
 		AA00000000000000000000C4 /* VoicesScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000C3 /* VoicesScreen.swift */; };
 		AA00000000000000000000C6 /* VoiceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000C5 /* VoiceStore.swift */; };
 		AA00000000000000000000C8 /* VoiceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000C7 /* VoiceStoreTests.swift */; };
+		AA00000000000000000000CA /* HostDirs.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000C9 /* HostDirs.swift */; };
+		AA00000000000000000000CC /* FirstRunTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000CB /* FirstRunTest.swift */; };
 		AA000000000000000000009A /* LibraryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000009B /* LibraryUITests.swift */; };
 		AA0000000000000000000032 /* taletrek_ffi.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000026 /* taletrek_ffi.swift */; };
 		AA0000000000000000000033 /* SherpaOnnxC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000027 /* SherpaOnnxC.xcframework */; };
@@ -83,6 +85,8 @@
 		AA00000000000000000000C3 /* VoicesScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicesScreen.swift; sourceTree = "<group>"; };
 		AA00000000000000000000C5 /* VoiceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceStore.swift; sourceTree = "<group>"; };
 		AA00000000000000000000C7 /* VoiceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceStoreTests.swift; sourceTree = "<group>"; };
+		AA00000000000000000000C9 /* HostDirs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostDirs.swift; sourceTree = "<group>"; };
+		AA00000000000000000000CB /* FirstRunTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunTest.swift; sourceTree = "<group>"; };
 		AA0000000000000000000026 /* taletrek_ffi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = taletrek_ffi.swift; sourceTree = "<group>"; };
 		AA0000000000000000000037 /* taletrek_ffiFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = taletrek_ffiFFI.h; sourceTree = "<group>"; };
 		AA0000000000000000000038 /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = text; path = module.modulemap; sourceTree = "<group>"; };
@@ -223,6 +227,7 @@
 				AA0000000000000000000065 /* PositionStore.swift */,
 				AA0000000000000000000088 /* BooksRepo.swift */,
 				AA00000000000000000000C5 /* VoiceStore.swift */,
+				AA00000000000000000000C9 /* HostDirs.swift */,
 			);
 			path = data;
 			sourceTree = "<group>";
@@ -279,6 +284,7 @@
 				AA000000000000000000008E /* BooksRepoTests.swift */,
 				AA00000000000000000000A8 /* SynthEngineTests.swift */,
 				AA00000000000000000000C7 /* VoiceStoreTests.swift */,
+				AA00000000000000000000CB /* FirstRunTest.swift */,
 				AA00000000000000000000B0 /* plain.txt */,
 				AA00000000000000000000B1 /* book.epub */,
 				AA00000000000000000000B2 /* with-outline.pdf */,
@@ -456,6 +462,7 @@
 				AA00000000000000000000C2 /* VoicesViewModel.swift in Sources */,
 				AA00000000000000000000C4 /* VoicesScreen.swift in Sources */,
 				AA00000000000000000000C6 /* VoiceStore.swift in Sources */,
+				AA00000000000000000000CA /* HostDirs.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -472,6 +479,7 @@
 				AA000000000000000000008D /* BooksRepoTests.swift in Sources */,
 				AA00000000000000000000A9 /* SynthEngineTests.swift in Sources */,
 				AA00000000000000000000C8 /* VoiceStoreTests.swift in Sources */,
+				AA00000000000000000000CC /* FirstRunTest.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

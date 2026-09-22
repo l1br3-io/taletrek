@@ -48,8 +48,7 @@ final class PositionStore {
 
     /// Where the production store lives (the reset hook's target).
     static var standardFileURL: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("positions.json")
+        HostDirs.supportRoot.appendingPathComponent("positions.json")
     }
 
     /// Remove the production file — the UI tests' clean-slate hook
@@ -66,9 +65,7 @@ final class PositionStore {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-            self.fileURL = support.appendingPathComponent("positions.json")
+            self.fileURL = Self.standardFileURL
         }
         entries = Self.read(from: self.fileURL)
     }
@@ -110,6 +107,10 @@ final class PositionStore {
     /// state we can land in; a torn write discards.
     private func persist() {
         guard let data = try? JSONSerialization.data(withJSONObject: entries) else { return }
+        try? FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         try? data.write(to: fileURL, options: .atomic)
     }
 
