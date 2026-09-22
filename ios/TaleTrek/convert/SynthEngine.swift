@@ -183,7 +183,7 @@ final class HandleSynthEngine: SynthEngine {
             while true {
                 switch newHandle.state() {
                 case .finished, .failed, .cancelled:
-                    onTerminal(h.state())
+                    onTerminal(newHandle.state())
                     return
                 case .idle, .running:
                     Thread.sleep(forTimeInterval: 0.15)

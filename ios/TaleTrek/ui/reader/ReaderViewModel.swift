@@ -130,7 +130,7 @@ final class ReaderViewModel: ObservableObject {
     /// survives) + bridge, wired. `jobAlive` feeds the engine's
     /// not-ready hold (the filling books' buffering seam).
     private static func productionHost(
-        path: String, _ jobAlive: @escaping () -> Bool
+        path: String, jobAlive: @escaping () -> Bool
     ) -> PlayerHost {
         { book, saved in
             let kernel = saved.map { TrekPlayer.restore(book: book, position: $0.asFfi) }
