@@ -237,6 +237,12 @@ final class PlaybackBridgeTests: XCTestCase {
     }
 
     func testATextOnlyBookExecutesNothing() {
+        // The no-store contract: the test host is the real app, which
+        // registers a segment store at launch — and a registered store
+        // upgrades text-only books to playable (progressive fill). The
+        // kernel's inertness clause only holds with no store.
+        setSegmentStore(dir: nil)
+        defer { setSegmentStore(dir: nil) }
         let quiet = book(texts: ["Words."], audio: false)
         let port = RecordingPort()
         let bridge = makeBridge(quiet, port: port, session: StubSession())

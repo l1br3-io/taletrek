@@ -129,21 +129,27 @@ final class FirstRunTest: XCTestCase {
             XCTAssertTrue(progressAfter, "synthesis continued past Playable")
         }
 
-        // The sealed book opens with audio and real PCM decodes.
-        let book = try openBook(path: outcome.bundlePath)
+        // The sealed book opens with audio, real PCM decodes, and the
+        // kernel walks it: play → drain → advance.
+        try walkSealedBook(bundlePath: outcome.bundlePath)
+    }
+
+    /// The sealed tail of the story: full bundle, decodable audio, and
+    /// a live TrekPlayer walk that advances past paragraph 0.
+    private func walkSealedBook(bundlePath: String) throws {
+        let book = try openBook(path: bundlePath)
         XCTAssertTrue(book.audioPresent, "the seal produced a full bundle")
         let firstChapter = try XCTUnwrap(book.chapters.first)
         let firstParagraph = try XCTUnwrap(firstChapter.paragraphs.first)
         let decoded = try decodeSegment(
-            path: outcome.bundlePath, key: firstParagraph.segmentKey
+            path: bundlePath, key: firstParagraph.segmentKey
         )
         XCTAssertNotNil(decoded)
         XCTAssertGreaterThan(decoded?.samples.count ?? 0, 0)
 
-        // And the kernel walks it: play → drain → advance.
-        let engine = AudioEngine(path: outcome.bundlePath)
-        let bridge = PlayerBridge(kernel: TrekPlayer(book: book), port: engine)
-        engine.attach(bridge)
+        let walkEngine = AudioEngine(path: bundlePath)
+        let bridge = PlayerBridge(kernel: TrekPlayer(book: book), port: walkEngine)
+        walkEngine.attach(bridge)
         bridge.userPlay()
         let advanced = expectation(description: "advanced past paragraph 0")
         let timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in

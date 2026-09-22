@@ -102,6 +102,31 @@ struct LibraryScreen: View {
     }
 
     var body: some View {
+        importSurface
+            .onAppear {
+                synth.onFinished = {
+                    repo.refresh()
+                    synth.dismiss()
+                }
+            }
+            .onChange(of: synth.state) { old, new in
+                if new.isRunningPhase && !old.isRunningPhase {
+                    // The job starts against the shelf as it stands.
+                    shelfAtJobStart = Set(repo.state.books.map(\.path))
+                    fillScanned = false
+                    terminalDismissed = false
+                }
+                // The progressive text bundle lands mid-run — rescan once
+                // per job when synth starts so the row appears; the seal's
+                // terminal rescan completes it.
+                if new.isSynthPhase && !fillScanned {
+                    fillScanned = true
+                    repo.refresh()
+                }
+            }
+    }
+
+    private var navigationStack: some View {
         NavigationStack {
             Group {
                 if showsEmptyState {
@@ -131,75 +156,59 @@ struct LibraryScreen: View {
                 prompt: "Search title or author"
             )
         }
-        .fileImporter(
-            isPresented: $importing,
-            allowedContentTypes: [.taletrekBundle] + UTType.sourceDocuments
-        ) { result in
-            if case let .success(url) = result {
-                importPicked(url)
+    }
+
+    private var importSurface: some View {
+        navigationStack
+            .fileImporter(
+                isPresented: $importing,
+                allowedContentTypes: [.taletrekBundle] + UTType.sourceDocuments
+            ) { result in
+                if case let .success(url) = result {
+                    importPicked(url)
+                }
             }
-        }
-        .alert(
-            "Import failed",
-            isPresented: Binding(
-                get: { repo.lastImportFailure != nil },
-                set: { if !$0 { repo.clearImportFailure() } }
-            )
-        ) {
-            Button("OK") {
-                repo.clearImportFailure()
+            .alert(
+                "Import failed",
+                isPresented: Binding(
+                    get: { repo.lastImportFailure != nil },
+                    set: { if !$0 { repo.clearImportFailure() } }
+                )
+            ) {
+                Button("OK") {
+                    repo.clearImportFailure()
+                }
+            } message: {
+                Text(repo.lastImportFailure ?? "")
             }
-        } message: {
-            Text(repo.lastImportFailure ?? "")
-        }
-        .alert(
-            "Audio export failed",
-            isPresented: Binding(
-                get: { repo.lastExportFailure != nil },
-                set: { if !$0 { repo.clearExportFailure() } }
-            )
-        ) {
-            Button("OK") {
-                repo.clearExportFailure()
+            .alert(
+                "Audio export failed",
+                isPresented: Binding(
+                    get: { repo.lastExportFailure != nil },
+                    set: { if !$0 { repo.clearExportFailure() } }
+                )
+            ) {
+                Button("OK") {
+                    repo.clearExportFailure()
+                }
+            } message: {
+                Text(repo.lastExportFailure ?? "")
             }
-        } message: {
-            Text(repo.lastExportFailure ?? "")
-        }
-        .sheet(item: $shareItem) { item in
-            ActivityShareSheet(items: [item.url as NSURL])
-                .ignoresSafeArea()
-        }
-        .fileExporter(
-            item: Binding(
-                get: { saveItem?.url },
-                set: { if $0 == nil { saveItem = nil } }
-            ),
-            contentType: saveItem?.type ?? .data,
-            defaultFilename: saveItem?.defaultName
-        ) { _ in
-            saveItem = nil
-        }
-        .onAppear {
-            synth.onFinished = {
-                repo.refresh()
-                synth.dismiss()
+            .sheet(item: $shareItem) { item in
+                ActivityShareSheet(items: [item.url as NSURL])
+                    .ignoresSafeArea()
             }
-        }
-        .onChange(of: synth.state) { old, new in
-            if new.isRunningPhase && !(old?.isRunningPhase ?? false) {
-                // The job starts against the shelf as it stands.
-                shelfAtJobStart = Set(repo.state.books.map(\.path))
-                fillScanned = false
-                terminalDismissed = false
+            .fileExporter(
+                isPresented: Binding(
+                    get: { saveItem != nil },
+                    set: { if !$0 { saveItem = nil } }
+                ),
+                item: saveItem?.url,
+                contentTypes: [saveItem?.type ?? .data],
+                defaultFilename: saveItem?.defaultName
+            ) { _ in
+                saveItem = nil
             }
-            // The progressive text bundle lands mid-run — rescan once
-            // per job when synth starts so the row appears; the seal's
-            // terminal rescan completes it.
-            if new.isSynthPhase && !fillScanned {
-                fillScanned = true
-                repo.refresh()
-            }
-        }
     }
 
     /// The one lane: bundles copy in, sources convert — full audio job,

@@ -97,13 +97,6 @@ final class ReaderViewModelTests: XCTestCase {
         )
     }
 
-    private func tempStore() -> PositionStore {
-        PositionStore(
-            fileURL: FileManager.default.temporaryDirectory
-                .appendingPathComponent("positions-\(UUID().uuidString).json")
-        )
-    }
-
     /// The wired harness: view model + recording port + the bridge once
     /// the open lands (SwiftLint keeps tuples at two members; this is
     /// four facts).
@@ -118,71 +111,6 @@ final class ReaderViewModelTests: XCTestCase {
 
     private final class BridgeBox {
         var bridge: PlayerBridge?
-    }
-
-    private func makeViewModel(
-        _ book: FfiBook, store: PositionStore
-    ) -> Harness {
-        let port = RecordingPort()
-        let interruptions = FakeInterruptionSource()
-        let routes = FakeRouteChangeSource()
-        let nowPlayingSink = RecordingNowPlayingSink()
-        // The test keeps a handle on the bridge so platform reports can
-        // be driven the way the engine would (ready, drained) — it
-        // lands asynchronously, hence the box.
-        let box = BridgeBox()
-        let viewModel = ReaderViewModel(
-            opener: { book },
-            store: store,
-            host: { book, saved in
-                // Mirrors the production host: a surviving position
-                // restores paused; none starts fresh.
-                let kernel = saved.map { TrekPlayer.restore(book: book, position: $0.asFfi) }
-                    ?? TrekPlayer(book: book)
-                let bridge = PlayerBridge(kernel: kernel, port: port)
-                box.bridge = bridge
-                return bridge
-            },
-            nowPlayingHost: { bridge in
-                NowPlayingController(
-                    target: bridge,
-                    infoSink: nowPlayingSink,
-                    registry: StubRemoteRegistry()
-                )
-            },
-            interruptionSource: interruptions,
-            routeChangeSource: routes
-        )
-        return Harness(
-            viewModel: viewModel,
-            port: port,
-            box: box,
-            interruptions: interruptions,
-            routes: routes,
-            nowPlayingSink: nowPlayingSink
-        )
-    }
-
-    private func waitUntil(
-        timeout: TimeInterval = 5, _ message: String, _ condition: @escaping () -> Bool
-    ) {
-        let fulfilled = expectation(description: message)
-        let timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
-            if condition() {
-                timer.invalidate()
-                fulfilled.fulfill()
-            }
-        }
-        wait(for: [fulfilled], timeout: timeout)
-        timer.invalidate()
-    }
-
-    private func openAndHold(
-        _ book: FfiBook, store: PositionStore
-    ) -> Harness {
-        let harness = makeViewModel(book, store: store)
-        waitUntil("the book opens") { !harness.viewModel.state.loading }
-        return harness
     }
 
     func testOpeningRendersChaptersAndDerivesAnIdleTransport() {
@@ -320,6 +248,11 @@ final class ReaderViewModelTests: XCTestCase {
     }
 
     func testATextOnlyBookRendersInert() {
+        // The no-store contract (see PlaybackBridgeTests' twin): the
+        // app host registers a segment store at launch, which upgrades
+        // text-only books to playable — inertness holds without one.
+        setSegmentStore(dir: nil)
+        defer { setSegmentStore(dir: nil) }
         let quiet = book(chapterTexts: [["Words."]], audio: false)
         let harness = openAndHold(quiet, store: tempStore())
         let viewModel = harness.viewModel
@@ -331,6 +264,14 @@ final class ReaderViewModelTests: XCTestCase {
     }
 
     func testAFillingSessionUnlocksTheTextOnlyTransport() {
+        // Self-sufficient: the filling contract needs a registered
+        // store (the kernel arms text-only books only through it) —
+        // this test owns its own instead of riding the host's ambient
+        // registration.
+        let storeDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("taletrek-store-\(UUID().uuidString)", isDirectory: true)
+        setSegmentStore(dir: storeDir.path)
+        defer { setSegmentStore(dir: nil) }
         let book = book(chapterTexts: [["One.", "Two."]], audio: false)
         let harness = makeViewModel(book, store: tempStore())
         // Set before the enqueued open task runs — the live job makes
@@ -439,5 +380,79 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertTrue(!titled.isEmpty, "the lock screen learns the book")
         XCTAssertEqual(titled.last?[MPMediaItemPropertyAlbumTitle] as? String, "Chapter 1")
         XCTAssertEqual(titled.last?[MPNowPlayingInfoPropertyPlaybackRate] as? Double, 1.0)
+    }
+}
+
+private extension ReaderViewModelTests {
+    private func tempStore() -> PositionStore {
+        PositionStore(
+            fileURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("positions-\(UUID().uuidString).json")
+        )
+    }
+
+    private func makeViewModel(
+        _ book: FfiBook, store: PositionStore
+    ) -> Harness {
+        let port = RecordingPort()
+        let interruptions = FakeInterruptionSource()
+        let routes = FakeRouteChangeSource()
+        let nowPlayingSink = RecordingNowPlayingSink()
+        // The test keeps a handle on the bridge so platform reports can
+        // be driven the way the engine would (ready, drained) — it
+        // lands asynchronously, hence the box.
+        let box = BridgeBox()
+        let viewModel = ReaderViewModel(
+            opener: { book },
+            store: store,
+            host: { book, saved in
+                // Mirrors the production host: a surviving position
+                // restores paused; none starts fresh.
+                let kernel = saved.map { TrekPlayer.restore(book: book, position: $0.asFfi) }
+                    ?? TrekPlayer(book: book)
+                let bridge = PlayerBridge(kernel: kernel, port: port)
+                box.bridge = bridge
+                return bridge
+            },
+            nowPlayingHost: { bridge in
+                NowPlayingController(
+                    target: bridge,
+                    infoSink: nowPlayingSink,
+                    registry: StubRemoteRegistry()
+                )
+            },
+            interruptionSource: interruptions,
+            routeChangeSource: routes
+        )
+        return Harness(
+            viewModel: viewModel,
+            port: port,
+            box: box,
+            interruptions: interruptions,
+            routes: routes,
+            nowPlayingSink: nowPlayingSink
+        )
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 5, _ message: String, _ condition: @escaping () -> Bool
+    ) {
+        let fulfilled = expectation(description: message)
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
+            if condition() {
+                timer.invalidate()
+                fulfilled.fulfill()
+            }
+        }
+        wait(for: [fulfilled], timeout: timeout)
+        timer.invalidate()
+    }
+
+    private func openAndHold(
+        _ book: FfiBook, store: PositionStore
+    ) -> Harness {
+        let harness = makeViewModel(book, store: store)
+        waitUntil("the book opens") { !harness.viewModel.state.loading }
+        return harness
     }
 }

@@ -296,7 +296,9 @@ final class ReaderViewModel: ObservableObject {
             let para = state.active,
             state.chapters.indices.contains(Int(para.chapter))
         else {
-            state.transport = TransportUiState(canPlayPause: state.audioPresent)
+            state.transport = TransportUiState(
+                canPlayPause: state.audioPresent || state.fillingSession
+            )
             return
         }
         let audio = state.audioPresent || state.fillingSession

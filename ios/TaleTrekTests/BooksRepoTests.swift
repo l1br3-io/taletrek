@@ -87,7 +87,7 @@ final class BooksRepoTests: XCTestCase {
                 BookShelf(
                     bookId: "bk_sample",
                     title: "Sample Book",
-                    author: nil,
+                    author: "Fixture Generator",
                     chapterCount: 2,
                     audioPresent: true,
                     path: booksDir.appendingPathComponent("bk_sample.taletrek").path
