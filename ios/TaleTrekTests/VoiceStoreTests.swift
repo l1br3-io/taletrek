@@ -69,8 +69,8 @@ final class VoicesViewModelTests: XCTestCase {
             store: store ?? VoiceStore(fileURL: tempVoiceFile()),
             cacheDir: "/v",
             catalog: { [
-                voice("en_US-hfc_female-medium", name: "HF Female"),
-                voice("en_US-amy-medium", name: "Amy")
+                self.voice("en_US-hfc_female-medium", name: "HF Female"),
+                self.voice("en_US-amy-medium", name: "Amy")
             ] },
             cachedIds: { _ in cached },
             resolve: { id, dir, observer in
