@@ -38,8 +38,8 @@ final class FirstRunTest: XCTestCase {
         // delivery crosses the playable horizon mid-run and three more
         // keep synthesis flowing past it (listen-before-completion).
         // Distinctness matters — duplicate texts share a cache key.
-        let paragraphs = (1...6).map { n in
-            "paragraph number \(n) carries enough words to hold several seconds of spoken audio, so the store keeps filling while the reader listens ahead."
+        let paragraphs = (1...6).map { ordinal in
+            "paragraph number \(ordinal) carries enough words to hold several seconds of spoken audio, so the store keeps filling while the reader listens ahead."
         }
         let source = root.appendingPathComponent("story.txt")
         try Data(

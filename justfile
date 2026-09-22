@@ -394,7 +394,9 @@ ios: ios-kernel
         -destination 'generic/platform=iOS Simulator' build
 
 # Swift unit tests on the simulator (app-hosted — the kernel rides the app binary).
-# TALETREK_FRESH_RUN=1 additionally runs the CDN-touching FirstRunTest (Mac-local).
+# TEST_RUNNER_TALETREK_FRESH_RUN=1 additionally runs the CDN-touching FirstRunTest
+# (Mac-local; the TEST_RUNNER_ prefix is xcodebuild's pass-through — plain env
+# vars never cross into the simulator's app process).
 ios-test: ios-kernel
     @xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
         -destination '{{ios_sim_dest}}' test
