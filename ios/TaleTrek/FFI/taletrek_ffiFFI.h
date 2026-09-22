@@ -380,6 +380,11 @@ void uniffi_taletrek_ffi_fn_func_set_segment_store(RustBuffer dir, RustCallStatu
 RustBuffer uniffi_taletrek_ffi_fn_func_decode_segment(RustBuffer path, RustBuffer key, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_DECODE_SEGMENT_BYTES
+#define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_DECODE_SEGMENT_BYTES
+RustBuffer uniffi_taletrek_ffi_fn_func_decode_segment_bytes(RustBuffer bytes, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_EXPORT_MERGED_AUDIO
 #define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_FN_FUNC_EXPORT_MERGED_AUDIO
 uint32_t uniffi_taletrek_ffi_fn_func_export_merged_audio(RustBuffer bundle_path, RustBuffer dest_path, RustCallStatus *_Nonnull out_status
@@ -703,6 +708,12 @@ uint16_t uniffi_taletrek_ffi_checksum_func_set_segment_store(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_DECODE_SEGMENT
 #define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_DECODE_SEGMENT
 uint16_t uniffi_taletrek_ffi_checksum_func_decode_segment(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_DECODE_SEGMENT_BYTES
+#define UNIFFI_FFIDEF_UNIFFI_TALETREK_FFI_CHECKSUM_FUNC_DECODE_SEGMENT_BYTES
+uint16_t uniffi_taletrek_ffi_checksum_func_decode_segment_bytes(void
     
 );
 #endif

@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
 
-use taletrek_ffi::{decode_segment, open_book, FfiError};
+use taletrek_ffi::{decode_segment, decode_segment_bytes, open_book, FfiError};
 use taletrek_synth::bundle::manifest::{AudioMeta, BookMeta, Generator, ManifestKind};
 use taletrek_synth::bundle::AudioSegment;
 use taletrek_synth::{
@@ -239,5 +239,68 @@ fn ogg_magic_with_corrupt_body_is_a_typed_decode_error() {
     let (_dir, path) = narrated_bundle(Some(bytes), AudioCodec::Opus);
     let err = decode_segment(path.to_string_lossy().into_owned(), para_key())
         .expect_err("corrupt ogg must fail");
+    assert!(matches!(err, FfiError::DecodeFailed { .. }), "got: {err:?}");
+}
+
+// --- the bytes variant (the progressive flow's decode hop) -----------------------
+
+#[test]
+fn bytes_variant_decodes_our_own_opus_output() {
+    use taletrek_synth::{Encoder, NativeOpusEncoder};
+
+    let rate = 16_000;
+    let src = sine(rate, 3.0, 440.0);
+    let opus = NativeOpusEncoder::new()
+        .encode(&wav_bytes(&src, rate))
+        .expect("encode");
+
+    let decoded = decode_segment_bytes(opus).expect("decode");
+    assert_eq!(decoded.channels, 1);
+    assert_eq!(decoded.sample_rate, 16_000, "16 kHz is libopus-native");
+    let dur = decoded.samples.len() as f64 / f64::from(decoded.sample_rate);
+    assert!(
+        (dur - 3.0).abs() < 0.05,
+        "duration {dur:.3} s vs 3.0 s source"
+    );
+    let est = tone_hz(&decoded.samples, decoded.sample_rate);
+    assert!(
+        ((est - 440.0) / 440.0).abs() < 0.05,
+        "tone drifted: {est:.1} Hz vs 440"
+    );
+}
+
+#[test]
+fn bytes_variant_decodes_wav_exactly() {
+    let pcm: Vec<i16> = (0..1000).map(|i| (i % 97 - 48) * 200).collect();
+    let decoded = decode_segment_bytes(wav_bytes(&pcm, 8_000)).expect("decode");
+    assert_eq!(decoded.samples, pcm, "16-bit PCM must round-trip exactly");
+    assert_eq!(decoded.sample_rate, 8_000);
+    assert_eq!(decoded.channels, 1);
+}
+
+#[test]
+fn bytes_variant_agrees_with_the_file_variant() {
+    // Same payload, both entries — one dispatch, proven twice.
+    let book = open_book(PLAYABLE.to_owned()).expect("fixture opens");
+    let key = book.chapters[0].paragraphs[0].segment_key.clone();
+    let file_decoded = decode_segment(PLAYABLE.to_owned(), key.clone())
+        .expect("read + decode")
+        .expect("segment present");
+    // Pull the same bytes the progressive seam would hand back.
+    let bytes = taletrek_synth::read_audio_segment(std::path::Path::new(PLAYABLE), &key)
+        .expect("read")
+        .expect("present");
+    let bytes_decoded = decode_segment_bytes(bytes.bytes).expect("decode");
+    assert_eq!(bytes_decoded.samples, file_decoded.samples);
+    assert_eq!(bytes_decoded.sample_rate, file_decoded.sample_rate);
+    assert_eq!(bytes_decoded.channels, file_decoded.channels);
+}
+
+#[test]
+fn bytes_variant_rejects_undecodable_payload() {
+    let err = decode_segment_bytes(vec![1, 2, 3]).expect_err("junk must fail");
+    assert!(matches!(err, FfiError::DecodeFailed { .. }), "got: {err:?}");
+    let err = decode_segment_bytes(b"OggS followed by nothing".to_vec())
+        .expect_err("ogg magic with no body must fail");
     assert!(matches!(err, FfiError::DecodeFailed { .. }), "got: {err:?}");
 }

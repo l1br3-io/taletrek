@@ -4188,6 +4188,24 @@ public func decodeSegment(path: String, key: String)throws  -> FfiDecodedAudio? 
 })
 }
 /**
+ * Decode one segment's encoded bytes — verbatim what
+ * [`crate::read_segment_progressive`] hands back in
+ * [`FfiSegmentStatus::Ready`] — to PCM. The progressive flow's decode
+ * hop: the bytes are already in the caller's hands (often from the
+ * segment store, not the archive), so the dispatch is the same
+ * magic-bytes split `decode_segment` applies. Same codec contract
+ * (`opus`/`wav`; m4a legacy segments fail as `DecodeFailed` — the
+ * documented fail-skip).
+ */
+public func decodeSegmentBytes(bytes: Data)throws  -> FfiDecodedAudio  {
+    return try  FfiConverterTypeFfiDecodedAudio_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_taletrek_ffi_fn_func_decode_segment_bytes(
+        FfiConverterData.lower(bytes),uniffiCallStatus
+    )
+})
+}
+/**
  * Merge the whole book's audio at `bundle_path` into one gapless OGG
  * Opus file at `dest_path` (created/truncated by the call — hosts own
  * choosing a location under their cache dir). Returns the number of
@@ -4310,6 +4328,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_taletrek_ffi_checksum_func_decode_segment() != 39744) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_taletrek_ffi_checksum_func_decode_segment_bytes() != 27167) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_taletrek_ffi_checksum_func_export_merged_audio() != 4283) {

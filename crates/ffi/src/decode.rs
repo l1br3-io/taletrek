@@ -191,10 +191,23 @@ pub fn decode_segment(path: String, key: String) -> Result<Option<FfiDecodedAudi
     let Some(segment) = read_audio_segment(Path::new(&path), &key)? else {
         return Ok(None);
     };
-    let decoded = if segment.bytes.starts_with(b"OggS") {
-        decode_ogg_opus(&segment.bytes)
-    } else if segment.bytes.starts_with(b"RIFF") {
-        decode_wav(&segment.bytes)
+    decode_segment_bytes(segment.bytes).map(Some)
+}
+
+/// Decode one segment's encoded bytes — verbatim what
+/// [`crate::read_segment_progressive`] hands back in
+/// [`FfiSegmentStatus::Ready`] — to PCM. The progressive flow's decode
+/// hop: the bytes are already in the caller's hands (often from the
+/// segment store, not the archive), so the dispatch is the same
+/// magic-bytes split `decode_segment` applies. Same codec contract
+/// (`opus`/`wav`; m4a legacy segments fail as `DecodeFailed` — the
+/// documented fail-skip).
+#[uniffi::export]
+pub fn decode_segment_bytes(bytes: Vec<u8>) -> Result<FfiDecodedAudio, FfiError> {
+    let decoded = if bytes.starts_with(b"OggS") {
+        decode_ogg_opus(&bytes)
+    } else if bytes.starts_with(b"RIFF") {
+        decode_wav(&bytes)
     } else {
         Err(
             "segment is neither an OGG/Opus nor a RIFF/WAV stream (m4a legacy \
@@ -203,9 +216,9 @@ pub fn decode_segment(path: String, key: String) -> Result<Option<FfiDecodedAudi
         )
     }
     .map_err(|detail| FfiError::DecodeFailed { detail })?;
-    Ok(Some(FfiDecodedAudio {
+    Ok(FfiDecodedAudio {
         samples: decoded.samples,
         sample_rate: decoded.sample_rate,
         channels: u8::try_from(decoded.channels).expect("decode enforces ≤ 2 channels"),
-    }))
+    })
 }

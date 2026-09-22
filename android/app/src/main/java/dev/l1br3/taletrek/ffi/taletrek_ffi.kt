@@ -727,6 +727,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_decode_segment(
     ): Int
+    external fun uniffi_taletrek_ffi_checksum_func_decode_segment_bytes(
+    ): Int
     external fun uniffi_taletrek_ffi_checksum_func_export_merged_audio(
     ): Int
     external fun uniffi_taletrek_ffi_checksum_func_position_storage_key(
@@ -826,6 +828,8 @@ internal object UniffiLib {
     external fun uniffi_taletrek_ffi_fn_func_set_segment_store(`dir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_taletrek_ffi_fn_func_decode_segment(`path`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_taletrek_ffi_fn_func_decode_segment_bytes(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_taletrek_ffi_fn_func_export_merged_audio(`bundlePath`: RustBuffer.ByValue,`destPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Int
@@ -973,6 +977,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_func_decode_segment() != 39744) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_taletrek_ffi_checksum_func_decode_segment_bytes() != 27167) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_taletrek_ffi_checksum_func_export_merged_audio() != 4283) {
@@ -5082,6 +5089,28 @@ public object FfiConverterSequenceTypeFfiVoice: FfiConverterRustBuffer<List<FfiV
         
         FfiConverterString.lower(`path`),
         FfiConverterString.lower(`key`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Decode one segment's encoded bytes — verbatim what
+         * [`crate::read_segment_progressive`] hands back in
+         * [`FfiSegmentStatus::Ready`] — to PCM. The progressive flow's decode
+         * hop: the bytes are already in the caller's hands (often from the
+         * segment store, not the archive), so the dispatch is the same
+         * magic-bytes split `decode_segment` applies. Same codec contract
+         * (`opus`/`wav`; m4a legacy segments fail as `DecodeFailed` — the
+         * documented fail-skip).
+         */
+    @Throws(FfiException::class) fun `decodeSegmentBytes`(`bytes`: kotlin.ByteArray): FfiDecodedAudio {
+            return FfiConverterTypeFfiDecodedAudio.lift(
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_taletrek_ffi_fn_func_decode_segment_bytes(
+    
+        
+        FfiConverterByteArray.lower(`bytes`),_status)
 }
     )
     }
