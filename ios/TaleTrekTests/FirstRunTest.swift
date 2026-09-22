@@ -33,11 +33,17 @@ final class FirstRunTest: XCTestCase {
         setenv("TALETREK_CACHE_ROOT", root.path, 1)
         defer { try? FileManager.default.removeItem(at: root) }
 
+        // Sized for PLAYABLE_SECONDS (15 s at ~18 chars/s ≈ 270 chars):
+        // each distinct paragraph runs ~6 s of audio, so the third
+        // delivery crosses the playable horizon mid-run and three more
+        // keep synthesis flowing past it (listen-before-completion).
+        // Distinctness matters — duplicate texts share a cache key.
+        let paragraphs = (1...6).map { n in
+            "paragraph number \(n) carries enough words to hold several seconds of spoken audio, so the store keeps filling while the reader listens ahead."
+        }
         let source = root.appendingPathComponent("story.txt")
         try Data(
-            ("chapter one\n\nthe first paragraph says enough to synthesize.\n\n"
-                + "the second paragraph does too.\n\n"
-                + "the third keeps the fill going past the playable mark.\n").utf8
+            ("chapter one\n\n" + paragraphs.joined(separator: "\n\n") + "\n").utf8
         ).write(to: source)
 
         let started = Date()
