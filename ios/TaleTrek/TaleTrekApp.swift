@@ -16,6 +16,9 @@ struct TaleTrekApp: App {
     /// the full audio job (instant-listen).
     @StateObject private var synth = SynthController()
 
+    /// The optional voice override — nil = the kernel default.
+    @StateObject private var voices = VoiceStore.standard
+
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -35,7 +38,7 @@ struct TaleTrekApp: App {
                         self.openPath = nil
                     }
                 } else {
-                    LibraryScreen(repo: library, synth: synth) { path in
+                    LibraryScreen(repo: library, synth: synth, voices: voices) { path in
                         self.openPath = path
                     }
                 }
@@ -69,7 +72,8 @@ struct TaleTrekApp: App {
         } else {
             _ = synth.submit(
                 source: url,
-                dirs: .standard(booksDir: URL(fileURLWithPath: library.booksDirPath))
+                dirs: .standard(booksDir: URL(fileURLWithPath: library.booksDirPath)),
+                voiceId: voices.selected
             )
         }
     }
