@@ -367,6 +367,6 @@ final class ReaderViewModelTests: XCTestCase {
         }
         XCTAssertTrue(!titled.isEmpty, "the lock screen learns the book")
         XCTAssertEqual(titled.last?[MPMediaItemPropertyAlbumTitle] as? String, "Chapter 1")
-        XCTAssertEqual(titled.last?[MPPlaybackRate] as? Double, 1.0)
+        XCTAssertEqual(titled.last?[MPNowPlayingInfoPropertyPlaybackRate] as? Double, 1.0)
     }
 }

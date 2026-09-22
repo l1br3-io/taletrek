@@ -101,8 +101,8 @@ final class NowPlayingTests: XCTestCase {
         XCTAssertEqual(info[MPMediaItemPropertyTitle] as? String, "Test Book")
         XCTAssertEqual(info[MPMediaItemPropertyAlbumTitle] as? String, "Chapter 2")
         XCTAssertEqual(info[MPMediaItemPropertyPlaybackDuration] as? Double, 12.5)
-        XCTAssertEqual(info[MPElapsedPlaybackTime] as? Double, 3.25)
-        XCTAssertEqual(info[MPPlaybackRate] as? Double, 1.0)
+        XCTAssertEqual(info[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? Double, 3.25)
+        XCTAssertEqual(info[MPNowPlayingInfoPropertyPlaybackRate] as? Double, 1.0)
         XCTAssertEqual(info[MPNowPlayingInfoPropertyChapterNumber] as? Int, 2)
         XCTAssertEqual(info[MPNowPlayingInfoPropertyChapterCount] as? Int, 5)
     }
@@ -116,8 +116,8 @@ final class NowPlayingTests: XCTestCase {
 
         XCTAssertEqual(info[MPMediaItemPropertyTitle] as? String, "Test Book")
         XCTAssertEqual(info[MPMediaItemPropertyPlaybackDuration] as? Double, 0)
-        XCTAssertEqual(info[MPElapsedPlaybackTime] as? Double, 0)
-        XCTAssertEqual(info[MPPlaybackRate] as? Double, 0.0, "paused rate freezes the lock screen")
+        XCTAssertEqual(info[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? Double, 0)
+        XCTAssertEqual(info[MPNowPlayingInfoPropertyPlaybackRate] as? Double, 0.0, "paused rate freezes the lock screen")
         XCTAssertNil(info[MPNowPlayingInfoPropertyChapterNumber])
         XCTAssertNil(info[MPNowPlayingInfoPropertyChapterCount])
     }
@@ -172,7 +172,7 @@ final class NowPlayingTests: XCTestCase {
         XCTAssertEqual(rig.sink.infos.count, 3, "one push per fact update")
         let last = rig.sink.infos.last
         XCTAssertEqual(last?[MPMediaItemPropertyTitle] as? String, "Test Book")
-        XCTAssertEqual(last?[MPElapsedPlaybackTime] as? Double, 2.0)
-        XCTAssertEqual(last?[MPPlaybackRate] as? Double, 1.0)
+        XCTAssertEqual(last?[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? Double, 2.0)
+        XCTAssertEqual(last?[MPNowPlayingInfoPropertyPlaybackRate] as? Double, 1.0)
     }
 }

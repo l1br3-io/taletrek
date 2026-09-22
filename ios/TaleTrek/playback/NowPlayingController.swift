@@ -55,8 +55,8 @@ enum NowPlayingInfo {
             MPMediaItemPropertyTitle: content.title,
             MPMediaItemPropertyAlbumTitle: content.chapterTitle,
             MPMediaItemPropertyPlaybackDuration: times?.duration ?? 0,
-            MPElapsedPlaybackTime: times?.elapsed ?? 0,
-            MPPlaybackRate: playing ? 1.0 : 0.0,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: times?.elapsed ?? 0,
+            MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0,
         ]
         if content.chapterCount > 0 {
             info[MPNowPlayingInfoPropertyChapterNumber] = content.chapterNumber
