@@ -45,12 +45,21 @@ final class NowPlayingTests: XCTestCase {
     }
 
     private final class FakeRegistry: RemoteCommandRegistry {
-        let play = FakeCommand()
-        let pause = FakeCommand()
-        let togglePlayPause = FakeCommand()
-        let nextTrack = FakeCommand()
-        let previousTrack = FakeCommand()
-        let changePlaybackPosition = FakeCommand()
+        let playCmd = FakeCommand()
+        let pauseCmd = FakeCommand()
+        let toggleCmd = FakeCommand()
+        let nextCmd = FakeCommand()
+        let prevCmd = FakeCommand()
+        let seekCmd = FakeCommand()
+
+        // Stored witnesses must match the protocol type exactly;
+        // computed getters may return subtypes.
+        var play: RemoteCommand { playCmd }
+        var pause: RemoteCommand { pauseCmd }
+        var togglePlayPause: RemoteCommand { toggleCmd }
+        var nextTrack: RemoteCommand { nextCmd }
+        var previousTrack: RemoteCommand { prevCmd }
+        var changePlaybackPosition: RemoteCommand { seekCmd }
     }
 
     private final class RecordingSink: NowPlayingInfoSink {
@@ -125,10 +134,10 @@ final class NowPlayingTests: XCTestCase {
     func testCommandsRouteIntoTheTarget() {
         let rig = makeRig()
 
-        registry.play.fire()
-        registry.pause.fire()
-        registry.nextTrack.fire()
-        registry.previousTrack.fire()
+        rig.registry.playCmd.fire()
+        rig.registry.pauseCmd.fire()
+        rig.registry.nextCmd.fire()
+        rig.registry.prevCmd.fire()
 
         XCTAssertEqual(rig.target.calls, ["play", "pause", "next", "prev"])
     }
@@ -137,11 +146,11 @@ final class NowPlayingTests: XCTestCase {
         let rig = makeRig()
 
         rig.target.playing = false
-        rig.registry.togglePlayPause.fire()
+        rig.registry.toggleCmd.fire()
         XCTAssertEqual(rig.target.calls, ["play"])
 
         rig.target.playing = true
-        rig.registry.togglePlayPause.fire()
+        rig.registry.toggleCmd.fire()
         XCTAssertEqual(rig.target.calls, ["play", "pause"])
     }
 
@@ -149,7 +158,7 @@ final class NowPlayingTests: XCTestCase {
         let rig = makeRig()
 
         XCTAssertFalse(
-            rig.registry.changePlaybackPosition.isEnabled,
+            rig.registry.seekCmd.isEnabled,
             "no seekbar — per-segment durations mislead (the locked design)"
         )
     }
