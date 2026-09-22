@@ -88,7 +88,7 @@ struct VoicesScreen: View {
         .accessibilityIdentifier("voice-default")
     }
 
-    private func voiceRow(_ row: Row) -> some View {
+    private func voiceRow(_ row: VoicesViewModel.Row) -> some View {
         HStack {
             Button {
                 model.select(row.voice.id)
@@ -112,7 +112,7 @@ struct VoicesScreen: View {
     }
 
     @ViewBuilder
-    private func stateControls(_ row: Row) -> some View {
+    private func stateControls(_ row: VoicesViewModel.Row) -> some View {
         if let download = model.downloads[row.voice.id] {
             VStack(alignment: .trailing) {
                 ProgressView(value: download.total > 0 ? Double(download.done) : nil)

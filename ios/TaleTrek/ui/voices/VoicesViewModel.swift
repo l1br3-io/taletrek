@@ -68,17 +68,15 @@ final class VoicesViewModel: ObservableObject {
     /// The production voice cache — the same `Application
     /// Support/voices` the convert config points at (bit-for-bit
     /// cross-app layout).
-    static var standardCacheDir: String {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("voices").path
+    nonisolated static var standardCacheDir: String {
+        HostDirs.voicesDir.path
     }
 
     /// The honest espeak state: the data dir the jobs ensure carries
     /// `en_dict` when present (the pipeline downloads it on first
     /// convert — this screen only reports).
-    static func espeakDataPresent() -> Bool {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dict = support.appendingPathComponent("espeak-ng-data/en_dict")
+    nonisolated static func espeakDataPresent() -> Bool {
+        let dict = HostDirs.espeakDir.appendingPathComponent("en_dict")
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: dict.path, isDirectory: &isDirectory)
             && !isDirectory.boolValue
