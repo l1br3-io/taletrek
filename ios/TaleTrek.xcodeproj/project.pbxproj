@@ -11,6 +11,14 @@
 		AA0000000000000000000087 /* BooksRepo.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000088 /* BooksRepo.swift */; };
 		AA000000000000000000008B /* LibraryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000008C /* LibraryScreen.swift */; };
 		AA000000000000000000008D /* BooksRepoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000008E /* BooksRepoTests.swift */; };
+		AA00000000000000000000A7 /* SynthEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000A6 /* SynthEngine.swift */; };
+		AA00000000000000000000A9 /* SynthEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000A8 /* SynthEngineTests.swift */; };
+		AA00000000000000000000B6 /* plain.txt in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000B0 /* plain.txt */; };
+		AA00000000000000000000B7 /* book.epub in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000B1 /* book.epub */; };
+		AA00000000000000000000B8 /* with-outline.pdf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000B2 /* with-outline.pdf */; };
+		AA00000000000000000000B9 /* doc.docx in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000B3 /* doc.docx */; };
+		AA00000000000000000000BA /* article.html in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000B4 /* article.html */; };
+		AA00000000000000000000BB /* book.md in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000B5 /* book.md */; };
 		AA000000000000000000009A /* LibraryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000009B /* LibraryUITests.swift */; };
 		AA0000000000000000000032 /* taletrek_ffi.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000026 /* taletrek_ffi.swift */; };
 		AA0000000000000000000033 /* SherpaOnnxC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000027 /* SherpaOnnxC.xcframework */; };
@@ -59,6 +67,14 @@
 		AA000000000000000000008E /* BooksRepoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BooksRepoTests.swift; sourceTree = "<group>"; };
 		AA000000000000000000009B /* LibraryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryUITests.swift; sourceTree = "<group>"; };
 		AA000000000000000000008F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA00000000000000000000A6 /* SynthEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynthEngine.swift; sourceTree = "<group>"; };
+		AA00000000000000000000A8 /* SynthEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynthEngineTests.swift; sourceTree = "<group>"; };
+		AA00000000000000000000B0 /* plain.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = plain.txt; path = ../crates/parse/testdata/plain.txt; sourceTree = SOURCE_ROOT; };
+		AA00000000000000000000B1 /* book.epub */ = {isa = PBXFileReference; lastKnownFileType = file; name = book.epub; path = ../crates/parse/testdata/book.epub; sourceTree = SOURCE_ROOT; };
+		AA00000000000000000000B2 /* with-outline.pdf */ = {isa = PBXFileReference; lastKnownFileType = file; name = with-outline.pdf; path = ../crates/parse/testdata/with-outline.pdf; sourceTree = SOURCE_ROOT; };
+		AA00000000000000000000B3 /* doc.docx */ = {isa = PBXFileReference; lastKnownFileType = file; name = doc.docx; path = ../crates/parse/testdata/doc.docx; sourceTree = SOURCE_ROOT; };
+		AA00000000000000000000B4 /* article.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = article.html; path = ../crates/parse/testdata/article.html; sourceTree = SOURCE_ROOT; };
+		AA00000000000000000000B5 /* book.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = book.md; path = ../crates/parse/testdata/book.md; sourceTree = SOURCE_ROOT; };
 		AA0000000000000000000026 /* taletrek_ffi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = taletrek_ffi.swift; sourceTree = "<group>"; };
 		AA0000000000000000000037 /* taletrek_ffiFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = taletrek_ffiFFI.h; sourceTree = "<group>"; };
 		AA0000000000000000000038 /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = text; path = module.modulemap; sourceTree = "<group>"; };
@@ -139,6 +155,7 @@
 				AA0000000000000000000066 /* ui */,
 				AA0000000000000000000069 /* data */,
 				AA0000000000000000000046 /* playback */,
+				AA00000000000000000000A5 /* convert */,
 				AA000000000000000000000E /* FFI */,
 				AA0000000000000000000027 /* SherpaOnnxC.xcframework */,
 			);
@@ -213,6 +230,14 @@
 			path = playback;
 			sourceTree = "<group>";
 		};
+		AA00000000000000000000A5 /* convert */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000000000000000000A6 /* SynthEngine.swift */,
+			);
+			path = convert;
+			sourceTree = "<group>";
+		};
 		AA000000000000000000000E /* FFI */ = {
 			isa = PBXGroup;
 			children = (
@@ -233,6 +258,13 @@
 				AA0000000000000000000083 /* ReaderViewModelTests.swift */,
 				AA0000000000000000000086 /* NowPlayingTests.swift */,
 				AA000000000000000000008E /* BooksRepoTests.swift */,
+				AA00000000000000000000A8 /* SynthEngineTests.swift */,
+				AA00000000000000000000B0 /* plain.txt */,
+				AA00000000000000000000B1 /* book.epub */,
+				AA00000000000000000000B2 /* with-outline.pdf */,
+				AA00000000000000000000B3 /* doc.docx */,
+				AA00000000000000000000B4 /* article.html */,
+				AA00000000000000000000B5 /* book.md */,
 				AA0000000000000000000028 /* book-playable.taletrek */,
 				AA0000000000000000000045 /* book-corrupt.taletrek */,
 			);
@@ -361,6 +393,12 @@
 			files = (
 				AA0000000000000000000036 /* book-playable.taletrek in Resources */,
 				AA0000000000000000000055 /* book-corrupt.taletrek in Resources */,
+				AA00000000000000000000B6 /* plain.txt in Resources */,
+				AA00000000000000000000B7 /* book.epub in Resources */,
+				AA00000000000000000000B8 /* with-outline.pdf in Resources */,
+				AA00000000000000000000B9 /* doc.docx in Resources */,
+				AA00000000000000000000BA /* article.html in Resources */,
+				AA00000000000000000000BB /* book.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -408,6 +446,7 @@
 				AA0000000000000000000081 /* ReaderViewModelTests.swift in Sources */,
 				AA0000000000000000000084 /* NowPlayingTests.swift in Sources */,
 				AA000000000000000000008D /* BooksRepoTests.swift in Sources */,
+				AA00000000000000000000A9 /* SynthEngineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

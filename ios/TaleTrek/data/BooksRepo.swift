@@ -62,6 +62,11 @@ final class BooksRepository: ObservableObject {
         refresh()
     }
 
+    /// The scan root as a path (the convert request's `booksDir`).
+    var booksDirPath: String {
+        booksDir.path
+    }
+
     /// Rescan `books/` (the initial load rides init).
     func refresh() {
         let contents = (try? FileManager.default.contentsOfDirectory(

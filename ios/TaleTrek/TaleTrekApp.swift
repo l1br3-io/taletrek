@@ -12,6 +12,12 @@ struct TaleTrekApp: App {
     /// import lane both land here.
     @StateObject private var library = BooksRepository()
 
+    /// The one convert slot — sources picked or shared go straight to
+    /// the full audio job (instant-listen).
+    @StateObject private var synth = SynthController()
+
+    @Environment(\.scenePhase) private var scenePhase
+
     init() {
         // The UI tests' clean-slate hook: drop any persisted positions
         // before anything opens a book (must precede the store's lazy
@@ -29,17 +35,42 @@ struct TaleTrekApp: App {
                         self.openPath = nil
                     }
                 } else {
-                    LibraryScreen(repo: library) { path in
+                    LibraryScreen(repo: library, synth: synth) { path in
                         self.openPath = path
                     }
                 }
             }
-            // Files/Mail/Safari hand a .taletrek straight over: a copy
-            // into the scan root and a rescan — the row is waiting when
-            // the reader closes (no gate, no badge).
+            // Files/Mail/Safari hand documents over: bundles copy into
+            // the scan root; sources submit the full audio job — no
+            // gate, no badge.
             .onOpenURL { url in
-                _ = library.importFrom(url)
+                openShared(url)
             }
+            // Foreground-only conversion: backgrounding arms the grace;
+            // expiry cancels cleanly into the retryable Interrupted.
+            .onChange(of: scenePhase) { _, phase in
+                switch phase {
+                case .background:
+                    synth.noteBackgrounded()
+                case .active:
+                    synth.noteForegrounded()
+                case .inactive:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+        }
+    }
+
+    private func openShared(_ url: URL) {
+        if url.pathExtension.lowercased() == "taletrek" {
+            _ = library.importFrom(url)
+        } else {
+            _ = synth.submit(
+                source: url,
+                dirs: .standard(booksDir: URL(fileURLWithPath: library.booksDirPath))
+            )
         }
     }
 }
