@@ -94,10 +94,17 @@ struct LibraryScreen: View {
         )
     }
 
+    /// The fresh-install shape: nothing on the shelf, nothing skipped,
+    /// no convert feedback. Hoisted out of the view body — the inline
+    /// compound type-checked past patience inside the ViewBuilder.
+    private var showsEmptyState: Bool {
+        repo.state.books.isEmpty && repo.state.skipped == 0 && !convertCardShows
+    }
+
     var body: some View {
         NavigationStack {
             Group {
-                if repo.state.books.isEmpty && repo.state.skipped == 0 && !convertCardShows {
+                if showsEmptyState {
                     emptyState
                 } else {
                     list
