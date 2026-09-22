@@ -211,7 +211,8 @@ final class SynthEngineTests: XCTestCase {
             textOnly: false,
             chapters: 1,
             paragraphs: 2,
-            segments: 2
+            segments: 2,
+            sealed: false
         )
     }
 }
