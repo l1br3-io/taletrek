@@ -77,9 +77,13 @@ struct LibraryScreen: View {
     /// Whether any scanned row is filling — the convert card's
     /// hide-when-the-row-exists fact.
     private var anyRowFilling: Bool {
-        rows.contains { row in
-            fillingRowUi(book: row, active: synth.state, preExistingPaths: shelfAtJobStart).filling
+        for row in rows where !row.audioPresent {
+            let ui = fillingRowUi(book: row, active: synth.state, preExistingPaths: shelfAtJobStart)
+            if ui.filling {
+                return true
+            }
         }
+        return false
     }
 
     private var convertCardShows: Bool {
@@ -283,8 +287,8 @@ struct LibraryScreen: View {
     private func rowDetail(_ book: BookShelf) -> String {
         var detail = "\(book.chapterCount) chapter\(book.chapterCount == 1 ? "" : "s")"
             + " · \(book.audioPresent ? "Audio" : "Text only")"
-        if let author, !author.isEmpty {
-            detail += " · \(author)"
+        if let bookAuthor = book.author, !bookAuthor.isEmpty {
+            detail += " · \(bookAuthor)"
         }
         return detail
     }
@@ -407,6 +411,14 @@ private struct ConvertSection: View {
                 row(
                     title: "Converting to audio…",
                     detail: total > 0 ? "paragraph \(min(done, total)) of \(total)" : "starting…",
+                    running: true
+                )
+            case let .filling(done, total):
+                // Normally hidden (the filling row carries progress);
+                // reachable in the window before the rescan lands.
+                row(
+                    title: "Preparing audio…",
+                    detail: total > 0 ? "paragraph \(min(done, total)) of \(total)" : "listen-ready…",
                     running: true
                 )
             case .writing:
