@@ -17,7 +17,7 @@ extension UTType {
         .pdf,
         .plainText,
         .html,
-        .markdown,
+        UTType("net.daringfireball.markdown"),
     ].compactMap { $0 }
 }
 
@@ -29,6 +29,7 @@ extension UTType {
 struct LibraryScreen: View {
     @ObservedObject var repo: BooksRepository
     @ObservedObject var synth: SynthController
+    @ObservedObject var voices: VoiceStore
     let onOpen: (String) -> Void
 
     @State private var importing = false
@@ -50,6 +51,12 @@ struct LibraryScreen: View {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("Import book")
+                NavigationLink {
+                    VoicesScreen(store: voices)
+                } label: {
+                    Image(systemName: "waveform")
+                }
+                .accessibilityLabel("Voices")
             }
         }
         .fileImporter(
@@ -89,7 +96,8 @@ struct LibraryScreen: View {
         } else {
             _ = synth.submit(
                 source: url,
-                dirs: .standard(booksDir: URL(fileURLWithPath: repo.booksDirPath))
+                dirs: .standard(booksDir: URL(fileURLWithPath: repo.booksDirPath)),
+                voiceId: voices.selected
             )
         }
     }
