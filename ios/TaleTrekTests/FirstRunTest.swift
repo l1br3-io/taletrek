@@ -11,6 +11,7 @@ import XCTest
 /// CDN is Mac-local by design (CI runs the non-CDN suites only).
 /// Run: `TALETREK_FRESH_RUN=1 just ios-test` (generous timeout; the
 /// wall time lands in the log for the ship notes).
+@MainActor
 final class FirstRunTest: XCTestCase {
     func testFreshInstallConvertsAndPlaysEndToEnd() throws {
         guard ProcessInfo.processInfo.environment["TALETREK_FRESH_RUN"] == "1" else {

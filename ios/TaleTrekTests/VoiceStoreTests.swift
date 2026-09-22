@@ -68,7 +68,10 @@ final class VoicesViewModelTests: XCTestCase {
         let model = VoicesViewModel(
             store: store ?? VoiceStore(fileURL: tempVoiceFile()),
             cacheDir: "/v",
-            catalog: { [voice("en_US-hfc_female-medium", "HF Female"), voice("en_US-amy-medium", "Amy")] },
+            catalog: { [
+                voice("en_US-hfc_female-medium", name: "HF Female"),
+                voice("en_US-amy-medium", name: "Amy")
+            ] },
             cachedIds: { _ in cached },
             resolve: { id, dir, observer in
                 recorder.events.append("\(id)@\(dir)")
