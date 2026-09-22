@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The signed-export shape (tag pushes). __TEAM_ID__ is sedded from
+	     TALETREK_IOS_TEAM_ID at run time; dry runs never read this file.
+	     Method decision (ask-first session, docs/releasing.md § iOS):
+	     app-store-connect — the signed IPA rides the release assets and
+	     TestFlight/manual upload is the install path. Ad Hoc remains a
+	     one-line change if side-loading wins. -->
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>teamID</key>
+	<string>__TEAM_ID__</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>destination</key>
+	<string>export</string>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>

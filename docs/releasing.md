@@ -97,3 +97,44 @@ The tag build decodes the keystore into `$RUNNER_TEMP` and exports the
 four as env vars — Gradle's signing config is env-driven and opt-in
 (`android/app/build.gradle.kts`); without them the same commands produce
 the unsigned dry-run artifacts.
+
+## iOS artifacts (`taletrek-<version>-ios.ipa`)
+
+The `ios` release job (effort `ios-app` T12, mirroring the CI ios job's
+`macos-15`/Xcode pin) cross-builds the kernel via `just ios-kernel`,
+then `xcodebuild archive` + `-exportArchive` over the committed
+`ios/ExportOptions.plist`. On a **tag push** it attaches:
+
+- `taletrek-<version>-ios.ipa` — the signed IPA (arm64-only, per the
+  plan's pin); the install path is TestFlight/App Store Connect upload
+  per the export method — a one-line Ad Hoc switch in ExportOptions if
+  Finder side-loading wins later
+
+Dry runs (`workflow_dispatch`) archive **unsigned**
+(`CODE_SIGNING_ALLOWED=NO`) and attach the `.xcarchive` zip to the run
+only — the workflow's existing convention.
+
+### Signing (ask-first, one-time with the certs in hand)
+
+The Apple Distribution cert + provisioning profile never live in the
+repo. One-time setup with the paid account:
+
+1. Xcode or developer.apple.com → create an **Apple Distribution**
+   certificate; export it as a `.p12` with a password.
+2. Create a provisioning profile for `dev.l1br3.taletrek`
+   (App Store Connect distribution type).
+3. base64 both and add the GitHub secrets:
+
+| Secret | Value |
+| --- | --- |
+| `TALETREK_IOS_CERT_P12` | base64 of the distribution `.p12` |
+| `TALETREK_IOS_CERT_PASSWORD` | the `.p12` password |
+| `TALETREK_IOS_PROFILE` | base64 of the `.mobileprovision` |
+| `TALETREK_IOS_TEAM_ID` | the 10-char team id (seds `__TEAM_ID__` in ExportOptions) |
+
+The tag build decodes the cert into a throwaway keychain
+(`security create-keychain`/`import`/`set-key-partition-list`) and
+installs the profile under `~/Library/MobileDevice/Provisioning
+Profiles` — xcodebuild finds both; nothing touches the default
+keychain. Without the secrets the same workflow stays on the dry-run
+path.

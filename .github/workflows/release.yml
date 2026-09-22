@@ -238,3 +238,111 @@ jobs:
           files: |
             dist/taletrek-${{ env.VERSION }}-android-universal.apk
             dist/taletrek-${{ env.VERSION }}-android.aab
+
+  # iOS player app — signed IPA on tag pushes (macos-15 to match the CI
+  # ios job's Xcode pin; kernel via `just ios-kernel`, then xcodebuild
+  # archive + exportArchive). Dry runs (workflow_dispatch) archive
+  # UNSIGNED and attach the .xcarchive to the run only. The Apple
+  # Distribution cert (.p12) + provisioning profile live as GitHub
+  # secrets, base64-decoded into a throwaway keychain — never in the
+  # repo. Secret names + creation steps: docs/releasing.md § iOS
+  # (ask-first before wiring; the signed leg needs that session).
+  ios:
+    name: ios (signed ipa)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios-release
+
+      - name: Install just (not on the macOS image)
+        run: brew install just
+
+      - name: Cross-build the kernel (.a for both targets + xcframework → Vendor/)
+        run: just ios-kernel
+
+      - name: Resolve version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = 'tag' ]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+            echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          fi
+
+      # Tag pushes only: import the distribution cert into a throwaway
+      # keychain and install the profile where xcodebuild finds it.
+      - name: Prepare signing identities (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          CERT_P12: ${{ secrets.TALETREK_IOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.TALETREK_IOS_CERT_PASSWORD }}
+          PROFILE: ${{ secrets.TALETREK_IOS_PROFILE }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p "$CERT_PASSWORD" "$KEYCHAIN"
+          security unlock-keychain -p "$CERT_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN"
+          printf '%s' "$CERT_P12" | base64 -d > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$CERT_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILE_DIR"
+          printf '%s' "$PROFILE" | base64 -d > "$RUNNER_TEMP/profile.mobileprovision"
+          UUID="$(security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" \
+            | /usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin)"
+          cp "$RUNNER_TEMP/profile.mobileprovision" "$PROFILE_DIR/$UUID.mobileprovision"
+          # ExportOptions carries a placeholder; the team id arrives here.
+          sed "s/__TEAM_ID__/${{ secrets.TALETREK_IOS_TEAM_ID }}/" \
+            ios/ExportOptions.plist > "$RUNNER_TEMP/ExportOptions.plist"
+
+      - name: Archive (device, unsigned on dry runs)
+        run: |
+          ARGS=()
+          if [ "$GITHUB_REF_TYPE" = 'tag' ]; then
+            ARGS+=(DEVELOPMENT_TEAM='${{ secrets.TALETREK_IOS_TEAM_ID }}')
+          else
+            ARGS+=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO)
+          fi
+          xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/TaleTrek.xcarchive archive "${ARGS[@]}"
+
+      - name: Export the signed IPA (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p dist
+          xcodebuild -exportArchive -archivePath build/TaleTrek.xcarchive \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath dist
+          mv dist/TaleTrek.ipa "dist/taletrek-${VERSION}-ios.ipa"
+          ls -la dist/
+
+      - name: Package (dry run — the unsigned archive)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          mkdir -p dist
+          zip -qry build/TaleTrek.xcarchive "dist/taletrek-${VERSION}-ios-unsigned.xcarchive.zip"
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taletrek-${{ env.VERSION }}-ios
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Attach to the GitHub release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/taletrek-${{ env.VERSION }}-ios.ipa
