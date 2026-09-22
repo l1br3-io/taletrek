@@ -111,17 +111,17 @@ final class VoicesViewModel: ObservableObject {
                 _ = try resolver(id, dir, observer)
                 await MainActor.run {
                     guard let self else { return }
-                    busy.remove(id)
-                    downloads[id] = nil
-                    reload()
+                    self.busy.remove(id)
+                    self.downloads[id] = nil
+                    self.reload()
                 }
             } catch {
                 await MainActor.run {
                     guard let self else { return }
-                    busy.remove(id)
-                    downloads[id] = nil
-                    failure = (voice: id, message: "\(error)")
-                    reload()
+                    self.busy.remove(id)
+                    self.downloads[id] = nil
+                    self.failure = (voice: id, message: "\(error)")
+                    self.reload()
                 }
             }
         }
