@@ -13,6 +13,7 @@ struct ReaderScreen: View {
     let onBack: () -> Void
 
     @State private var outlineOpen = false
+    @Environment(\.scenePhase) private var scenePhase
 
     init(path: String, store: PositionStore = .standard, onBack: @escaping () -> Void) {
         _viewModel = StateObject(wrappedValue: ReaderViewModel(path: path, store: store))
@@ -26,6 +27,11 @@ struct ReaderScreen: View {
             content
         }
         .background(Theme.background)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                viewModel.flushPosition()
+            }
+        }
         .sheet(isPresented: $outlineOpen) {
             if viewModel.state.chapters.indices.contains(viewModel.state.renderedChapter) {
                 OutlineSheet(

@@ -43,6 +43,10 @@ struct ReaderUiState: Equatable {
 /// engine; tests wire a faked port over the same real kernel.
 typealias PlayerHost = (_ book: FfiBook, _ saved: StoredPosition?) -> PlayerBridge
 
+/// Builds the lock-screen controller over the bridge — production wires
+/// MediaPlayer, tests wire recorders.
+typealias NowPlayingHost = (PlayerBridge) -> NowPlayingController
+
 /// The reading surface's state owner: opens the book (restore seeds the
 /// starting chapter), renders per-chapter, and runs the sync loop —
 /// bridge snapshots in, transport forwards out. Sequencing never lives
@@ -56,19 +60,34 @@ final class ReaderViewModel: ObservableObject {
     private let opener: () throws -> FfiBook
     private let store: PositionStore
     private let host: PlayerHost
+    private let nowPlayingHost: NowPlayingHost
+    private let interruptionSource: InterruptionSource
 
     private var bridge: PlayerBridge?
+    private var nowPlaying: NowPlayingController?
+    private var elapsedTimer: Timer?
+    private var wasPlayingBeforeInterruption = false
     private var lastPara: FfiParagraphPos?
     private var landingClearTask: Task<Void, Never>?
 
     init(
         opener: @escaping () throws -> FfiBook,
         store: PositionStore = .standard,
-        host: @escaping PlayerHost
+        host: @escaping PlayerHost,
+        nowPlayingHost: @escaping NowPlayingHost = { bridge in
+            NowPlayingController(
+                target: bridge,
+                infoSink: MediaNowPlayingSink(),
+                registry: MediaRemoteRegistry()
+            )
+        },
+        interruptionSource: InterruptionSource = SystemInterruptionSource()
     ) {
         self.opener = opener
         self.store = store
         self.host = host
+        self.nowPlayingHost = nowPlayingHost
+        self.interruptionSource = interruptionSource
         open()
     }
 
@@ -112,6 +131,16 @@ final class ReaderViewModel: ObservableObject {
                 guard let self, let position else { return }
                 self.store.save(storageKey: storageKey, StoredPosition(position))
             }
+            nowPlaying = nowPlayingHost(bridge)
+            // A call or Siri pauses through the kernel — the same
+            // transition as the pause button; the platform's resume
+            // invitation plays only if the interruption actually
+            // interrupted playback (never wakes a resting reader).
+            interruptionSource.observe { [weak self] event in
+                Task { @MainActor in
+                    self?.handle(event)
+                }
+            }
             let snapshot = bridge.snapshot
             state.loading = false
             state.missing = false
@@ -132,6 +161,7 @@ final class ReaderViewModel: ObservableObject {
         state.active = snapshot.para
         state.skipped = snapshot.failures.skipped
         deriveTransport()
+        updateNowPlaying(snapshot)
         // The follow policy: a user scroll defers auto-scroll; the NEXT
         // paragraph re-arms it and the pane tracks the spoken chapter
         // again.
@@ -142,6 +172,73 @@ final class ReaderViewModel: ObservableObject {
                 state.renderedChapter = Int(para.chapter)
             }
         }
+    }
+
+    /// The lock screen's facts from a snapshot: book/chapter currency,
+    /// play state, and the armed segment's honest times. The system
+    /// extrapolates elapsed between pushes via the rate, so the ticker
+    /// only refreshes foreground drift.
+    private func updateNowPlaying(_ snapshot: FfiStateSnapshot) {
+        if let para = snapshot.para, state.chapters.indices.contains(Int(para.chapter)) {
+            nowPlaying?.update(
+                content: NowPlayingContent(
+                    title: state.bookTitle,
+                    chapterTitle: state.chapters[Int(para.chapter)].title,
+                    chapterNumber: Int(para.chapter) + 1,
+                    chapterCount: state.chapters.count
+                )
+            )
+        }
+        nowPlaying?.setPlaying(snapshot.status == .playing)
+        refreshElapsed()
+        tickElapsedTimer(playing: snapshot.status == .playing)
+    }
+
+    private func refreshElapsed() {
+        if let times = bridge?.nowPlayingTimes {
+            nowPlaying?.update(times: times)
+        }
+    }
+
+    private func tickElapsedTimer(playing: Bool) {
+        if playing, elapsedTimer == nil {
+            elapsedTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) {
+                [weak self] _ in
+                // Foreground drift refresh only — the system
+                // extrapolates elapsed between pushes via the rate, so
+                // the lock screen needs no timer of its own.
+                Task { @MainActor in
+                    self?.refreshElapsed()
+                }
+            }
+        } else if !playing, let elapsedTimer {
+            elapsedTimer.invalidate()
+            self.elapsedTimer = nil
+        }
+    }
+
+    private func handle(_ event: AudioInterruption) {
+        switch event {
+        case .began:
+            wasPlayingBeforeInterruption = bridge?.snapshot.status == .playing
+            bridge?.userPause()
+        case let .ended(shouldResume):
+            if shouldResume, wasPlayingBeforeInterruption {
+                bridge?.userPlay()
+            }
+            wasPlayingBeforeInterruption = false
+        }
+    }
+
+    /// The scene-phase flush — positions already persist on every
+    /// kernel move; this is the backgrounding belt-and-braces write.
+    func flushPosition() {
+        guard let bookId = state.bookId, let position = bridge?.position else { return }
+        store.save(storageKey: positionStorageKey(bookId: bookId), StoredPosition(position))
+    }
+
+    deinit {
+        elapsedTimer?.invalidate()
     }
 
     /// Enabled-state derivation — bounds facts of the snapshot, nothing

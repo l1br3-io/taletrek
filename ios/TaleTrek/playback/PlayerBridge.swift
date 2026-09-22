@@ -104,6 +104,13 @@ final class PlayerBridge {
         kernel.position()
     }
 
+    /// The Now Playing currency straight from the engine — the armed
+    /// segment's duration + audio-time elapsed, `nil` when nothing is
+    /// armed. Render facts; the lock screen is their only consumer.
+    var nowPlayingTimes: SegmentTimes? {
+        port.nowPlayingTimes()
+    }
+
     // --- engine reports in (the sink side) --------------------------------
 
     private func dispatch(_ event: FfiPlayerEvent) {
@@ -154,5 +161,31 @@ extension PlayerBridge: EngineEventSink {
     func onSegmentFailed(key: String, error: String) {
         pendingKey = nil
         dispatch(.segmentFailed(key: key, error: error))
+    }
+}
+
+/// The lock screen may command the bridge exactly as the transport bar
+/// does — the same user events, the kernel's same transitions (a
+/// remote chapter press is indistinguishable from an in-app tap, the
+/// task-006 criterion).
+extension PlayerBridge: RemoteCommandTarget {
+    var isPlaying: Bool {
+        snapshot.status == .playing
+    }
+
+    func play() {
+        userPlay()
+    }
+
+    func pause() {
+        userPause()
+    }
+
+    func nextChapter() {
+        userNextChapter()
+    }
+
+    func prevChapter() {
+        userPrevChapter()
     }
 }

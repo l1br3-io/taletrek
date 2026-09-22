@@ -1,10 +1,13 @@
+import MediaPlayer
 import XCTest
 @testable import TaleTrek
 
 /// The reader's state owner over the real kernel + a faked engine
-/// surface: open/restore flows, the follow policy, jump-to-chapter, and
-/// the position save cadence. Sequencing assertions ride the kernel's
-/// own semantics (the same discipline as the bridge tests).
+/// surface: open/restore flows, the follow policy, jump-to-chapter, the
+/// position save cadence, and the interruption route (pause through the
+/// kernel; resume only by invitation and only if playing was
+/// interrupted). Sequencing assertions ride the kernel's own semantics
+/// (the same discipline as the bridge tests).
 @MainActor
 final class ReaderViewModelTests: XCTestCase {
     private final class RecordingPort: AudioPort {
@@ -18,6 +21,41 @@ final class ReaderViewModelTests: XCTestCase {
         func stopOutput() {
             stops += 1
         }
+    }
+
+    private final class FakeInterruptionSource: InterruptionSource {
+        var handler: ((AudioInterruption) -> Void)?
+
+        func observe(_ handler: @escaping (AudioInterruption) -> Void) {
+            self.handler = handler
+        }
+
+        func fire(_ event: AudioInterruption) {
+            handler?(event)
+        }
+    }
+
+    private final class RecordingNowPlayingSink: NowPlayingInfoSink {
+        private(set) var infos: [[String: Any]] = []
+
+        func setInfo(_ info: [String: Any]) {
+            infos.append(info)
+        }
+    }
+
+    private final class StubRemoteCommand: RemoteCommand {
+        var isEnabled = true
+
+        func setHandler(_ handler: @escaping () -> Void) {}
+    }
+
+    private final class StubRemoteRegistry: RemoteCommandRegistry {
+        let play: RemoteCommand = StubRemoteCommand()
+        let pause: RemoteCommand = StubRemoteCommand()
+        let togglePlayPause: RemoteCommand = StubRemoteCommand()
+        let nextTrack: RemoteCommand = StubRemoteCommand()
+        let previousTrack: RemoteCommand = StubRemoteCommand()
+        let changePlaybackPosition: RemoteCommand = StubRemoteCommand()
     }
 
     private func book(chapterTexts: [[String]], audio: Bool = true) -> FfiBook {
@@ -51,11 +89,13 @@ final class ReaderViewModelTests: XCTestCase {
 
     /// The wired harness: view model + recording port + the bridge once
     /// the open lands (SwiftLint keeps tuples at two members; this is
-    /// three facts).
+    /// four facts).
     private struct Harness {
         let viewModel: ReaderViewModel
         let port: RecordingPort
         var box: BridgeBox
+        var interruptions: FakeInterruptionSource
+        var nowPlayingSink: RecordingNowPlayingSink
     }
 
     private final class BridgeBox {
@@ -66,6 +106,8 @@ final class ReaderViewModelTests: XCTestCase {
         _ book: FfiBook, store: PositionStore
     ) -> Harness {
         let port = RecordingPort()
+        let interruptions = FakeInterruptionSource()
+        let nowPlayingSink = RecordingNowPlayingSink()
         // The test keeps a handle on the bridge so platform reports can
         // be driven the way the engine would (ready, drained) — it
         // lands asynchronously, hence the box.
@@ -81,9 +123,23 @@ final class ReaderViewModelTests: XCTestCase {
                 let bridge = PlayerBridge(kernel: kernel, port: port)
                 box.bridge = bridge
                 return bridge
-            }
+            },
+            nowPlayingHost: { bridge in
+                NowPlayingController(
+                    target: bridge,
+                    infoSink: nowPlayingSink,
+                    registry: StubRemoteRegistry()
+                )
+            },
+            interruptionSource: interruptions
         )
-        return Harness(viewModel: viewModel, port: port, box: box)
+        return Harness(
+            viewModel: viewModel,
+            port: port,
+            box: box,
+            interruptions: interruptions,
+            nowPlayingSink: nowPlayingSink
+        )
     }
 
     private func waitUntil(
@@ -263,5 +319,54 @@ final class ReaderViewModelTests: XCTestCase {
         )
         waitUntil("the open fails") { !viewModel.state.loading }
         XCTAssertTrue(viewModel.state.missing)
+    }
+
+    func testAnInterruptionPausesThroughTheKernelAndResumesWhenInvited() {
+        let book = book(chapterTexts: [["One.", "Two."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+
+        harness.interruptions.fire(.began)
+        waitUntil("interrupted into a kernel pause") { viewModel.state.status == .paused }
+
+        harness.interruptions.fire(.ended(shouldResume: true))
+        waitUntil("resumed by the platform's invitation") { viewModel.state.status == .playing }
+    }
+
+    func testAnInterruptionWhilePausedNeverWakesTheBook() {
+        let book = book(chapterTexts: [["One."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+        viewModel.pause()
+        waitUntil("paused by the user") { viewModel.state.status == .paused }
+
+        harness.interruptions.fire(.began)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        harness.interruptions.fire(.ended(shouldResume: true))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        XCTAssertEqual(viewModel.state.status, .paused, "a resting reader stays resting")
+    }
+
+    func testNowPlayingContentRidesTheSnapshot() {
+        let book = book(chapterTexts: [["One."], ["Two."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+
+        let titled = harness.nowPlayingSink.infos.filter {
+            $0[MPMediaItemPropertyTitle] as? String == "Test Book"
+        }
+        XCTAssertTrue(!titled.isEmpty, "the lock screen learns the book")
+        XCTAssertEqual(titled.last?[MPMediaItemPropertyAlbumTitle] as? String, "Chapter 1")
+        XCTAssertEqual(titled.last?[MPPlaybackRate] as? Double, 1.0)
     }
 }

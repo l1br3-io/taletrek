@@ -24,3 +24,49 @@ final class AudioSession: PlaybackSession {
         activated = true
     }
 }
+
+/// An audio-session interruption's shape — the pause/resume facts the
+/// platform reports (AVAudioSession numerics stay inside the system
+/// source).
+enum AudioInterruption: Equatable {
+    case began
+    case ended(shouldResume: Bool)
+}
+
+/// Where interruptions come from — AVAudioSession's notification in
+/// production, the test's hands otherwise.
+protocol InterruptionSource: AnyObject {
+    func observe(_ handler: @escaping (AudioInterruption) -> Void)
+}
+
+/// The production source over `AVAudioSession.interruptionNotification`
+/// (a call, Siri, an alarm). Delivered on main — the notification is
+/// registered with a main queue.
+final class SystemInterruptionSource: InterruptionSource {
+    private var observer: (any NSObjectProtocol)?
+
+    func observe(_ handler: @escaping (AudioInterruption) -> Void) {
+        observer = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { note in
+            let type = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let options = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt
+            if type == AVAudioSession.InterruptionType.began.rawValue {
+                handler(.began)
+            } else if type == AVAudioSession.InterruptionType.ended.rawValue {
+                let shouldResume = AVAudioSession.InterruptionOptions(
+                    rawValue: options ?? 0
+                ).contains(.shouldResume)
+                handler(.ended(shouldResume: shouldResume))
+            }
+        }
+    }
+
+    deinit {
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+}

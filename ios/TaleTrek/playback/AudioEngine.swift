@@ -12,6 +12,23 @@ protocol AudioPort: AnyObject {
 
     /// Silence output and drop the current segment.
     func stopOutput()
+
+    /// The armed segment's Now Playing currency — honest duration from
+    /// decoded PCM + audio-time elapsed; `nil` when nothing is armed.
+    /// Lock-screen facts only, sequencing never reads it.
+    func nowPlayingTimes() -> SegmentTimes?
+}
+
+extension AudioPort {
+    func nowPlayingTimes() -> SegmentTimes? { nil }
+}
+
+/// The current segment's Now Playing facts: full duration (decoded
+/// PCM length over rate) and elapsed audio time (scheduled offset +
+/// frames played). One honest currency — no extrapolated book time.
+struct SegmentTimes: Equatable {
+    let duration: Double
+    let elapsed: Double
 }
 
 /// The engine's reports to the bridge. Every callback hops through the
@@ -70,6 +87,10 @@ final class AudioEngine: AudioPort {
     private var generation = 0
     private var connectedFormat: AVAudioFormat?
 
+    /// The armed segment's Now Playing facts source (nil when idle or
+    /// stopped — the lock screen then keeps the last pushed elapsed).
+    private var scheduled: (duration: Double, offset: Double, sampleRate: Double)?
+
     /// The walk test's probe: the segments the engine was told to play,
     /// in order, with their scheduled offsets.
     private var appliedLoads: [(key: String, offset: Double)] = []
@@ -119,7 +140,26 @@ final class AudioEngine: AudioPort {
             // Orphans any in-flight decode and pending completion
             // handlers (they fire on `stop()` — the epoch drops them).
             self.generation &+= 1
+            self.scheduled = nil
             self.node.stop()
+        }
+    }
+
+    func nowPlayingTimes() -> SegmentTimes? {
+        queue.sync {
+            guard let armed = scheduled else { return nil }
+            let played: Double = {
+                guard
+                    node.isPlaying,
+                    let render = node.lastRenderTime,
+                    let player = node.playerTime(forNodeTime: render)
+                else { return 0 }
+                return max(Double(player.sampleTime) / armed.sampleRate, 0)
+            }()
+            return SegmentTimes(
+                duration: armed.duration,
+                elapsed: min(armed.offset + played, armed.duration)
+            )
         }
     }
 
@@ -168,6 +208,13 @@ final class AudioEngine: AudioPort {
         if !engine.isRunning {
             try engine.start()
         }
+        let channels = Int(audio.channels)
+        let totalFrames = audio.samples.count / max(channels, 1)
+        scheduled = (
+            duration: Double(totalFrames) / Double(audio.sampleRate),
+            offset: offset,
+            sampleRate: Double(audio.sampleRate)
+        )
         node.scheduleBuffer(
             makeBuffer(audio: audio, format: format, offset: offset),
             completionCallbackType: .dataPlayedBack
