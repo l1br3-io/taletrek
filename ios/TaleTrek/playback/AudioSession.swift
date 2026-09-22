@@ -110,7 +110,7 @@ final class SystemRouteChangeSource: RouteChangeSource {
     func stopObserving() {
         guard let observer else { return }
         NotificationCenter.default.removeObserver(observer)
-        observer = nil
+        self.observer = nil
     }
 
     deinit {
