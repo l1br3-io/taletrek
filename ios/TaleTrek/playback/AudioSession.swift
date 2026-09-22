@@ -70,3 +70,94 @@ final class SystemInterruptionSource: InterruptionSource {
         }
     }
 }
+
+/// A route change the guard acts on — only the unplug fact. Re-plug
+/// (`.newDeviceUnavailable`) is deliberately unmapped: no auto-resume
+/// (the user's call; the focus-loss policy's stance verbatim).
+enum AudioRouteChange: Equatable {
+    case oldDeviceUnavailable
+}
+
+/// Where route changes come from — AVAudioSession's notification in
+/// production, the test's hands otherwise. The observe/stop pair is the
+/// playing gate's surface: the guard registers on play and tears the
+/// observation down on every non-playing path.
+protocol RouteChangeSource: AnyObject {
+    func observe(_ handler: @escaping (AudioRouteChange) -> Void)
+    func stopObserving()
+}
+
+/// The production source over `AVAudioSession.routeChangeNotification`
+/// — old-device-gone is the unplug (headphones pulled, Bluetooth
+/// dropped). Delivered on main, like the interruption source.
+final class SystemRouteChangeSource: RouteChangeSource {
+    private var observer: (any NSObjectProtocol)?
+
+    func observe(_ handler: @escaping (AudioRouteChange) -> Void) {
+        guard observer == nil else { return }
+        observer = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { note in
+            let reason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            if reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue {
+                handler(.oldDeviceUnavailable)
+            }
+        }
+    }
+
+    func stopObserving() {
+        guard let observer else { return }
+        NotificationCenter.default.removeObserver(observer)
+        observer = nil
+    }
+
+    deinit {
+        stopObserving()
+    }
+}
+
+/// The unplug-pause guard (android-hardening parity): headphones pulled
+/// mid-book pauses through the kernel — one `userPause`, the same
+/// transition as the pause button — never an engine-side pause, never
+/// an auto-resume on re-plug. The observation is playing-gated: armed
+/// when playback starts, torn down on every non-playing path (pause,
+/// stop, drain-end, idle), so a route change can never fire at a
+/// reader that isn't listening and no observer outlives its window.
+@MainActor
+final class RouteChangeGuard {
+    private let pause: () -> Void
+    private let source: RouteChangeSource
+    private var armed = false
+
+    init(pause: @escaping () -> Void, source: RouteChangeSource) {
+        self.pause = pause
+        self.source = source
+    }
+
+    /// The render fact that gates the observation — call on every
+    /// status change, the same cadence as the lock screen's own.
+    func setPlaying(_ playing: Bool) {
+        if playing, !armed {
+            armed = true
+            source.observe { [weak self] _ in
+                Task { @MainActor in self?.unplugged() }
+            }
+        } else if !playing, armed {
+            armed = false
+            source.stopObserving()
+        }
+    }
+
+    deinit {
+        if armed {
+            source.stopObserving()
+        }
+    }
+
+    private func unplugged() {
+        guard armed else { return } // a hop that outlived teardown — dropped
+        pause()
+    }
+}

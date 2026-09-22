@@ -62,9 +62,11 @@ final class ReaderViewModel: ObservableObject {
     private let host: PlayerHost
     private let nowPlayingHost: NowPlayingHost
     private let interruptionSource: InterruptionSource
+    private let routeChangeSource: RouteChangeSource
 
     private var bridge: PlayerBridge?
     private var nowPlaying: NowPlayingController?
+    private var routeGuard: RouteChangeGuard?
     private var elapsedTimer: Timer?
     private var wasPlayingBeforeInterruption = false
     private var lastPara: FfiParagraphPos?
@@ -81,13 +83,15 @@ final class ReaderViewModel: ObservableObject {
                 registry: MediaRemoteRegistry()
             )
         },
-        interruptionSource: InterruptionSource = SystemInterruptionSource()
+        interruptionSource: InterruptionSource = SystemInterruptionSource(),
+        routeChangeSource: RouteChangeSource = SystemRouteChangeSource()
     ) {
         self.opener = opener
         self.store = store
         self.host = host
         self.nowPlayingHost = nowPlayingHost
         self.interruptionSource = interruptionSource
+        self.routeChangeSource = routeChangeSource
         open()
     }
 
@@ -132,6 +136,14 @@ final class ReaderViewModel: ObservableObject {
                 self.store.save(storageKey: storageKey, StoredPosition(position))
             }
             nowPlaying = nowPlayingHost(bridge)
+            // Headphones pulled mid-book pauses through the kernel —
+            // the unplug guard (never an engine-side pause, never an
+            // auto-resume on re-plug); armed only while playing, the
+            // same render fact the lock screen rides.
+            routeGuard = RouteChangeGuard(
+                pause: { [weak bridge] in bridge?.userPause() },
+                source: routeChangeSource
+            )
             // A call or Siri pauses through the kernel — the same
             // transition as the pause button; the platform's resume
             // invitation plays only if the interruption actually
@@ -190,6 +202,7 @@ final class ReaderViewModel: ObservableObject {
             )
         }
         nowPlaying?.setPlaying(snapshot.status == .playing)
+        routeGuard?.setPlaying(snapshot.status == .playing)
         refreshElapsed()
         tickElapsedTimer(playing: snapshot.status == .playing)
     }

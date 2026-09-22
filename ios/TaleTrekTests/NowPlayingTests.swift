@@ -185,3 +185,97 @@ final class NowPlayingTests: XCTestCase {
         XCTAssertEqual(last?[MPNowPlayingInfoPropertyPlaybackRate] as? Double, 1.0)
     }
 }
+
+/// The unplug guard's hostable half: playing-gated observation over a
+/// faked source and the pause routing (the real AVAudioSession
+/// notification stays production-only). The JVM-analog discipline:
+/// observer lifecycle proven without hardware.
+@MainActor
+final class RouteChangeGuardTests: XCTestCase {
+    private final class FakeRouteSource: RouteChangeSource {
+        private(set) var observes = 0
+        private(set) var stops = 0
+        private var handler: ((AudioRouteChange) -> Void)?
+
+        func observe(_ handler: @escaping (AudioRouteChange) -> Void) {
+            observes += 1
+            self.handler = handler
+        }
+
+        func stopObserving() {
+            stops += 1
+            handler = nil
+        }
+
+        /// Fires like the main-queue notification would — the guard's
+        /// handler hops to the main actor, so effects land after a run
+        /// loop turn.
+        func fireUnplug() {
+            handler?(.oldDeviceUnavailable)
+        }
+    }
+
+    func testUnplugPausesThroughTheSeamWhilePlaying() {
+        let source = FakeRouteSource()
+        var pauses = 0
+        let routeGuard = RouteChangeGuard(pause: { pauses += 1 }, source: source)
+
+        routeGuard.setPlaying(true)
+        source.fireUnplug()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        XCTAssertEqual(pauses, 1, "one userPause — through the kernel seam")
+    }
+
+    func testTheObservationIsPlayingGated() {
+        let source = FakeRouteSource()
+        var pauses = 0
+        let routeGuard = RouteChangeGuard(pause: { pauses += 1 }, source: source)
+
+        XCTAssertEqual(source.observes, 0, "never registered before playback")
+        source.fireUnplug()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(pauses, 0)
+
+        routeGuard.setPlaying(true)
+        XCTAssertEqual(source.observes, 1, "armed on play")
+
+        routeGuard.setPlaying(false)
+        XCTAssertEqual(source.stops, 1, "torn down on the non-playing path")
+        source.fireUnplug()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(pauses, 0, "a torn-down observation cannot pause")
+
+        routeGuard.setPlaying(true)
+        XCTAssertEqual(source.observes, 2, "re-armed on the next play window")
+    }
+
+    func testRepeatedStatesNeitherDoubleArmNorDoubleStop() {
+        let source = FakeRouteSource()
+        let routeGuard = RouteChangeGuard(pause: {}, source: source)
+
+        routeGuard.setPlaying(true)
+        routeGuard.setPlaying(true)
+        routeGuard.setPlaying(true)
+        XCTAssertEqual(source.observes, 1)
+
+        routeGuard.setPlaying(false)
+        routeGuard.setPlaying(false)
+        XCTAssertEqual(source.stops, 1)
+    }
+
+    func testAHopThatOutlivedTeardownIsDropped() {
+        let source = FakeRouteSource()
+        var pauses = 0
+        let routeGuard = RouteChangeGuard(pause: { pauses += 1 }, source: source)
+
+        routeGuard.setPlaying(true)
+        source.fireUnplug()
+        // Teardown lands before the fired hop runs — the stale hop must
+        // find the gate closed.
+        routeGuard.setPlaying(false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        XCTAssertEqual(pauses, 0, "no pause from a notification the gate already rejected")
+    }
+}

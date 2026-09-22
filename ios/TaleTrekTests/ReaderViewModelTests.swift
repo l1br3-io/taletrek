@@ -35,6 +35,22 @@ final class ReaderViewModelTests: XCTestCase {
         }
     }
 
+    private final class FakeRouteChangeSource: RouteChangeSource {
+        var handler: ((AudioRouteChange) -> Void)?
+
+        func observe(_ handler: @escaping (AudioRouteChange) -> Void) {
+            self.handler = handler
+        }
+
+        func stopObserving() {
+            handler = nil
+        }
+
+        func fireUnplug() {
+            handler?(.oldDeviceUnavailable)
+        }
+    }
+
     private final class RecordingNowPlayingSink: NowPlayingInfoSink {
         private(set) var infos: [[String: Any]] = []
 
@@ -95,6 +111,7 @@ final class ReaderViewModelTests: XCTestCase {
         let port: RecordingPort
         var box: BridgeBox
         var interruptions: FakeInterruptionSource
+        var routes: FakeRouteChangeSource
         var nowPlayingSink: RecordingNowPlayingSink
     }
 
@@ -107,6 +124,7 @@ final class ReaderViewModelTests: XCTestCase {
     ) -> Harness {
         let port = RecordingPort()
         let interruptions = FakeInterruptionSource()
+        let routes = FakeRouteChangeSource()
         let nowPlayingSink = RecordingNowPlayingSink()
         // The test keeps a handle on the bridge so platform reports can
         // be driven the way the engine would (ready, drained) — it
@@ -131,13 +149,15 @@ final class ReaderViewModelTests: XCTestCase {
                     registry: StubRemoteRegistry()
                 )
             },
-            interruptionSource: interruptions
+            interruptionSource: interruptions,
+            routeChangeSource: routes
         )
         return Harness(
             viewModel: viewModel,
             port: port,
             box: box,
             interruptions: interruptions,
+            routes: routes,
             nowPlayingSink: nowPlayingSink
         )
     }
@@ -352,6 +372,38 @@ final class ReaderViewModelTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
 
         XCTAssertEqual(viewModel.state.status, .paused, "a resting reader stays resting")
+    }
+
+    func testAnUnplugPausesThroughTheKernel() {
+        let book = book(chapterTexts: [["One.", "Two."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+        XCTAssertTrue(harness.routes.handler != nil, "the observation armed with playback")
+
+        harness.routes.fireUnplug()
+        waitUntil("the unplug paused through the kernel") { viewModel.state.status == .paused }
+        XCTAssertEqual(harness.port.stops, 1, "the kernel ordered the stop — engine-side never")
+        XCTAssertTrue(harness.routes.handler == nil, "paused: the observation torn down")
+    }
+
+    func testAnUnplugWhilePausedCannotWakeOrDoublePause() {
+        let book = book(chapterTexts: [["One."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+        viewModel.pause()
+        waitUntil("paused by the user") { viewModel.state.status == .paused }
+
+        harness.routes.fireUnplug()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        XCTAssertEqual(viewModel.state.status, .paused, "no transition from a gated observation")
+        XCTAssertEqual(harness.port.stops, 1, "the pause's own stop — nothing extra")
     }
 
     func testNowPlayingContentRidesTheSnapshot() {
