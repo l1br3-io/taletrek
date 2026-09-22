@@ -78,6 +78,7 @@ final class ReaderViewModelTests: XCTestCase {
         FfiBook(
             bookId: "bk_test",
             title: "Test Book",
+            author: nil,
             voiceId: "v",
             audioPresent: audio,
             chapters: chapterTexts.enumerated().map { chapterOrdinal, texts in

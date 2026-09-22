@@ -42,6 +42,7 @@ final class PlaybackBridgeTests: XCTestCase {
         FfiBook(
             bookId: "bk_test",
             title: "Test Book",
+            author: nil,
             voiceId: "v",
             audioPresent: audio,
             chapters: [
