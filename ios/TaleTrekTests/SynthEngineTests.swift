@@ -55,9 +55,15 @@ final class SynthEngineTests: XCTestCase {
         timer.invalidate()
     }
 
+    /// A pickable source: a bare `story.txt` inside a unique directory —
+    /// the name is the premise the `hint` assertion rides (a real pick
+    /// is named what the user's file is named; the staging copy adds
+    /// the UUID, the hint must not carry it).
     private func makeSource(name: String = "story.txt") throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("src-\(UUID().uuidString)-\(name)")
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("src-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(name)
         try Data("chapter one\n\nfirst paragraph here.\n\nsecond paragraph here.\n".utf8)
             .write(to: url)
         return url
@@ -86,16 +92,24 @@ final class SynthEngineTests: XCTestCase {
         XCTAssertEqual(controller.state, .preparing(chapters: nil, paragraphs: nil))
 
         let observer = try XCTUnwrap(engine.observer)
+        // Events hop to the main actor before they land — each mapped
+        // state is awaited, not assumed synchronous.
         observer.onPipelineEvent(event: .parsed(chapters: 1, paragraphs: 2))
-        XCTAssertEqual(controller.state, .preparing(chapters: 1, paragraphs: 2))
+        waitUntil("parsed shape lands") {
+            controller.state == .preparing(chapters: 1, paragraphs: 2)
+        }
         observer.onPipelineEvent(event: .downloadStep(bytesDone: 10, bytesTotal: 100))
-        XCTAssertEqual(controller.state, .downloadingVoice(done: 10, total: 100))
+        waitUntil("download progress maps") {
+            controller.state == .downloadingVoice(done: 10, total: 100)
+        }
         observer.onPipelineEvent(event: .phase(.synthesizing))
-        XCTAssertEqual(controller.state, .synthesizing(done: 0, total: 0))
+        waitUntil("synth phase maps") { controller.state == .synthesizing(done: 0, total: 0) }
         observer.onPipelineEvent(event: .synthStep(done: 1, total: 2))
-        XCTAssertEqual(controller.state, .synthesizing(done: 1, total: 2))
+        waitUntil("synth progress maps") {
+            controller.state == .synthesizing(done: 1, total: 2)
+        }
         observer.onPipelineEvent(event: .phase(.writing))
-        XCTAssertEqual(controller.state, .writing)
+        waitUntil("writing phase maps") { controller.state == .writing }
     }
 
     func testSubmitWhileRunningIsRejected() throws {

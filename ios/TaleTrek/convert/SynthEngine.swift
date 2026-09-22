@@ -317,6 +317,10 @@ final class SynthController: ObservableObject {
                 state = .synthesizing(done: 0, total: 0)
             case .writing:
                 state = .writing
+            case .sealing:
+                // Progressive-only (task 009 wires progressive jobs);
+                // a batch job never enters it.
+                break
             }
         case let .parsed(chapters, paragraphs):
             state = .preparing(chapters: chapters, paragraphs: paragraphs)
@@ -324,6 +328,10 @@ final class SynthController: ObservableObject {
             state = .downloadingVoice(done: done, total: total)
         case let .synthStep(done, total):
             state = .synthesizing(done: done, total: total)
+        case .playable, .sealed:
+            // Progressive-only lifecycle events (task 009); the batch
+            // jobs this controller submits today never emit them.
+            break
         }
     }
 
@@ -376,7 +384,9 @@ final class SynthController: ObservableObject {
 extension SynthJobRequest {
     /// The kernel config. iOS only ever converts to audio — the
     /// text-only variant is a kernel/FFI capability (desktop/web), used
-    /// by the tests as the CDN-free integration shape.
+    /// by the tests as the CDN-free integration shape. `progressive`
+    /// stays nil here (the batch behavior); task 009 submits the
+    /// progressive variant.
     func toConfig(textOnly: Bool = false) -> FfiPipelineConfig {
         FfiPipelineConfig(
             sourcePath: sourcePath,
@@ -387,7 +397,8 @@ extension SynthJobRequest {
             espeakDir: espeakDir,
             booksDir: booksDir,
             jobs: jobs,
-            generatorApp: generatorApp
+            generatorApp: generatorApp,
+            progressive: nil
         )
     }
 }

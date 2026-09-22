@@ -161,6 +161,10 @@ struct LibraryScreen: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // A plain VStack is not an accessibility element — the
+        // identifier would never surface to XCUITest. `.contain` makes
+        // the empty state a real (still per-child accessible) element.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("library-empty")
     }
 }

@@ -51,11 +51,18 @@ enum NowPlayingInfo {
         times: SegmentTimes?,
         playing: Bool
     ) -> [String: Any] {
+        // Typed locals: `times?.duration ?? 0` boxed straight into Any
+        // lands as a dynamic Int (the literal side) when times is nil —
+        // an Int where every reader expects a Double. The explicit
+        // Double keeps the dictionary honest (the trap NowPlayingTests
+        // caught on its first real run).
+        let duration: Double = times?.duration ?? 0
+        let elapsed: Double = times?.elapsed ?? 0
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: content.title,
             MPMediaItemPropertyAlbumTitle: content.chapterTitle,
-            MPMediaItemPropertyPlaybackDuration: times?.duration ?? 0,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: times?.elapsed ?? 0,
+            MPMediaItemPropertyPlaybackDuration: duration,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: elapsed,
             MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0,
         ]
         if content.chapterCount > 0 {

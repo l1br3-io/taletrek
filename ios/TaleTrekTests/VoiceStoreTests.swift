@@ -57,8 +57,19 @@ final class VoicesViewModelTests: XCTestCase {
         )
     }
 
+    /// The fake cache "disk" — mutable so `remove` and `resolve` can
+    /// actually move state (a captured `let [String]` made the fakes
+    /// incoherent: delete never un-cached, download never cached).
+    private final class FakeCache {
+        var ids: [String]
+
+        init(_ ids: [String] = []) {
+            self.ids = ids
+        }
+    }
+
     private func makeModel(
-        cached: [String] = [],
+        cache: FakeCache = FakeCache(),
         resolve: @escaping (String, String, FfiVoiceObserver) throws -> String = { id, _, _ in id },
         espeak: Bool = false,
         store: VoiceStore? = nil
@@ -72,13 +83,14 @@ final class VoicesViewModelTests: XCTestCase {
                 self.voice("en_US-hfc_female-medium", name: "HF Female"),
                 self.voice("en_US-amy-medium", name: "Amy")
             ] },
-            cachedIds: { _ in cached },
+            cachedIds: { _ in cache.ids },
             resolve: { id, dir, observer in
                 recorder.events.append("\(id)@\(dir)")
                 return try resolve(id, dir, observer)
             },
             remove: { _, id in
                 deletions.values.append(id)
+                cache.ids.removeAll { $0 == id }
                 return true
             },
             espeakCheck: { espeak }
@@ -100,7 +112,7 @@ final class VoicesViewModelTests: XCTestCase {
     }
 
     func testCatalogRendersWithCachedMarksAndEspeakState() {
-        let (model, _, _) = makeModel(cached: ["en_US-amy-medium"], espeak: true)
+        let (model, _, _) = makeModel(cache: FakeCache(["en_US-amy-medium"]), espeak: true)
 
         XCTAssertEqual(model.rows.count, 2)
         XCTAssertEqual(model.rows.map(\.cached), [false, true])
@@ -122,7 +134,14 @@ final class VoicesViewModelTests: XCTestCase {
     }
 
     func testDownloadLandsTheCacheAndClearsBusy() {
-        let (model, recorder, _) = makeModel()
+        let cache = FakeCache()
+        let (model, recorder, _) = makeModel(
+            cache: cache,
+            resolve: { id, _, _ in
+                cache.ids.append(id)
+                return id
+            }
+        )
 
         model.download("en_US-amy-medium")
         let fulfilled = expectation(description: "cached after download")
@@ -165,7 +184,7 @@ final class VoicesViewModelTests: XCTestCase {
     func testDeletingASelectedUncachedVoiceResetsToDefault() throws {
         let store = VoiceStore(fileURL: tempVoiceFile())
         store.setSelected("en_US-amy-medium")
-        let (model, _, deletions) = makeModel(cached: ["en_US-amy-medium"], store: store)
+        let (model, _, deletions) = makeModel(cache: FakeCache(["en_US-amy-medium"]), store: store)
         XCTAssertEqual(model.selected, "en_US-amy-medium")
 
         model.delete("en_US-amy-medium")
