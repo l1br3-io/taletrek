@@ -306,13 +306,17 @@ jobs:
           sed "s/__TEAM_ID__/${{ secrets.TALETREK_IOS_TEAM_ID }}/" \
             ios/ExportOptions.plist > "$RUNNER_TEMP/ExportOptions.plist"
 
-      - name: Archive (device, unsigned on dry runs)
+      - name: Archive (device, ad-hoc on dry runs)
         run: |
           ARGS=()
           if [ "$GITHUB_REF_TYPE" = 'tag' ]; then
             ARGS+=(DEVELOPMENT_TEAM='${{ secrets.TALETREK_IOS_TEAM_ID }}')
           else
-            ARGS+=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO)
+            # CODE_SIGNING_ALLOWED=NO makes the archive action skip the
+            # .xcarchive entirely (dry-run trap, run 35680114365);
+            # ad-hoc signing needs no identities and produces the real
+            # archive shape.
+            ARGS+=(CODE_SIGN_IDENTITY=-)
           fi
           xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
             -destination 'generic/platform=iOS' \
