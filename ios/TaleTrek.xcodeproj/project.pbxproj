@@ -8,7 +8,10 @@
 
 /* Begin PBXBuildFile section */
 		AA0000000000000000000030 /* TaleTrekApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000024 /* TaleTrekApp.swift */; };
-		AA0000000000000000000031 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000025 /* ContentView.swift */; };
+		AA0000000000000000000087 /* BooksRepo.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000088 /* BooksRepo.swift */; };
+		AA000000000000000000008B /* LibraryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000008C /* LibraryScreen.swift */; };
+		AA000000000000000000008D /* BooksRepoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000008E /* BooksRepoTests.swift */; };
+		AA000000000000000000009A /* LibraryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000009B /* LibraryUITests.swift */; };
 		AA0000000000000000000032 /* taletrek_ffi.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000026 /* taletrek_ffi.swift */; };
 		AA0000000000000000000033 /* SherpaOnnxC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000027 /* SherpaOnnxC.xcframework */; };
 		AA0000000000000000000034 /* SherpaOnnxC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000027 /* SherpaOnnxC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -51,7 +54,11 @@
 
 /* Begin PBXFileReference section */
 		AA0000000000000000000024 /* TaleTrekApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaleTrekApp.swift; sourceTree = "<group>"; };
-		AA0000000000000000000025 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000088 /* BooksRepo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BooksRepo.swift; sourceTree = "<group>"; };
+		AA000000000000000000008C /* LibraryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryScreen.swift; sourceTree = "<group>"; };
+		AA000000000000000000008E /* BooksRepoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BooksRepoTests.swift; sourceTree = "<group>"; };
+		AA000000000000000000009B /* LibraryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryUITests.swift; sourceTree = "<group>"; };
+		AA000000000000000000008F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA0000000000000000000026 /* taletrek_ffi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = taletrek_ffi.swift; sourceTree = "<group>"; };
 		AA0000000000000000000037 /* taletrek_ffiFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = taletrek_ffiFFI.h; sourceTree = "<group>"; };
 		AA0000000000000000000038 /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = text; path = module.modulemap; sourceTree = "<group>"; };
@@ -128,7 +135,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0000000000000000000024 /* TaleTrekApp.swift */,
-				AA0000000000000000000025 /* ContentView.swift */,
+				AA000000000000000000008F /* Info.plist */,
 				AA0000000000000000000066 /* ui */,
 				AA0000000000000000000069 /* data */,
 				AA0000000000000000000046 /* playback */,
@@ -143,6 +150,7 @@
 			children = (
 				AA0000000000000000000067 /* reader */,
 				AA0000000000000000000068 /* theme */,
+				AA000000000000000000009C /* library */,
 			);
 			path = ui;
 			sourceTree = "<group>";
@@ -166,10 +174,19 @@
 			path = theme;
 			sourceTree = "<group>";
 		};
+		AA000000000000000000009C /* library */ = {
+			isa = PBXGroup;
+			children = (
+				AA000000000000000000008C /* LibraryScreen.swift */,
+			);
+			path = library;
+			sourceTree = "<group>";
+		};
 		AA0000000000000000000069 /* data */ = {
 			isa = PBXGroup;
 			children = (
 				AA0000000000000000000065 /* PositionStore.swift */,
+				AA0000000000000000000088 /* BooksRepo.swift */,
 			);
 			path = data;
 			sourceTree = "<group>";
@@ -178,6 +195,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0000000000000000000099 /* ReaderUITests.swift */,
+				AA000000000000000000009B /* LibraryUITests.swift */,
 				AA0000000000000000000028 /* book-playable.taletrek */,
 				AA0000000000000000000078 /* book-text-only.taletrek */,
 			);
@@ -214,6 +232,7 @@
 				AA0000000000000000000082 /* PositionStoreTests.swift */,
 				AA0000000000000000000083 /* ReaderViewModelTests.swift */,
 				AA0000000000000000000086 /* NowPlayingTests.swift */,
+				AA000000000000000000008E /* BooksRepoTests.swift */,
 				AA0000000000000000000028 /* book-playable.taletrek */,
 				AA0000000000000000000045 /* book-corrupt.taletrek */,
 			);
@@ -362,7 +381,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA0000000000000000000030 /* TaleTrekApp.swift in Sources */,
-				AA0000000000000000000031 /* ContentView.swift in Sources */,
+				AA0000000000000000000087 /* BooksRepo.swift in Sources */,
+				AA000000000000000000008B /* LibraryScreen.swift in Sources */,
 				AA0000000000000000000032 /* taletrek_ffi.swift in Sources */,
 				AA0000000000000000000050 /* PlayerBridge.swift in Sources */,
 				AA0000000000000000000051 /* AudioEngine.swift in Sources */,
@@ -387,6 +407,7 @@
 				AA0000000000000000000080 /* PositionStoreTests.swift in Sources */,
 				AA0000000000000000000081 /* ReaderViewModelTests.swift in Sources */,
 				AA0000000000000000000084 /* NowPlayingTests.swift in Sources */,
+				AA000000000000000000008D /* BooksRepoTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -395,6 +416,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA00000000000000000000A0 /* ReaderUITests.swift in Sources */,
+				AA000000000000000000009A /* LibraryUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -498,6 +520,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.books";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIBackgroundModes = audio;
+				INFOPLIST_FILE = TaleTrek/Info.plist;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = (
 					UIInterfaceOrientationPortrait,
 				);
@@ -541,6 +564,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.books";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIBackgroundModes = audio;
+				INFOPLIST_FILE = TaleTrek/Info.plist;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = (
 					UIInterfaceOrientationPortrait,
 				);
