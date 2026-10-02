@@ -47,7 +47,7 @@ describe('Landing', () => {
     expect(screen.queryByText(/install taletrek as a pwa/i)).toBeNull()
   })
 
-  it('lists the apps with desktop + android as first ships and ios coming soon', () => {
+  it('lists the apps with all three platforms as first ships, android + ios linked to releases', () => {
     renderLanding()
     const desktop = screen.getByRole('heading', { name: 'Desktop' })
     const android = screen.getByRole('heading', { name: 'Android' })
@@ -57,10 +57,16 @@ describe('Landing', () => {
     expect(ios).toBeInTheDocument()
     expect(desktop.compareDocumentPosition(android) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(android.compareDocumentPosition(ios) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(screen.getAllByText(/first ship — in development/i).length).toBe(2)
-    expect(screen.getAllByText(/coming soon/i).length).toBe(1)
+    expect(screen.getAllByText(/first ship — in development/i).length).toBe(3)
+    expect(screen.queryAllByText(/coming soon/i).length).toBe(0)
     // The Android badge links to the release artifacts (the APK download).
     expect(screen.getByRole('link', { name: /download apk/i })).toHaveAttribute(
+      'href',
+      'https://github.com/l1br3-io/taletrek/releases/latest',
+    )
+    // The iOS badge links to the release's asset list (the signed IPA; the
+    // store/TestFlight copy itself is finalized at ship).
+    expect(screen.getByRole('link', { name: /testflight/i })).toHaveAttribute(
       'href',
       'https://github.com/l1br3-io/taletrek/releases/latest',
     )

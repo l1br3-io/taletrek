@@ -86,9 +86,10 @@ export const apps: {
     icon: Apple,
     name: 'iOS',
     role: 'The player',
-    status: 'Coming soon',
+    status: 'First ship — in development',
     desc: 'A free, open-source read-aloud app for iPhone — a category that barely exists.',
-    badge: 'App Store',
+    badge: 'TestFlight — at release',
+    href: 'https://github.com/l1br3-io/taletrek/releases/latest',
   },
 ]
 

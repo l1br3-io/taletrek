@@ -306,21 +306,28 @@ jobs:
           sed "s/__TEAM_ID__/${{ secrets.TALETREK_IOS_TEAM_ID }}/" \
             ios/ExportOptions.plist > "$RUNNER_TEMP/ExportOptions.plist"
 
-      - name: Archive (device, ad-hoc on dry runs)
+      # Tags: the real thing — device destination + the distribution team.
+      # Dry runs: the SIMULATOR destination + an ad-hoc identity. No device
+      # dry-run recipe survives both Xcode generations this job can meet:
+      # CODE_SIGNING_ALLOWED=NO archives without producing the .xcarchive
+      # on Xcode 16 (run 35680114365), while CODE_SIGN_IDENTITY=- dies at
+      # build planning on Xcode 27 ("entitlements that require signing with
+      # a development certificate" — even with zero entitlements). The
+      # simulator archive needs no identities on any Xcode and yields the
+      # real .xcarchive shape; proven locally 2026-10-02 (task 012's
+      # no-dispatch Mac verification).
+      - name: Archive (device + team on tags; simulator + ad-hoc on dry runs)
         run: |
-          ARGS=()
           if [ "$GITHUB_REF_TYPE" = 'tag' ]; then
-            ARGS+=(DEVELOPMENT_TEAM='${{ secrets.TALETREK_IOS_TEAM_ID }}')
+            xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+              -destination 'generic/platform=iOS' \
+              -archivePath build/TaleTrek.xcarchive archive \
+              DEVELOPMENT_TEAM='${{ secrets.TALETREK_IOS_TEAM_ID }}'
           else
-            # CODE_SIGNING_ALLOWED=NO makes the archive action skip the
-            # .xcarchive entirely (dry-run trap, run 35680114365);
-            # ad-hoc signing needs no identities and produces the real
-            # archive shape.
-            ARGS+=(CODE_SIGN_IDENTITY=-)
+            xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+              -destination 'generic/platform=iOS Simulator' \
+              -archivePath build/TaleTrek.xcarchive archive CODE_SIGN_IDENTITY=-
           fi
-          xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
-            -destination 'generic/platform=iOS' \
-            -archivePath build/TaleTrek.xcarchive archive "${ARGS[@]}"
 
       - name: Export the signed IPA (tag pushes only)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -336,8 +343,8 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: |
           mkdir -p dist
-          zip -qry build/TaleTrek.xcarchive "dist/taletrek-${VERSION}-ios-unsigned.xcarchive.zip"
-          ls -la dist/
+          cd build && zip -qry "../dist/taletrek-${VERSION}-ios-unsigned.xcarchive.zip" TaleTrek.xcarchive
+          ls -la ../dist/
 
       - uses: actions/upload-artifact@v4
         with:

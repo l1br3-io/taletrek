@@ -110,10 +110,15 @@ then `xcodebuild archive` + `-exportArchive` over the committed
   per the export method — a one-line Ad Hoc switch in ExportOptions if
   Finder side-loading wins later
 
-Dry runs (`workflow_dispatch`) archive **unsigned** — an ad-hoc identity
-(`CODE_SIGN_IDENTITY=-`), which needs no certs and produces the real
-`.xcarchive` shape — and attach the archive zip to the run only, the
-workflow's existing convention.
+Dry runs (`workflow_dispatch`) archive **unsigned** for the *simulator*
+destination with an ad-hoc identity (`CODE_SIGN_IDENTITY=-`) — no certs,
+and the real `.xcarchive` shape — and attach the archive zip to the run
+only, the workflow's existing convention. (Why simulator: no device
+dry-run recipe survives both Xcode generations the job can meet —
+`CODE_SIGNING_ALLOWED=NO` archives without producing the `.xcarchive` on
+Xcode 16, while the ad-hoc identity dies at build planning on Xcode 27
+even with zero entitlements. Tag pushes still archive for the device +
+the distribution team; only the dry run takes the simulator shortcut.)
 
 > **Billing caution (private repo):** a dispatch dry run bills *every*
 > matrix job — macOS at ≈ $0.08/min, ~$0.50–0.80 per run. Don't dispatch

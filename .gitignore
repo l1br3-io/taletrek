@@ -5,6 +5,13 @@ node_modules/
 web/dist/
 web/.vite/
 
+# release-job dry-run shape (the workflow's archivePath/package dirs, run
+# locally per the no-dispatch rule — docs/releasing.md § iOS): xcodebuild's
+# archive + zipped artifact, and xcodebuild's project-relative SYMROOT.
+/build/
+/dist/
+ios/build/
+
 # generated PWA
 web/dev-dist/
 web/public/icons/generated/
