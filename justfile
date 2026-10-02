@@ -385,8 +385,8 @@ ios-kernel:
     rm -rf "$VENDOR/SherpaOnnxC.xcframework"
     cp -R "$XCF" "$VENDOR/"
 
-# Simulator destination for ios/ios-test (override: IOS_SIM_DEST='platform=iOS Simulator,name=iPhone 16')
-ios_sim_dest := env_var_or_default('IOS_SIM_DEST', 'platform=iOS Simulator,name=iPhone 16')
+# Simulator destination for ios/ios-test (override: IOS_SIM_DEST='platform=iOS Simulator,name=iPhone 18 Pro')
+ios_sim_dest := env_var_or_default('IOS_SIM_DEST', 'platform=iOS Simulator,name=iPhone 18 Pro')
 
 # Kernel + xcodebuild build (simulator)
 ios: ios-kernel
