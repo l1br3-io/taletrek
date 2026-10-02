@@ -110,9 +110,15 @@ then `xcodebuild archive` + `-exportArchive` over the committed
   per the export method — a one-line Ad Hoc switch in ExportOptions if
   Finder side-loading wins later
 
-Dry runs (`workflow_dispatch`) archive **unsigned**
-(`CODE_SIGNING_ALLOWED=NO`) and attach the `.xcarchive` zip to the run
-only — the workflow's existing convention.
+Dry runs (`workflow_dispatch`) archive **unsigned** — an ad-hoc identity
+(`CODE_SIGN_IDENTITY=-`), which needs no certs and produces the real
+`.xcarchive` shape — and attach the archive zip to the run only, the
+workflow's existing convention.
+
+> **Billing caution (private repo):** a dispatch dry run bills *every*
+> matrix job — macOS at ≈ $0.08/min, ~$0.50–0.80 per run. Don't dispatch
+> to verify; run the dry-run commands locally instead. The first full
+> workflow run should be the real tag push.
 
 ### Signing (ask-first, one-time with the certs in hand)
 
