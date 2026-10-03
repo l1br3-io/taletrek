@@ -55,3 +55,5 @@ ios/TaleTrek/Vendor/
 ios/TaleTrek.xcodeproj/xcuserdata/
 *.xcuserdatad/
 ios/DerivedData/
+SPEC*.md
+/tasks

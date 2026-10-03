@@ -1,139 +1,63 @@
-# TaleTrek — Agent Guide
+# TaleTrek — Agent Skills
 
-> Free, open-source **reading companion** by **l1br3**: turn any ebook or document into an audiobook with OSS neural TTS (sherpa-onnx — Piper + Kokoro voices) running in-process in a Rust kernel. Platform-native apps (desktop processor → Android → iOS) behind UniFFI, free store downloads; the web is a landing page + `.taletrek` reader. No backend, no cloud, MIT-licensed.
+This project uses the [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) pack, installed under `.agents/` and `.opencode/`. Reusable workflows (skills), shared checklists (references), lifecycle slash commands, and specialist personas are all wired up and auto-discovered.
 
-## Current effort
+## Locations
 
-**Efforts 1–4.9 shipped — the phone is a processor now too.** `native-pivot` re-founded the repo on the Rust-kernel direction (decision: [ADR-0015](docs/adrs/0015-native-pivot-rust-kernel-and-native-apps.md); the why + locked stack: [`docs/ideas/native-pivot.md`](docs/ideas/native-pivot.md)). `kernel-parse` built the ingest front door: `crates/parse` + `taletrek-desktop parse --input <doc>` → text-only `.taletrek`, chained `synth --input <doc>` → full audio bundle. `desktop-synth-gui` gave the kernel a face and removed its external binaries: in-process sherpa-onnx TTS (`SherpaRunner`, feature `sherpa`) + native Opus encode (`NativeOpusEncoder`, feature `native-encode`) are the defaults (subprocess `--piper`/`--ffmpeg` stay as overrides), an egui GUI (`gui` subcommand; bare run opens it) turns documents into bundles via a job queue with voice picker/catalog download, and a tag push builds release artifacts. Then `desktop-reader-page` taught it to read back; `android-app` crossed the kernel to a phone: `crates/ffi` (UniFFI → checked-in Kotlin) + `android/` (Compose library ⇄ reader, Media3 `MediaSessionService` — the Jog bar: lock-screen audio, notification chapter controls, corrupt-segment skip tolerance, DataStore positions; release job builds a signed AAB + universal APK). `android-pipeline` then made the phone a processor (decision: [ADR-0016](docs/adrs/0016-on-device-pipeline-android.md)): `crates/worker::pipeline` (the cancellable PipelineJob — parse → deterministic ids → synth+stamp → atomic write), the additive FFI surface (pipeline + voices + espeak, Swift-ready), and the Android shell (`SynthService` foreground service, source import flow, voice catalog UI — on-device conversion of all six formats, ~27 MB/ABI `.so` growth). `android-instant-listen` ([spec](docs/specs/android-instant-listen/spec.md)) then fixed first-run production correctness and dropped every import decision: the pipeline job ensures espeak-ng-data itself, and a picked or shared document submits the full audio job immediately (first run downloads voice + espeak in-job with progress) — no gate dialog, no text-only mode, no voice prerequisite; `FirstRunTest` owns the fresh-install → convert → play story. `android-hardening` ([spec](docs/specs/android-hardening/spec.md)) then closed the platform-contract gaps and the locked-outline parity: unplugging headphones pauses the book through the kernel (`NoisyAudioRouter` — playing-gated `AUDIO_BECOMING_NOISY` → `userPause`, never auto-resumes), the ExoPlayer builder comment tells the truth about who owns interruption, and the outline wears the locked reader-page design (numbered rows, "Now reading" marker, "Chapter *n* of *N*" header, opens pre-scrolled); the human hardware-checklist legs (unplug on device, battery/thermal at pool=2, Files-app walkthrough, long-TOC pre-scroll) stay device-gated/owed in the task file. `progressive-synth` ([spec](docs/specs/progressive-synth/spec.md)) then made books play before they finish: sentence-chunk scheduling over a shared runner pool, a content-addressed segment store, `PipelineVariant::Progressive` (text bundle lands immediately, audio fills horizon-first at the playhead, drain seals a standard `.taletrek`), resume/skip-existing, and the Android play-while-filling story. `progressive-reader-hardening` ([spec](docs/specs/progressive-reader-hardening/spec.md)) then closed every *other* entry state: a `FillingBookMonitor` is the one per-book reactive fill authority (arming, `keepWaiting`, reanchor routing, library rows — no one-shot open-time sampling anywhere), Cancel/Failed keep the marker + source for a one-tap manual resume (relaunch auto-resumes only an unspent marker), the segment store registers at process start, and the reader's buffering line mirrors the live job. Specs: [`native-pivot`](docs/specs/native-pivot/spec.md) · [`kernel-parse`](docs/specs/kernel-parse/spec.md) · [`desktop-synth-gui`](docs/specs/desktop-synth-gui/spec.md) · [`desktop-reader-page`](docs/specs/desktop-reader-page/spec.md) · [`android-app`](docs/specs/android-app/spec.md) · [`android-pipeline`](docs/specs/android-pipeline/spec.md) · [`android-instant-listen`](docs/specs/android-instant-listen/spec.md) · [`android-hardening`](docs/specs/android-hardening/spec.md) · [`progressive-synth`](docs/specs/progressive-synth/spec.md) · [`progressive-reader-hardening`](docs/specs/progressive-reader-hardening/spec.md). Next effort: `ios-app` (the same `crates/ffi` surface — read + pipeline — via UniFFI's Swift target) — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+| Asset | Path |
+|-------|------|
+| Skills | `.agents/skills/<name>/SKILL.md` |
+| Shared checklists | `.agents/references/*.md` |
+| Slash commands | `.opencode/commands/*.md` |
+| Personas (subagents) | `.opencode/agents/*.md` |
 
-Live status always lives in the current effort's `spec.md` frontmatter (`status:`) + `todo.md` — **not here**.
+## Core rules
 
-- Ship history: [`CHANGELOG.md`](CHANGELOG.md) · Direction + lifecycle: [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- If a task matches a skill, load it with the `skill` tool before acting.
+- Follow the skill workflow strictly — do not partially apply it.
+- Never skip required steps (spec, plan, test) a skill demands.
+- Every change clears the project-wide Definition of Done in `.agents/references/definition-of-done.md`.
+- Commands are silent on success and announce on failure: justfile recipes echo nothing on success (see `set quiet` in the justfile) and fail loudly; slash commands give a concise result on success and surface failures prominently instead of burying them.
 
-**Read first:** [`docs/VISION.md`](docs/VISION.md) (the why) → [`docs/ROADMAP.md`](docs/ROADMAP.md) (direction + the DEFINE→SHIP lifecycle) → the current effort's `docs/specs/<slug>/spec.md` (when one is active). For established patterns, read a relevant shipped spec under [`docs/specs/`](docs/specs/).
+## Intent → skill mapping
 
-## Commands
+- New feature / significant change → `spec-driven-development`, then `incremental-implementation` + `test-driven-development`
+- Planning / breakdown → `planning-and-task-breakdown`
+- Bug / failure / unexpected behavior → `debugging-and-error-recovery`
+- Code review → `code-review-and-quality`
+- Refactoring / simplification → `code-simplification`
+- API or module boundary design → `api-and-interface-design`
+- Rust code / review → `rust-best-practices`
+- Security-sensitive input, auth, secrets, dependencies → `security-and-hardening`
+- Performance requirements or suspected regressions → `performance-optimization`
+- Making a change (always) → `git-workflow-and-versioning`
 
-`just --list` shows all dev tasks (dev-web / synth / resynth / test-e2e…) — see [`docs/developing.md`](docs/developing.md). Raw equivalents:
+## Slash commands
 
-```
-pnpm install              # install all workspace deps
-pnpm dev                  # Vite dev server (web/, :8253)
-pnpm build                # production build → web/dist
-pnpm preview              # serve built dist
-pnpm typecheck            # tsc --noEmit
-pnpm lint                 | biome check (spike/ excluded)
-pnpm lint:fix             # biome check --write
-pnpm test                 # vitest run
-pnpm verify               # lint + typecheck + test + build (run before commits)
-pnpm -C spike/piper dev       # Piper spike app on :5174 (throwaway)
-pnpm -C spike/web-audio dev   # Web Audio mobile-engine spike on :5175 (throwaway)
+`/spec`, `/plan`, `/build [auto]`, `/test`, `/review`, `/constraints`, `/code-simplify`, `/ship`, `/webperf`. Run `/ship` before merge for a parallel fan-out review.
 
-# Rust (run from repo root) — desktop app (GUI + CLI) + shared crates
-cargo build --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo test --workspace -- --ignored    # real piper+ffmpeg+sherpa; needs TALETREK_VOICE_PATH — see docs/testing.md
-just gui                               # run the desktop GUI (egui)
-# Android (one-time: just android-setup — see docs/developing.md § Android)
-just android                           # kernel .so + gradle assembleDebug → APK
-just android-test                      # Kotlin JVM unit tests + ktlint (headless)
-just android-instrumented              # on-device suites (needs adb hardware)
-```
+## Personas
 
-Workspace: pnpm + cargo + gradle. `web/` (landing + reader) + `spike/{piper,web-audio}/` (throwaway de-risking apps) on Node 24 / pnpm 10.31.0; `desktop/` + `crates/{parse,reader,synth,worker,ffi}/` on Rust 1.97.0; `android/` on Gradle 9.7/AGP 9.4/Kotlin 2.4 (see [`docs/testing.md`](docs/testing.md) + [`docs/developing.md`](docs/developing.md) § Android for the full test matrix).
+`code-reviewer`, `security-auditor`, `test-engineer`, `web-performance-auditor` — single-role subagents invoked by `/ship` / `/webperf` (or directly). **Personas do not invoke other personas**; orchestration belongs to slash commands and the main session (see `.agents/references/orchestration-patterns.md`).
 
-## Layout
+## Project notes
 
-```
-docs/
-  VISION.md       narrative "why" (amended by ADR-0015)
-  ROADMAP.md      native track + milestone history + DEFINE→SHIP lifecycle
-  ideas/          native-pivot one-pager (the why + locked stack)
-  specs/          one dir per effort: <slug>/{spec.md, plan.md, todo.md, tasks/00N-*.md}
-                  spec.md frontmatter carries lifecycle: status draft|active|shipped|abandoned
-  adrs/           immutable decisions (supersede via a new ADR only)
-  gotchas.md      runtime gotchas (G1…; 17 retired in place by the pivot — IDs stay stable)
-web/              the web app — landing page + `.taletrek` reader (Vite 8 + React 19 + TS + RR8 + Tailwind v4 + Biome)
-  src/
-    routes/         landing, library (imported bundles), reader, settings, not-found (+ tests)
-    components/     Layout, Nav (presentational)
-    context/        settings.tsx (SettingsProvider — low-freq Context)
-    hooks/          useSetting
-    lib/            db/ (idb), storage.ts (persist), media-session.ts,
-                    bundle/ (import/export — the .taletrek interchange),
-                    audio/ + playback/ (Web Audio default, FFmpeg fallback — ADR-0010),
-                    audio-cache.ts, clean/, tts/ (normalize + unavailable-engine stub),
-                    datasource/ (local), backup.ts
-spike/piper/       throwaway Piper TTS validation app
-spike/web-audio/   throwaway Web Audio mobile-engine spike
-desktop/           the kernel app — Rust + clap + egui (binary taletrek-desktop;
-                    gui subcommand / bare run = windowed converter + reader; CLI: parse +
-                    synth + resynth — source → bundle → audio)
-  src/gui/         eframe app: pure queue state machine + executor + views +
-                    reader screen; egui never appears outside this dir
-  src/gui/reader/  the read-back half: session open flow, egui screen, sync UX,
-                    playback controller, cpal+symphonia engine, position store
-                    (sequencing itself lives in crates/reader — never here)
-android/           the Android app — hand-rolled Gradle + Compose + Media3
-                    (single activity; library ⇄ reader ⇄ voices; MediaSessionService
-                    for playback + SynthService for on-device conversion —
-                    foreground dataSync, progress notification, cancel;
-                    UniFFI Kotlin checked in under app/…/ffi/)
-crates/ffi/        the kernel's foreign surface (taletrek-ffi): UniFFI wrappers over
-                    reader+synth+parse+worker with sherpa+native-encode —
-                    openBook/readSegment/TrekPlayer + PipelineHandle/voices;
-                    zero logic; Kotlin now, Swift in effort 5
-.github/workflows/ ci.yml (gates) + release.yml (tag v* → per-target release
-                    artifacts — see docs/releasing.md)
-crates/parse/      the ingest core: format detect + per-format parsers + M4 clean
-                    (bytes in → ParsedBook out → text-only bundle; UniFFI-ready pure data)
-crates/reader/     the read-side core: BookIndex + PlayerState sequencer + Position
-                    (manifest+text in → navigable book + pure playback sequencing;
-                    UniFFI-ready, zero UI/audio deps — desktop/Android/iOS consume it)
-crates/synth/      shared pure core: bundle I/O, synth, encode, cache_key (the interchange format);
-                    engine impls behind features — sherpa_runner.rs (`sherpa`),
-                    opus_native.rs (`native-encode`), subprocess piper/ffmpeg stay
-crates/worker/     shared host-level: voice acquire + rayon pool + manifest stamping +
-                    pipeline.rs — the host-agnostic cancellable PipelineJob
-                    (parse → deterministic ids → synth+stamp → atomic write)
-```
+- Rust (`crates/`, `desktop/`): run `cargo clippy` and `cargo fmt --check` before a change counts as done; `cargo test` is the verification gate.
+- Web (`web/`, Vite + React + TypeScript): `pnpm verify` (biome check, typecheck, vitest, build) is the gate.
+- Android (`android/`, Kotlin) and iOS (`ios/`, Swift) shells build with their native toolchains; on-device behavior is verified manually.
+## Spec & task artifacts (local working docs)
 
-## Conventions
-
-- **Strict TS**, branded IDs, interfaces-before-impl
-- **Container/presentational split**; Context for low-frequency state only (settings/theme) — never playback
-- **Variant types** for async states: `{ type: 'loading' } | { type: 'ready'; data }`
-- IndexedDB via `idb`; OPFS for large blobs (audio)
-- Tests co-located (`*.test.tsx`), Vitest + Testing Library + fake-indexeddb
-- No comments unless asked; Biome handles format/import-order
-- **Icons: [`lucide-react`](https://lucide.dev) (tree-shaken ESM, `stroke="currentColor"`).** Import each icon by name (`import { Play } from 'lucide-react'`) — never import the whole lib. Decorative icons are auto-`aria-hidden`; the button's `aria-label`/visible text is the accessible name. Size via Tailwind: `h-4 w-4` inline with `text-sm`, `h-5 w-5` standalone/FAB; color flows from the button's `text-*` token (never hard-coded). The `❯~` brand mark in `Nav.tsx` stays as ASCII (not an icon).
-
-## Critical gotchas (index)
-
-Full detail lives in [`docs/gotchas.md`](docs/gotchas.md) — **read the relevant entry on demand** before touching that area. The titles below are your scan list; if your task touches the named area, open the link. Survivors only — 17 of the original 29 were retired in place by the native pivot; gaps in numbering are intentional, never renumber.
-
-2. **Safari ITP deletes script storage after 7 days** — [`G2`](docs/gotchas.md#g2)
-3. **Dev Service Worker caches stale bundles** — [`G3`](docs/gotchas.md#g3)
-4. **License is MIT (ADR-0002); GPL is fallback-only** — [`G4`](docs/gotchas.md#g4)
-5. **iOS lock-screen background playback needs real-hardware verification** — [`G5`](docs/gotchas.md#g5)
-10. **iOS Safari MSE is `<video>`-only** — [`G10`](docs/gotchas.md#g10)
-11. **FFmpeg WASM core ~30 MB, single-threaded only** — [`G11`](docs/gotchas.md#g11)
-12. **SourceBuffer.appendBuffer is async — no overlapping appends (dormant browser-fact)** — [`G12`](docs/gotchas.md#g12)
-13. **`<video>` pauses on iOS lock screen — accepted limitation** — [`G13`](docs/gotchas.md#g13)
-22. **Pluggable playback engines — Web Audio default, FFmpeg fallback; no re-synth post-pivot (cache-miss = explicit error)** — [`G22`](docs/gotchas.md#g22)
-23. **Web Audio scheduler: setInterval not rAF; re-anchor on seek** — [`G23`](docs/gotchas.md#g23)
-27. **Bundle import loads whole archive into memory (jszip)** — [`G27`](docs/gotchas.md#g27)
-28. **`sourceFormat: "unknown"` maps to `'txt'` on import** — [`G28`](docs/gotchas.md#g28)
-30. **Clean-idempotence is a cross-app invariant — parse output must survive the reader's `cleanChapters` unchanged** — [`G30`](docs/gotchas.md#g30)
-31. **CDN-dependent instrumented tests need the emulator booted with `-dns-server`** — [`G31`](docs/gotchas.md#g31)
-
-## How to resume (in a new session)
-
-Open opencode in this repo and say, e.g.:
-
-> "Current effort is `ios-app` — read `docs/specs/ios-app/spec.md` + `todo.md`, then run `/build` for the next pending task. Direction: `docs/ROADMAP.md` (native track, ADR-0015)."
-
-## Non-goals (product)
-
-Cloud TTS/sync/store, accounts, multi-user, DRM circumvention. Store distribution **is** the model now (free downloads); sync/cloud return only via a future ADR. See [`docs/VISION.md`](docs/VISION.md).
+- `SPEC.md` is the master index: the capability map (module ids, dependency
+  direction, build order) and per-module status. Per-module specs live at
+  `SPEC-<module-id>.md`; per-module task chunks at `tasks/<module-id>.md`.
+  Global aggregates: `tasks/plan.md` and `tasks/todo.md`.
+- All of the above are local working artifacts, gitignored via `SPEC*.md`
+  and `/tasks`. Never commit them.
+- Module ids come from the capability map in `SPEC.md`, are chosen once, and
+  are never renamed mid-initiative.
+- Before implementing: read `SPEC.md` for orientation, then load the
+  module's `SPEC-<id>.md` and `tasks/<id>.md` chunk. Never implement a
+  module whose spec is not approved or whose chunk is not written.
+- `/build` consumes the chunk files; see `.opencode/commands/build.md`.
+- PRs must copy the module's success criteria into the PR body, since
+  reviewers cannot see the local spec files.
