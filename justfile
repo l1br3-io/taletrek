@@ -417,7 +417,8 @@ android-test-class filter:
 # suite on every device (measured 42/42 on both, wall ≈ single-device
 # serial), and its -Pandroid.testInstrumentationRunnerArguments.class mangles
 # comma lists (runs only the first class; raw am instrument handles them
-# fine) — details in docs/specs/fast-test-loops/baseline.md. Classes
+# fine) — details in the fast-test-loops effort record (git log --grep
+# fast-test-loops). Classes
 # discovered in the source tree but unknown to the halves are appended to the
 # lighter half (printed), and the run fails unless the halves' combined test
 # count equals the source's @Test total — the sharded gate can never

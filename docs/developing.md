@@ -206,7 +206,7 @@ default** — a scoped recipe is a convenience that never replaces its gate
   instance: `just android-emulator-stop`.
 - All loop numbers: baseline → after + how to re-measure:
   [`docs/testing.md` § Loop budgets](testing.md#loop-budgets) (source of
-  truth: [`docs/specs/fast-test-loops/baseline.md`](specs/fast-test-loops/baseline.md)).
+  truth: the fast-test-loops effort record — `git log --grep fast-test-loops`).
 
 ## Releasing
 

@@ -32,7 +32,8 @@ jobs:
     # glibc (gnu) Linux target: the spikes proved onnxruntime + espeak-ng +
     # piper_phonemize + libopus all statically link under gnu, leaving only
     # baseline system libs dynamic — musl would buy nothing and risk the
-    # k2-fsa prebuilt link. Recorded in tasks/010-release-workflow.md.
+    # k2-fsa prebuilt link. Recorded in the desktop-synth-gui release-workflow
+    # commit (git log --grep desktop-synth-gui).
     strategy:
       fail-fast: false
       matrix:

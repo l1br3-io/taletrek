@@ -23,7 +23,9 @@ A specify-phase review (2026-08-30; Q&A recorded in the ideas one-pager) resolve
 7. **The `.taletrek` v1 format is unchanged** — the sole interchange between all surfaces.
 8. **Interim gap accepted:** until `crates/parse` lands, nothing converts ebooks into bundles (the CLI takes bundles only). Pre-release, solo project — acceptable.
 
-Deletions recorded by this ADR: `server/` (crate), `docs/specs/personal-server/`, `docs/specs/server-hosted-spa/`, `docs/deploy-digitalocean.md`, `docs/off-device-synth-track.md`, and ADR-0014 itself, plus the SPA upload/transform pipeline (see the `native-pivot` spec for the full list).
+Deletions recorded by this ADR: `server/` (crate), `docs/specs/personal-server/`, `docs/specs/server-hosted-spa/`, `docs/deploy-digitalocean.md`, `docs/off-device-synth-track.md`, and ADR-0014 itself, plus the SPA upload/transform pipeline (the full list is the ADR-0015 / native-pivot commit — `git log --grep native-pivot`).
+
+*(2026-10-04: the `docs/specs/` and `tasks/` trees referenced across the docs were folded into commit messages — every effort's record is now `git log --grep '<slug>'`; the paths above are historical.)*
 
 ## Consequences
 

@@ -17,7 +17,7 @@
 //! full wiring with stub runners; this file proves the real binary, invoked
 //! as a subprocess, produces a bundle whose Opus audio actually plays.
 //!
-//! See `docs/specs/desktop-synth-app/runbook.md` for the human smoke test
+//! See `the desktop-synth-app effort record (git log --grep desktop-synth-app)` for the human smoke test
 //! (audio-plays check that a test can't assert).
 
 use std::collections::HashMap;
@@ -207,7 +207,7 @@ fn run_desktop(subcommand: &str, args: &[String]) {
 /// resolution (`--voice-path` offline path) → parallel synth → manifest stamp
 /// → bundle write — and that every audio segment is a real OGG/Opus stream.
 #[test]
-#[ignore = "requires piper + ffmpeg on PATH and TALETREK_VOICE_PATH; see docs/specs/desktop-synth-app/runbook.md"]
+#[ignore = "requires piper + ffmpeg on PATH and TALETREK_VOICE_PATH; see the desktop-synth-app effort record (git log --grep desktop-synth-app)"]
 fn real_synth_produces_full_opus_bundle() {
     let Some((piper, ffmpeg, voice_model)) = gate() else {
         return;
@@ -273,7 +273,7 @@ fn real_synth_produces_full_opus_bundle() {
 /// bundle in → re-keyed full bundle out — and that resynth's manifest rewrite
 /// surfaces in the on-disk file.
 #[test]
-#[ignore = "requires piper + ffmpeg on PATH and TALETREK_VOICE_PATH; see docs/specs/desktop-synth-app/runbook.md"]
+#[ignore = "requires piper + ffmpeg on PATH and TALETREK_VOICE_PATH; see the desktop-synth-app effort record (git log --grep desktop-synth-app)"]
 fn real_resynth_revoices_full_bundle() {
     let Some((piper, ffmpeg, voice_model)) = gate() else {
         return;
@@ -362,7 +362,7 @@ fn assert_full_opus_bundle(bundle: &BookBundle, expected_segments: u32) {
 /// Proves the artifacts the chained path is measured against: both commands
 /// exit clean and the final bundle is full Opus audio.
 #[test]
-#[ignore = "requires piper + ffmpeg on PATH and TALETREK_VOICE_PATH; see docs/specs/desktop-synth-app/runbook.md"]
+#[ignore = "requires piper + ffmpeg on PATH and TALETREK_VOICE_PATH; see the desktop-synth-app effort record (git log --grep desktop-synth-app)"]
 fn parse_then_synth_txt_two_step_produces_full_opus_bundle() {
     let Some((piper, ffmpeg, voice_model)) = gate() else {
         return;
@@ -402,7 +402,7 @@ fn parse_then_synth_txt_two_step_produces_full_opus_bundle() {
 /// invocation. Proves the chain needs no intermediate bundle on disk and that
 /// the default output follows the unchanged naming rule (`<stem>.synth.taletrek`).
 #[test]
-#[ignore = "requires piper + ffmpeg on PATH and TALETREK_VOICE_PATH; see docs/specs/desktop-synth-app/runbook.md"]
+#[ignore = "requires piper + ffmpeg on PATH and TALETREK_VOICE_PATH; see the desktop-synth-app effort record (git log --grep desktop-synth-app)"]
 fn chained_synth_on_txt_source_produces_full_opus_bundle() {
     let Some((piper, ffmpeg, voice_model)) = gate() else {
         return;

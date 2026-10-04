@@ -8,7 +8,11 @@ See [`docs/VISION.md`](docs/VISION.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md) 
 
 ## Status
 
-In active development; between phases. Last shipped: **M11 — Pluggable Playback Engines, Pausable Synthesis** (2026-07-19); next phase starts at `/spec` (see [`CHANGELOG.md`](CHANGELOG.md) · [`docs/ROADMAP.md`](docs/ROADMAP.md)). Shipped specs live under [`docs/specs/`](docs/specs/).
+In active development; between phases. Last shipped: **M11 — Pluggable Playback Engines, Pausable Synthesis** (2026-07-19); next phase starts at `/spec` (see [`CHANGELOG.md`](CHANGELOG.md) · [`docs/ROADMAP.md`](docs/ROADMAP.md)).
+
+## Git is the documentation
+
+Each effort's context, decisions, deviations, and outcome are recorded in its commit messages — the completing commit carries a `Context / Decisions / Deviations / Outcome` block. Architecture decisions live in [`docs/adrs/`](docs/adrs). Look up any effort with `git log --grep='<effort-slug>'` (the former spec tree was folded into history on 2026-10-04).
 
 ## License
 

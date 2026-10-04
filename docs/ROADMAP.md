@@ -19,25 +19,24 @@ VISION   "What problem are we solving?"   docs/VISION.md
   │
 ROADMAP  "What directions / milestones?"  docs/ROADMAP.md  (this)
   │
-SPEC     "Current effort requirements"    docs/specs/<effort-slug>/spec.md
+SPEC     "Current effort requirements"    ADR when architectural + the effort's commits
 ```
 
 ### Each effort ships through the harness lifecycle
 
 ```text
-DEFINE → /spec       spec-driven-development             → docs/specs/<slug>/spec.md (status: draft)
-PLAN   → /planning   planning-and-task-breakdown         → docs/specs/<slug>/{plan.md, todo.md, tasks/00N-*.md}
-BUILD  → /build      incremental-implementation + TDD    → source + tests (flips spec status: draft → active)
+DEFINE → /spec       spec-driven-development             → local SPEC-<id>.md working doc (gitignored)
+PLAN   → /planning   planning-and-task-breakdown         → plans/<id>.md chunk + plans/{plan,todo}.md
+BUILD  → /build      incremental-implementation + TDD    → source + tests
 VERIFY → /test       debugging-and-error-recovery        → pnpm verify green
 REVIEW → /review     code-review-and-quality             → sign-off
-SHIP   → /ship       shipping-and-launch                 → merge PR; spec status flips to shipped (dir stays in place)
+SHIP   → /ship       shipping-and-launch                 → merge PR; the completion commit carries the effort's Context/Decisions/Deviations/Outcome block
 ```
 
-When an effort ships, its spec.md frontmatter flips to `status: shipped`
-with the merge date. The directory stays at `docs/specs/<slug>/` forever —
-no archive step, no move. Git is the full history; the filesystem is the
-browsable index. The next effort starts on a fresh branch with a fresh
-`docs/specs/<new-slug>/` directory.
+When an effort ships, its completing commit records the distilled
+Context / Decisions / Deviations / Outcome block — that block is the
+effort's permanent spec record, and `git log --grep '<slug>'` is the
+index. The next effort starts on a fresh branch.
 
 ---
 
@@ -100,7 +99,7 @@ The read-aloud core shipped as an offline-first PWA (2026-03 → 2026-08), then 
 | M12 | Parallel Synthesis | ✅ shipped ([ADR-0011](./adrs/0011-parallel-synthesis-pool.md); in-browser pool deleted — the rayon pool in `crates/worker` is its heir) |
 | M13 | Whole-Book Streaming Transform | ✅ shipped ([ADR-0012](./adrs/0012-whole-book-streaming-transform.md); transforms purged, ADR-0015) |
 
-The off-device synth track ([ADR-0013](./adrs/0013-off-device-synth-and-portable-bundles.md)) shipped five efforts 2026-08-03 → 2026-08-29: `portable-bundle-format`, `desktop-synth-app`, `spa-bundle-import-export`, `personal-server`, `server-hosted-spa`. ADR-0015 narrowed it — the bundle format, desktop synth, and SPA bundle import/export survive as the native track's foundation; the personal-server tier was purged. **Specs of purged efforts were deleted from `docs/specs/` (ADR-0015); specs of surviving behavior remain** — playback engines, bundle import/export, library, reader UX, audio cache, clean reading. Ship history: [`CHANGELOG.md`](../CHANGELOG.md). ADRs live in [`docs/adrs/`](./adrs/); runtime gotchas in [`docs/gotchas.md`](./gotchas.md) (17 of 29 retired in place by the pivot).
+The off-device synth track ([ADR-0013](./adrs/0013-off-device-synth-and-portable-bundles.md)) shipped five efforts 2026-08-03 → 2026-08-29: `portable-bundle-format`, `desktop-synth-app`, `spa-bundle-import-export`, `personal-server`, `server-hosted-spa`. ADR-0015 narrowed it — the bundle format, desktop synth, and SPA bundle import/export survive as the native track's foundation; the personal-server tier was purged. **Every shipped or purged effort's record lives in git history — `git log --grep '<slug>'`** — playback engines, bundle import/export, library, reader UX, audio cache, clean reading alike. Ship history: [`CHANGELOG.md`](../CHANGELOG.md). ADRs live in [`docs/adrs/`](./adrs/); runtime gotchas in [`docs/gotchas.md`](./gotchas.md) (17 of 29 retired in place by the pivot).
 
 ---
 

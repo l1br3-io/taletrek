@@ -174,8 +174,8 @@ The feedback loops around these suites (effort `fast-test-loops`): scoped
 loops answer in seconds, the instrumented matrix shards across two emulators,
 and the pre-ship matrix runs once — in parallel. Numbers below are this-host
 measurements (62 GB / 32 cores, KVM); the source of truth with per-run detail
-and the structural findings is
-[`docs/specs/fast-test-loops/baseline.md`](specs/fast-test-loops/baseline.md).
+and the structural findings is the fast-test-loops effort record
+(`git log --grep fast-test-loops`).
 
 | Loop | Recipe | Baseline | After | Notes |
 | --- | --- | --- | --- | --- |

@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-18
 - **Companions:** [`0006-mobile-mse-streaming.md`](./0006-mobile-mse-streaming.md) (supersedes its Web Audio rejection), [`0009-upload-wake-lock-and-boot-sweep.md`](./0009-upload-wake-lock-and-boot-sweep.md) (paused-job boundary)
-- **Plan:** [`tasks/plan-m11-playback-engines.md`](../specs/playback-engines-pausable-synth/plan.md)
+- **Plan:** the effort's record lives in git — `git log --grep 'playback-engines-pausable-synth'`
 
 ## Context
 

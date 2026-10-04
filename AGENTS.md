@@ -45,19 +45,44 @@ This project uses the [addyosmani/agent-skills](https://github.com/addyosmani/ag
 - Rust (`crates/`, `desktop/`): run `cargo clippy` and `cargo fmt --check` before a change counts as done; `cargo test` is the verification gate.
 - Web (`web/`, Vite + React + TypeScript): `pnpm verify` (biome check, typecheck, vitest, build) is the gate.
 - Android (`android/`, Kotlin) and iOS (`ios/`, Swift) shells build with their native toolchains; on-device behavior is verified manually.
-## Spec & task artifacts (local working docs)
+## Git is the spec trail
 
-- `SPEC.md` is the master index: the capability map (module ids, dependency
-  direction, build order) and per-module status. Per-module specs live at
-  `SPEC-<module-id>.md`; per-module task chunks at `tasks/<module-id>.md`.
-  Global aggregates: `tasks/plan.md` and `tasks/todo.md`.
-- All of the above are local working artifacts, gitignored via `SPEC*.md`
-  and `/tasks`. Never commit them.
-- Module ids come from the capability map in `SPEC.md`, are chosen once, and
-  are never renamed mid-initiative.
-- Before implementing: read `SPEC.md` for orientation, then load the
-  module's `SPEC-<id>.md` and `tasks/<id>.md` chunk. Never implement a
-  module whose spec is not approved or whose chunk is not written.
+The spec directories and task ledgers are gone — folded into history on
+2026-10-04. `git log` is the project's documentation: every effort's
+context, decisions, deviations, and outcome live in its commits.
+
+- The commit that completes an effort carries this appended block
+  (natural prose, no trailers):
+
+  ```
+  ---
+  Context: why this work existed (1-3 lines)
+  Decisions:
+  - key choices and their reasons
+  Deviations:
+  - where implementation diverged from plan (omit section if none)
+  Outcome: what shipped and how it was verified
+  ```
+
+- Lookup idiom: `git log --grep='<effort-slug>'` (e.g.
+  `git log --grep='progressive-synth'`) surfaces an effort's commits; the
+  completion commit carries the distilled block.
+- Architecture decision records stay in `docs/adrs/`; the why of the
+  platform direction in `docs/ideas/`; product framing in
+  `docs/ROADMAP.md` / `docs/VISION.md`.
+- New work records its context/decisions/deviations in commit messages
+  per the template — do not recreate spec or task directory trees.
+
+### Local planning artifacts (transient)
+
+- `/spec` and `/plan` still produce local working docs: `SPEC.md`
+  (master index: capability map, dependency direction, build order,
+  per-module status) + `SPEC-<module-id>.md` + `plans/<module-id>.md`
+  chunks; aggregates at `plans/plan.md` and `plans/todo.md`.
+- All are gitignored via `SPEC*.md` and `/plans`. Never commit them;
+  their durable content is meant to land in commit messages.
+- Module ids come from the capability map in `SPEC.md`, are chosen once,
+  and are never renamed mid-initiative.
 - `/build` consumes the chunk files; see `.opencode/commands/build.md`.
 - PRs must copy the module's success criteria into the PR body, since
-  reviewers cannot see the local spec files.
+  reviewers cannot see the local planning files.

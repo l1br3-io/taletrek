@@ -1,6 +1,6 @@
 # TaleTrek Native — idea one-pager
 
-> Status: **approved direction** (brainstorm 2026-08-30). The decision record is [ADR-0015](../adrs/0015-native-pivot-rust-kernel-and-native-apps.md); execution effort: [`docs/specs/native-pivot/`](../specs/native-pivot/spec.md). This file preserves the *why* and the specify-phase Q&A that shaped the pivot.
+> Status: **approved direction** (brainstorm 2026-08-30). The decision record is [ADR-0015](../adrs/0015-native-pivot-rust-kernel-and-native-apps.md); execution record: the native-pivot commits — `git log --grep native-pivot`. This file preserves the *why* and the specify-phase Q&A that shaped the pivot.
 
 ## Problem Statement
 
