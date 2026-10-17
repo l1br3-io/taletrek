@@ -12,6 +12,23 @@ protocol AudioPort: AnyObject {
 
     /// Silence output and drop the current segment.
     func stopOutput()
+
+    /// The armed segment's Now Playing currency — honest duration from
+    /// decoded PCM + audio-time elapsed; `nil` when nothing is armed.
+    /// Lock-screen facts only, sequencing never reads it.
+    func nowPlayingTimes() -> SegmentTimes?
+}
+
+extension AudioPort {
+    func nowPlayingTimes() -> SegmentTimes? { nil }
+}
+
+/// The current segment's Now Playing facts: full duration (decoded
+/// PCM length over rate) and elapsed audio time (scheduled offset +
+/// frames played). One honest currency — no extrapolated book time.
+struct SegmentTimes: Equatable {
+    let duration: Double
+    let elapsed: Double
 }
 
 /// The engine's reports to the bridge. Every callback hops through the
@@ -54,9 +71,27 @@ typealias SegmentDecoder = (_ path: String, _ key: String) throws -> FfiDecodedA
 /// that left the engine before a command landed) and the kernel's
 /// defensive machine beneath both, a stale drain for a re-loaded
 /// identical segment is unrepresentable rather than merely unlikely.
+///
+/// # The not-ready hold (progressive books)
+///
+/// A filling book's decoder throws [`SegmentNotReady`] for segments the
+/// live job has not landed yet. The engine holds the load —
+/// re-attempting off the queue (`asyncAfter`, so port commands stay
+/// serviced) at a fixed cadence while `mayStillLand` says a job could
+/// still land it — then reports the **typed** not-ready failure (the
+/// bridge's resume affordance; never the kernel's skip). Generation
+/// checks every hop make a superseded hold vanish silently.
 final class AudioEngine: AudioPort {
     private let path: String
     private let decoder: SegmentDecoder
+
+    /// Whether a synth job that could still land a not-ready segment is
+    /// running — the not-ready hold's liveness seam (production: the
+    /// convert controller's running phase).
+    private let mayStillLand: () -> Bool
+
+    /// The not-ready re-attempt cadence.
+    private let holdInterval: TimeInterval = 0.25
 
     /// Serializes decode, graph edits, scheduling, and every callback
     /// emission — the engine's sole-sender discipline.
@@ -70,21 +105,41 @@ final class AudioEngine: AudioPort {
     private var generation = 0
     private var connectedFormat: AVAudioFormat?
 
+    /// The armed segment's Now Playing facts source (nil when idle or
+    /// stopped — the lock screen then keeps the last pushed elapsed).
+    private var scheduled: (duration: Double, offset: Double, sampleRate: Double)?
+
     /// The walk test's probe: the segments the engine was told to play,
     /// in order, with their scheduled offsets.
     private var appliedLoads: [(key: String, offset: Double)] = []
 
-    init(path: String, decoder: @escaping SegmentDecoder) {
+    init(
+        path: String,
+        decoder: @escaping SegmentDecoder,
+        mayStillLand: @escaping () -> Bool = { false }
+    ) {
         self.path = path
         self.decoder = decoder
+        self.mayStillLand = mayStillLand
         engine.attach(node)
     }
 
-    /// Convenience initializer over the kernel's real decode hop.
+    /// Convenience initializer over the kernel's batch decode hop (the
+    /// sealed-bundle shape the walk tests and fresh-run prove).
     convenience init(path: String) {
         self.init(path: path) { bundlePath, key in
             try decodeSegment(path: bundlePath, key: key)
         }
+    }
+
+    /// Convenience initializer over the progressive source
+    /// (store-aware read + bytes decode + the not-ready hold) — the
+    /// production wiring; `jobAlive` is the hold's liveness seam.
+    convenience init(path: String, jobAlive: @escaping () -> Bool) {
+        let source = ProgressiveSegmentSource()
+        self.init(path: path, decoder: { bundlePath, key in
+            try source.decoder(path: bundlePath, key: key)
+        }, mayStillLand: jobAlive)
     }
 
     /// Wire the bridge this engine reports into (constructed before the
@@ -98,18 +153,36 @@ final class AudioEngine: AudioPort {
             guard let self else { return }
             self.generation &+= 1
             let gen = self.generation
-            do {
-                guard let audio = try self.decoder(self.path, key) else {
-                    self.deliver(.failed(key: key, error: "segment missing from bundle"), gen)
-                    return
-                }
-                guard gen == self.generation else { return }
-                try self.schedule(audio: audio, key: key, offset: offset, generation: gen)
-                self.appliedLoads.append((key: key, offset: offset))
-                self.deliver(.ready(key: key), gen)
-            } catch {
-                self.deliver(.failed(key: key, error: "\(error)"), gen)
+            self.attemptLoad(key: key, offset: offset, generation: gen)
+        }
+    }
+
+    /// One decode attempt (queue-only). A not-ready segment re-arms
+    /// itself off the queue (`asyncAfter` keeps commands serviced);
+    /// generation checks every hop make a superseded hold vanish.
+    private func attemptLoad(key: String, offset: Double, generation gen: Int) {
+        guard gen == generation else { return }
+        do {
+            guard let audio = try self.decoder(self.path, key) else {
+                self.deliver(.failed(key: key, error: "segment missing from bundle"), gen)
+                return
             }
+            guard gen == generation else { return }
+            try self.schedule(audio: audio, key: key, offset: offset, generation: gen)
+            self.appliedLoads.append((key: key, offset: offset))
+            self.deliver(.ready(key: key), gen)
+        } catch let notReady as SegmentNotReady {
+            if mayStillLand() {
+                queue.asyncAfter(deadline: .now() + holdInterval) { [weak self] in
+                    self?.attemptLoad(key: key, offset: offset, generation: gen)
+                }
+            } else {
+                // The typed not-ready — the bridge's resume affordance,
+                // never the kernel's skip.
+                self.deliver(.failed(key: key, error: SegmentNotReady.errorMarker), gen)
+            }
+        } catch {
+            self.deliver(.failed(key: key, error: "\(error)"), gen)
         }
     }
 
@@ -119,7 +192,26 @@ final class AudioEngine: AudioPort {
             // Orphans any in-flight decode and pending completion
             // handlers (they fire on `stop()` — the epoch drops them).
             self.generation &+= 1
+            self.scheduled = nil
             self.node.stop()
+        }
+    }
+
+    func nowPlayingTimes() -> SegmentTimes? {
+        queue.sync {
+            guard let armed = scheduled else { return nil }
+            let played: Double = {
+                guard
+                    node.isPlaying,
+                    let render = node.lastRenderTime,
+                    let player = node.playerTime(forNodeTime: render)
+                else { return 0 }
+                return max(Double(player.sampleTime) / armed.sampleRate, 0)
+            }()
+            return SegmentTimes(
+                duration: armed.duration,
+                elapsed: min(armed.offset + played, armed.duration)
+            )
         }
     }
 
@@ -168,6 +260,13 @@ final class AudioEngine: AudioPort {
         if !engine.isRunning {
             try engine.start()
         }
+        let channels = Int(audio.channels)
+        let totalFrames = audio.samples.count / max(channels, 1)
+        scheduled = (
+            duration: Double(totalFrames) / Double(audio.sampleRate),
+            offset: offset,
+            sampleRate: Double(audio.sampleRate)
+        )
         node.scheduleBuffer(
             makeBuffer(audio: audio, format: format, offset: offset),
             completionCallbackType: .dataPlayedBack

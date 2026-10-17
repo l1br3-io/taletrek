@@ -553,18 +553,26 @@ ios-kernel:
     rm -rf "$VENDOR/SherpaOnnxC.xcframework"
     cp -R "$XCF" "$VENDOR/"
 
-# Simulator destination for ios/ios-test (override: IOS_SIM_DEST='platform=iOS Simulator,name=iPhone 16')
-ios_sim_dest := env_var_or_default('IOS_SIM_DEST', 'platform=iOS Simulator,name=iPhone 16')
+# Simulator destination for ios/ios-test (override: IOS_SIM_DEST='platform=iOS Simulator,name=iPhone 18 Pro')
+ios_sim_dest := env_var_or_default('IOS_SIM_DEST', 'platform=iOS Simulator,name=iPhone 18 Pro')
 
 # Kernel + xcodebuild build (simulator)
 ios: ios-kernel
     @xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
         -destination 'generic/platform=iOS Simulator' build
 
-# Swift unit tests on the simulator (app-hosted — the kernel rides the app binary)
+# Swift unit tests on the simulator (app-hosted — the kernel rides the app binary).
+# TEST_RUNNER_TALETREK_FRESH_RUN=1 additionally runs the CDN-touching FirstRunTest
+# (Mac-local; the TEST_RUNNER_ prefix is xcodebuild's pass-through — plain env
+# vars never cross into the simulator's app process).
 ios-test: ios-kernel
     @xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
         -destination '{{ios_sim_dest}}' test
+
+# XCUITest integration suites on the simulator (reader/library UI over the real kernel).
+ios-ui-test: ios-kernel
+    @xcodebuild -project ios/TaleTrek.xcodeproj -scheme TaleTrek \
+        -destination '{{ios_sim_dest}}' -only-testing:TaleTrekUITests test
 
 # Build for a connected iPhone (dev signing): needs IOS_DEVICE_ID (xcrun devicectl
 # list devices) + DEVELOPMENT_TEAM; then install:

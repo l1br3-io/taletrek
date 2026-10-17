@@ -1,10 +1,13 @@
+import MediaPlayer
 import XCTest
 @testable import TaleTrek
 
 /// The reader's state owner over the real kernel + a faked engine
-/// surface: open/restore flows, the follow policy, jump-to-chapter, and
-/// the position save cadence. Sequencing assertions ride the kernel's
-/// own semantics (the same discipline as the bridge tests).
+/// surface: open/restore flows, the follow policy, jump-to-chapter, the
+/// position save cadence, and the interruption route (pause through the
+/// kernel; resume only by invitation and only if playing was
+/// interrupted). Sequencing assertions ride the kernel's own semantics
+/// (the same discipline as the bridge tests).
 @MainActor
 final class ReaderViewModelTests: XCTestCase {
     private final class RecordingPort: AudioPort {
@@ -20,10 +23,62 @@ final class ReaderViewModelTests: XCTestCase {
         }
     }
 
+    private final class FakeInterruptionSource: InterruptionSource {
+        var handler: ((AudioInterruption) -> Void)?
+
+        func observe(_ handler: @escaping (AudioInterruption) -> Void) {
+            self.handler = handler
+        }
+
+        func fire(_ event: AudioInterruption) {
+            handler?(event)
+        }
+    }
+
+    private final class FakeRouteChangeSource: RouteChangeSource {
+        var handler: ((AudioRouteChange) -> Void)?
+
+        func observe(_ handler: @escaping (AudioRouteChange) -> Void) {
+            self.handler = handler
+        }
+
+        func stopObserving() {
+            handler = nil
+        }
+
+        func fireUnplug() {
+            handler?(.oldDeviceUnavailable)
+        }
+    }
+
+    private final class RecordingNowPlayingSink: NowPlayingInfoSink {
+        private(set) var infos: [[String: Any]] = []
+
+        func setInfo(_ info: [String: Any]) {
+            infos.append(info)
+        }
+    }
+
+    private final class StubRemoteCommand: RemoteCommand {
+        var isEnabled = true
+
+        func setHandler(_ handler: @escaping () -> Void) {}
+    }
+
+    private final class StubRemoteRegistry: RemoteCommandRegistry {
+        let play: RemoteCommand = StubRemoteCommand()
+        let pause: RemoteCommand = StubRemoteCommand()
+        let togglePlayPause: RemoteCommand = StubRemoteCommand()
+        let nextTrack: RemoteCommand = StubRemoteCommand()
+        let previousTrack: RemoteCommand = StubRemoteCommand()
+        let changePlaybackPosition: RemoteCommand = StubRemoteCommand()
+    }
+
     private func book(chapterTexts: [[String]], audio: Bool = true) -> FfiBook {
         FfiBook(
             bookId: "bk_test",
             title: "Test Book",
+            author: nil,
             voiceId: "v",
             audioPresent: audio,
             chapters: chapterTexts.enumerated().map { chapterOrdinal, texts in
@@ -42,6 +97,293 @@ final class ReaderViewModelTests: XCTestCase {
         )
     }
 
+    /// The wired harness: view model + recording port + the bridge once
+    /// the open lands (SwiftLint keeps tuples at two members; this is
+    /// four facts).
+    private struct Harness {
+        let viewModel: ReaderViewModel
+        let port: RecordingPort
+        var box: BridgeBox
+        var interruptions: FakeInterruptionSource
+        var routes: FakeRouteChangeSource
+        var nowPlayingSink: RecordingNowPlayingSink
+    }
+
+    private final class BridgeBox {
+        var bridge: PlayerBridge?
+    }
+
+    func testOpeningRendersChaptersAndDerivesAnIdleTransport() {
+        let book = book(chapterTexts: [["One.", "Two."], ["Three."]])
+        let viewModel = openAndHold(book, store: tempStore()).viewModel
+
+        XCTAssertFalse(viewModel.state.loading)
+        XCTAssertFalse(viewModel.state.missing)
+        XCTAssertEqual(viewModel.state.bookTitle, "Test Book")
+        XCTAssertEqual(viewModel.state.chapters.map(\.title), ["Chapter 1", "Chapter 2"])
+        XCTAssertEqual(viewModel.state.status, .idle)
+        XCTAssertTrue(viewModel.state.transport.canPlayPause, "audio book: play available")
+        XCTAssertFalse(viewModel.state.transport.playing)
+    }
+
+    func testPlayLoadsTheFirstParagraphAndSavesThePosition() {
+        let book = book(chapterTexts: [["One.", "Two."]])
+        let store = tempStore()
+        let harness = openAndHold(book, store: store)
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing the first paragraph") { viewModel.state.status == .playing }
+        XCTAssertEqual(harness.port.loads.map(\.key), ["k-0-0"])
+        let key = positionStorageKey(bookId: "bk_test")
+        XCTAssertEqual(
+            store.load(storageKey: key),
+            StoredPosition(chapter: 0, index: 0, offset: 0)
+        )
+
+        guard let bridge = harness.box.bridge else {
+            XCTFail("the bridge never landed")
+            return
+        }
+        bridge.onReady(key: "k-0-0")
+        bridge.onSegmentDrained(key: "k-0-0")
+        waitUntil("advanced to the second paragraph") {
+            viewModel.state.active?.index == 1
+        }
+        XCTAssertEqual(
+            store.load(storageKey: key),
+            StoredPosition(chapter: 0, index: 1, offset: 0),
+            "the save cadence rides paragraph advances"
+        )
+    }
+
+    func testARestoredPositionSeedsPausedAtItsChapter() {
+        let book = book(chapterTexts: [["One."], ["Two."]])
+        let store = tempStore()
+        store.save(
+            storageKey: positionStorageKey(bookId: "bk_test"),
+            StoredPosition(chapter: 1, index: 0, offset: 0.5)
+        )
+
+        let harness = openAndHold(book, store: store)
+        let viewModel = harness.viewModel
+
+        XCTAssertEqual(viewModel.state.status, .paused)
+        XCTAssertEqual(viewModel.state.renderedChapter, 1, "the pane opens on the saved chapter")
+        XCTAssertEqual(viewModel.state.active?.chapter, 1)
+        XCTAssertTrue(harness.port.loads.isEmpty, "a restore never commands audio")
+    }
+
+    func testAStrayRestorePositionSeedsFreshIdle() {
+        let book = book(chapterTexts: [["One."]])
+        let store = tempStore()
+        store.save(
+            storageKey: positionStorageKey(bookId: "bk_test"),
+            StoredPosition(chapter: 99, index: 99, offset: 9.0)
+        )
+
+        let viewModel = openAndHold(book, store: store).viewModel
+
+        XCTAssertEqual(viewModel.state.status, .idle, "no phantom resume")
+        XCTAssertNil(viewModel.state.active)
+        XCTAssertEqual(viewModel.state.renderedChapter, 0)
+    }
+
+    func testJumpToChapterSeeksRendersAndPulsesTheLanding() {
+        let book = book(chapterTexts: [["One."], ["Two.", "Tail."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.jumpToChapter(1)
+
+        XCTAssertEqual(viewModel.state.renderedChapter, 1)
+        XCTAssertEqual(
+            viewModel.state.landing,
+            FfiParagraphPos(chapter: 1, index: 0),
+            "the landing pulse targets the chapter's first paragraph"
+        )
+        XCTAssertEqual(harness.port.loads.map(\.key), ["k-1-0"], "idle + seek starts playback there")
+        waitUntil("the landing pulse clears") { viewModel.state.landing == nil }
+    }
+
+    func testFollowDefersOnUserScrollAndRearmsOnTheNextParagraph() {
+        let book = book(chapterTexts: [["One.", "Two."], ["Three."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+
+        viewModel.onUserScrolled()
+        XCTAssertFalse(viewModel.state.follow)
+
+        guard let bridge = harness.box.bridge else {
+            XCTFail("the bridge never landed")
+            return
+        }
+        bridge.onReady(key: "k-0-0")
+        bridge.onSegmentDrained(key: "k-0-0")
+        waitUntil("advanced + re-armed") {
+            viewModel.state.active?.index == 1 && viewModel.state.follow
+        }
+    }
+
+    func testAChapterCrossingSwitchesTheRenderedChapter() {
+        let book = book(chapterTexts: [["One."], ["Two."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+        guard let bridge = harness.box.bridge else {
+            XCTFail("the bridge never landed")
+            return
+        }
+        bridge.onReady(key: "k-0-0")
+        bridge.onSegmentDrained(key: "k-0-0")
+        waitUntil("the spoken chapter renders") {
+            viewModel.state.renderedChapter == 1
+        }
+        XCTAssertEqual(viewModel.state.chapters[viewModel.state.renderedChapter].title, "Chapter 2")
+    }
+
+    func testATextOnlyBookRendersInert() {
+        // The no-store contract (see PlaybackBridgeTests' twin): the
+        // app host registers a segment store at launch, which upgrades
+        // text-only books to playable — inertness holds without one.
+        setSegmentStore(dir: nil)
+        defer { setSegmentStore(dir: nil) }
+        let quiet = book(chapterTexts: [["Words."]], audio: false)
+        let harness = openAndHold(quiet, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        XCTAssertFalse(viewModel.state.transport.canPlayPause)
+        XCTAssertTrue(harness.port.loads.isEmpty)
+        XCTAssertEqual(viewModel.state.status, .idle)
+    }
+
+    func testAFillingSessionUnlocksTheTextOnlyTransport() {
+        // Self-sufficient: the filling contract needs a registered
+        // store (the kernel arms text-only books only through it) —
+        // this test owns its own instead of riding the host's ambient
+        // registration.
+        let storeDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("taletrek-store-\(UUID().uuidString)", isDirectory: true)
+        setSegmentStore(dir: storeDir.path)
+        defer { setSegmentStore(dir: nil) }
+        let book = book(chapterTexts: [["One.", "Two."]], audio: false)
+        let harness = makeViewModel(book, store: tempStore())
+        // Set before the enqueued open task runs — the live job makes
+        // this open a filling session.
+        harness.viewModel.jobAlive = { true }
+        waitUntil("opened") { !harness.viewModel.state.loading }
+
+        XCTAssertTrue(harness.viewModel.state.fillingSession, "text-only + live job")
+        XCTAssertTrue(harness.viewModel.state.transport.canPlayPause, "play-while-filling")
+
+        harness.viewModel.play()
+        waitUntil("the kernel loads through the store seam") {
+            harness.viewModel.state.status == .playing
+        }
+        XCTAssertEqual(harness.port.loads.map(\.key), ["k-0-0"])
+    }
+
+    func testAMissingBookSurfacesTheMissingState() {
+        let viewModel = ReaderViewModel(
+            opener: { throw NSError(domain: "test", code: 1) },
+            store: tempStore(),
+            host: { book, _ in
+                PlayerBridge(kernel: TrekPlayer(book: book), port: RecordingPort())
+            }
+        )
+        waitUntil("the open fails") { !viewModel.state.loading }
+        XCTAssertTrue(viewModel.state.missing)
+    }
+
+    func testAnInterruptionPausesThroughTheKernelAndResumesWhenInvited() {
+        let book = book(chapterTexts: [["One.", "Two."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+
+        harness.interruptions.fire(.began)
+        waitUntil("interrupted into a kernel pause") { viewModel.state.status == .paused }
+
+        harness.interruptions.fire(.ended(shouldResume: true))
+        waitUntil("resumed by the platform's invitation") { viewModel.state.status == .playing }
+    }
+
+    func testAnInterruptionWhilePausedNeverWakesTheBook() {
+        let book = book(chapterTexts: [["One."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+        viewModel.pause()
+        waitUntil("paused by the user") { viewModel.state.status == .paused }
+
+        harness.interruptions.fire(.began)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        harness.interruptions.fire(.ended(shouldResume: true))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        XCTAssertEqual(viewModel.state.status, .paused, "a resting reader stays resting")
+    }
+
+    func testAnUnplugPausesThroughTheKernel() {
+        let book = book(chapterTexts: [["One.", "Two."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+        XCTAssertTrue(harness.routes.handler != nil, "the observation armed with playback")
+
+        harness.routes.fireUnplug()
+        waitUntil("the unplug paused through the kernel") { viewModel.state.status == .paused }
+        XCTAssertEqual(harness.port.stops, 1, "the kernel ordered the stop — engine-side never")
+        XCTAssertTrue(harness.routes.handler == nil, "paused: the observation torn down")
+    }
+
+    func testAnUnplugWhilePausedCannotWakeOrDoublePause() {
+        let book = book(chapterTexts: [["One."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+        viewModel.pause()
+        waitUntil("paused by the user") { viewModel.state.status == .paused }
+
+        harness.routes.fireUnplug()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        XCTAssertEqual(viewModel.state.status, .paused, "no transition from a gated observation")
+        XCTAssertEqual(harness.port.stops, 1, "the pause's own stop — nothing extra")
+    }
+
+    func testNowPlayingContentRidesTheSnapshot() {
+        let book = book(chapterTexts: [["One."], ["Two."]])
+        let harness = openAndHold(book, store: tempStore())
+        let viewModel = harness.viewModel
+
+        viewModel.play()
+        waitUntil("playing") { viewModel.state.status == .playing }
+
+        let titled = harness.nowPlayingSink.infos.filter {
+            $0[MPMediaItemPropertyTitle] as? String == "Test Book"
+        }
+        XCTAssertTrue(!titled.isEmpty, "the lock screen learns the book")
+        XCTAssertEqual(titled.last?[MPMediaItemPropertyAlbumTitle] as? String, "Chapter 1")
+        XCTAssertEqual(titled.last?[MPNowPlayingInfoPropertyPlaybackRate] as? Double, 1.0)
+    }
+}
+
+private extension ReaderViewModelTests {
     private func tempStore() -> PositionStore {
         PositionStore(
             fileURL: FileManager.default.temporaryDirectory
@@ -49,23 +391,13 @@ final class ReaderViewModelTests: XCTestCase {
         )
     }
 
-    /// The wired harness: view model + recording port + the bridge once
-    /// the open lands (SwiftLint keeps tuples at two members; this is
-    /// three facts).
-    private struct Harness {
-        let viewModel: ReaderViewModel
-        let port: RecordingPort
-        var box: BridgeBox
-    }
-
-    private final class BridgeBox {
-        var bridge: PlayerBridge?
-    }
-
     private func makeViewModel(
         _ book: FfiBook, store: PositionStore
     ) -> Harness {
         let port = RecordingPort()
+        let interruptions = FakeInterruptionSource()
+        let routes = FakeRouteChangeSource()
+        let nowPlayingSink = RecordingNowPlayingSink()
         // The test keeps a handle on the bridge so platform reports can
         // be driven the way the engine would (ready, drained) — it
         // lands asynchronously, hence the box.
@@ -81,9 +413,25 @@ final class ReaderViewModelTests: XCTestCase {
                 let bridge = PlayerBridge(kernel: kernel, port: port)
                 box.bridge = bridge
                 return bridge
-            }
+            },
+            nowPlayingHost: { bridge in
+                NowPlayingController(
+                    target: bridge,
+                    infoSink: nowPlayingSink,
+                    registry: StubRemoteRegistry()
+                )
+            },
+            interruptionSource: interruptions,
+            routeChangeSource: routes
         )
-        return Harness(viewModel: viewModel, port: port, box: box)
+        return Harness(
+            viewModel: viewModel,
+            port: port,
+            box: box,
+            interruptions: interruptions,
+            routes: routes,
+            nowPlayingSink: nowPlayingSink
+        )
     }
 
     private func waitUntil(
@@ -106,144 +454,5 @@ final class ReaderViewModelTests: XCTestCase {
         let harness = makeViewModel(book, store: store)
         waitUntil("the book opens") { !harness.viewModel.state.loading }
         return harness
-    }
-
-    func testOpeningRendersChaptersAndDerivesAnIdleTransport() {
-        let book = book(chapterTexts: [["One.", "Two."], ["Three."]])
-        let (viewModel, _, _) = openAndHold(book, store: tempStore())
-
-        XCTAssertFalse(viewModel.state.loading)
-        XCTAssertFalse(viewModel.state.missing)
-        XCTAssertEqual(viewModel.state.bookTitle, "Test Book")
-        XCTAssertEqual(viewModel.state.chapters.map(\.title), ["Chapter 1", "Chapter 2"])
-        XCTAssertEqual(viewModel.state.status, .idle)
-        XCTAssertTrue(viewModel.state.transport.canPlayPause, "audio book: play available")
-        XCTAssertFalse(viewModel.state.transport.playing)
-    }
-
-    func testPlayLoadsTheFirstParagraphAndSavesThePosition() {
-        let book = book(chapterTexts: [["One.", "Two."]])
-        let store = tempStore()
-        let (viewModel, port, bridge) = openAndHold(book, store: store)
-
-        viewModel.play()
-        waitUntil("playing the first paragraph") { viewModel.state.status == .playing }
-        XCTAssertEqual(port.loads.map(\.key), ["k-0-0"])
-        let key = positionStorageKey(bookId: "bk_test")
-        XCTAssertEqual(
-            store.load(storageKey: key),
-            StoredPosition(chapter: 0, index: 0, offset: 0)
-        )
-
-        bridge.onReady(key: "k-0-0")
-        bridge.onSegmentDrained(key: "k-0-0")
-        waitUntil("advanced to the second paragraph") {
-            viewModel.state.active?.index == 1
-        }
-        XCTAssertEqual(
-            store.load(storageKey: key),
-            StoredPosition(chapter: 0, index: 1, offset: 0),
-            "the save cadence rides paragraph advances"
-        )
-    }
-
-    func testARestoredPositionSeedsPausedAtItsChapter() {
-        let book = book(chapterTexts: [["One."], ["Two."]])
-        let store = tempStore()
-        store.save(
-            storageKey: positionStorageKey(bookId: "bk_test"),
-            StoredPosition(chapter: 1, index: 0, offset: 0.5)
-        )
-
-        let (viewModel, port, _) = openAndHold(book, store: store)
-
-        XCTAssertEqual(viewModel.state.status, .paused)
-        XCTAssertEqual(viewModel.state.renderedChapter, 1, "the pane opens on the saved chapter")
-        XCTAssertEqual(viewModel.state.active?.chapter, 1)
-        XCTAssertTrue(port.loads.isEmpty, "a restore never commands audio")
-    }
-
-    func testAStrayRestorePositionSeedsFreshIdle() {
-        let book = book(chapterTexts: [["One."]])
-        let store = tempStore()
-        store.save(
-            storageKey: positionStorageKey(bookId: "bk_test"),
-            StoredPosition(chapter: 99, index: 99, offset: 9.0)
-        )
-
-        let (viewModel, _, _) = openAndHold(book, store: store)
-
-        XCTAssertEqual(viewModel.state.status, .idle, "no phantom resume")
-        XCTAssertNil(viewModel.state.active)
-        XCTAssertEqual(viewModel.state.renderedChapter, 0)
-    }
-
-    func testJumpToChapterSeeksRendersAndPulsesTheLanding() {
-        let book = book(chapterTexts: [["One."], ["Two.", "Tail."]])
-        let (viewModel, port, _) = openAndHold(book, store: tempStore())
-
-        viewModel.jumpToChapter(1)
-
-        XCTAssertEqual(viewModel.state.renderedChapter, 1)
-        XCTAssertEqual(
-            viewModel.state.landing,
-            FfiParagraphPos(chapter: 1, index: 0),
-            "the landing pulse targets the chapter's first paragraph"
-        )
-        XCTAssertEqual(port.loads.map(\.key), ["k-1-0"], "idle + seek starts playback there")
-        waitUntil("the landing pulse clears") { viewModel.state.landing == nil }
-    }
-
-    func testFollowDefersOnUserScrollAndRearmsOnTheNextParagraph() {
-        let book = book(chapterTexts: [["One.", "Two."], ["Three."]])
-        let (viewModel, _, bridge) = openAndHold(book, store: tempStore())
-
-        viewModel.play()
-        waitUntil("playing") { viewModel.state.status == .playing }
-
-        viewModel.onUserScrolled()
-        XCTAssertFalse(viewModel.state.follow)
-
-        bridge.onReady(key: "k-0-0")
-        bridge.onSegmentDrained(key: "k-0-0")
-        waitUntil("advanced + re-armed") {
-            viewModel.state.active?.index == 1 && viewModel.state.follow
-        }
-    }
-
-    func testAChapterCrossingSwitchesTheRenderedChapter() {
-        let book = book(chapterTexts: [["One."], ["Two."]])
-        let (viewModel, _, bridge) = openAndHold(book, store: tempStore())
-
-        viewModel.play()
-        waitUntil("playing") { viewModel.state.status == .playing }
-        bridge.onReady(key: "k-0-0")
-        bridge.onSegmentDrained(key: "k-0-0")
-        waitUntil("the spoken chapter renders") {
-            viewModel.state.renderedChapter == 1
-        }
-        XCTAssertEqual(viewModel.state.chapters[viewModel.state.renderedChapter].title, "Chapter 2")
-    }
-
-    func testATextOnlyBookRendersInert() {
-        let quiet = book(chapterTexts: [["Words."]], audio: false)
-        let (viewModel, port, _) = openAndHold(quiet, store: tempStore())
-
-        viewModel.play()
-        XCTAssertFalse(viewModel.state.transport.canPlayPause)
-        XCTAssertTrue(port.loads.isEmpty)
-        XCTAssertEqual(viewModel.state.status, .idle)
-    }
-
-    func testAMissingBookSurfacesTheMissingState() {
-        let viewModel = ReaderViewModel(
-            opener: { throw NSError(domain: "test", code: 1) },
-            store: tempStore(),
-            host: { book, _ in
-                PlayerBridge(kernel: TrekPlayer(book: book), port: RecordingPort())
-            }
-        )
-        waitUntil("the open fails") { !viewModel.state.loading }
-        XCTAssertTrue(viewModel.state.missing)
     }
 }

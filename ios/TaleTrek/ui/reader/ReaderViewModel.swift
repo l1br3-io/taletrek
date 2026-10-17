@@ -27,6 +27,10 @@ struct ReaderUiState: Equatable {
     var bookTitle = ""
     var bookId: String?
     var audioPresent = true
+    /// A text-only book opened while its synth job is live — the
+    /// play-while-filling session (Android's `fillingSession` parity:
+    /// transport enabled, reads through the store, anchor follows).
+    var fillingSession = false
     var chapters: [ReaderChapter] = []
     var renderedChapter = 0
     var follow = true
@@ -36,12 +40,20 @@ struct ReaderUiState: Equatable {
     /// The outline-jump landing — the pane pulses this paragraph (the
     /// web `tt-nav-target` pattern, adopted cross-app).
     var landing: FfiParagraphPos?
+    /// The filling-book stall: the armed load exhausted into the typed
+    /// not-ready (job dead). The resume affordance's fact — playback
+    /// parked paused through the kernel, nothing skipped.
+    var audioStalled = false
     var transport = TransportUiState()
 }
 
 /// Builds the bridge for an opened book — production wires the real
 /// engine; tests wire a faked port over the same real kernel.
 typealias PlayerHost = (_ book: FfiBook, _ saved: StoredPosition?) -> PlayerBridge
+
+/// Builds the lock-screen controller over the bridge — production wires
+/// MediaPlayer, tests wire recorders.
+typealias NowPlayingHost = (PlayerBridge) -> NowPlayingController
 
 /// The reading surface's state owner: opens the book (restore seeds the
 /// starting chapter), renders per-chapter, and runs the sync loop —
@@ -56,38 +68,74 @@ final class ReaderViewModel: ObservableObject {
     private let opener: () throws -> FfiBook
     private let store: PositionStore
     private let host: PlayerHost
+    private let nowPlayingHost: NowPlayingHost
+    private let interruptionSource: InterruptionSource
+    private let routeChangeSource: RouteChangeSource
+
+    /// Whether a synth job is live right now — the not-ready hold's
+    /// liveness seam (production: the convert controller's running
+    /// phase; the app wires it).
+    var jobAlive: (() -> Bool)?
+
+    /// The live job's anchor-mover — position changes route here while
+    /// the open book is filling (production: the convert controller's
+    /// `reanchor`; the app wires it).
+    var onAnchorMoved: ((FfiAnchor) -> Void)?
+
+    /// The resume affordance's action — restart the filling job (the
+    /// app wires retry/resubmit; play resumes through the store).
+    var onResumePreparing: (() -> Void)?
 
     private var bridge: PlayerBridge?
+    private var nowPlaying: NowPlayingController?
+    private var routeGuard: RouteChangeGuard?
+    private var elapsedTimer: Timer?
+    private var wasPlayingBeforeInterruption = false
     private var lastPara: FfiParagraphPos?
     private var landingClearTask: Task<Void, Never>?
 
     init(
         opener: @escaping () throws -> FfiBook,
         store: PositionStore = .standard,
-        host: @escaping PlayerHost
+        host: @escaping PlayerHost,
+        nowPlayingHost: @escaping NowPlayingHost = { bridge in
+            NowPlayingController(
+                target: bridge,
+                infoSink: MediaNowPlayingSink(),
+                registry: MediaRemoteRegistry()
+            )
+        },
+        interruptionSource: InterruptionSource = SystemInterruptionSource(),
+        routeChangeSource: RouteChangeSource = SystemRouteChangeSource()
     ) {
         self.opener = opener
         self.store = store
         self.host = host
+        self.nowPlayingHost = nowPlayingHost
+        self.interruptionSource = interruptionSource
+        self.routeChangeSource = routeChangeSource
         open()
     }
 
     /// Production convenience: open the bundle at `path`.
-    convenience init(path: String, store: PositionStore = .standard) {
+    convenience init(path: String, store: PositionStore = .standard, jobAlive: @escaping () -> Bool = { false }) {
         self.init(
             opener: { try openBook(path: path) },
             store: store,
-            host: ReaderViewModel.productionHost(path: path)
+            host: ReaderViewModel.productionHost(path: path, jobAlive: jobAlive)
         )
     }
 
     /// The production host: engine + kernel (restored when a position
-    /// survives) + bridge, wired.
-    private static func productionHost(path: String) -> PlayerHost {
+    /// survives) + bridge, wired. `jobAlive` feeds the engine's
+    /// not-ready hold (the filling books' buffering seam).
+    private static func productionHost(
+        path: String, jobAlive: @escaping () -> Bool
+    ) -> PlayerHost {
         { book, saved in
             let kernel = saved.map { TrekPlayer.restore(book: book, position: $0.asFfi) }
                 ?? TrekPlayer(book: book)
-            let engine = AudioEngine(path: path)
+            let engine = AudioEngine(path: path, jobAlive: jobAlive)
             let bridge = PlayerBridge(kernel: kernel, port: engine)
             engine.attach(bridge)
             return bridge
@@ -111,6 +159,33 @@ final class ReaderViewModel: ObservableObject {
             bridge.onPositionChanged = { [weak self] position in
                 guard let self, let position else { return }
                 self.store.save(storageKey: storageKey, StoredPosition(position))
+                if !self.state.audioPresent {
+                    self.onAnchorMoved?(FfiAnchor(
+                        chapter: position.chapter,
+                        paragraph: position.index
+                    ))
+                }
+            }
+            bridge.onStallChanged = { [weak self] stalled in
+                self?.state.audioStalled = stalled
+            }
+            nowPlaying = nowPlayingHost(bridge)
+            // Headphones pulled mid-book pauses through the kernel —
+            // the unplug guard (never an engine-side pause, never an
+            // auto-resume on re-plug); armed only while playing, the
+            // same render fact the lock screen rides.
+            routeGuard = RouteChangeGuard(
+                pause: { [weak bridge] in bridge?.userPause() },
+                source: routeChangeSource
+            )
+            // A call or Siri pauses through the kernel — the same
+            // transition as the pause button; the platform's resume
+            // invitation plays only if the interruption actually
+            // interrupted playback (never wakes a resting reader).
+            interruptionSource.observe { [weak self] event in
+                Task { @MainActor in
+                    self?.handle(event)
+                }
             }
             let snapshot = bridge.snapshot
             state.loading = false
@@ -118,6 +193,7 @@ final class ReaderViewModel: ObservableObject {
             state.bookTitle = book.title
             state.bookId = book.bookId
             state.audioPresent = book.audioPresent
+            state.fillingSession = !book.audioPresent && (jobAlive?() ?? false)
             state.chapters = book.chapters.map {
                 ReaderChapter(title: $0.title, paragraphs: $0.paragraphs.map(\.text))
             }
@@ -132,6 +208,7 @@ final class ReaderViewModel: ObservableObject {
         state.active = snapshot.para
         state.skipped = snapshot.failures.skipped
         deriveTransport()
+        updateNowPlaying(snapshot)
         // The follow policy: a user scroll defers auto-scroll; the NEXT
         // paragraph re-arms it and the pane tracks the spoken chapter
         // again.
@@ -144,6 +221,74 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
+    /// The lock screen's facts from a snapshot: book/chapter currency,
+    /// play state, and the armed segment's honest times. The system
+    /// extrapolates elapsed between pushes via the rate, so the ticker
+    /// only refreshes foreground drift.
+    private func updateNowPlaying(_ snapshot: FfiStateSnapshot) {
+        if let para = snapshot.para, state.chapters.indices.contains(Int(para.chapter)) {
+            nowPlaying?.update(
+                content: NowPlayingContent(
+                    title: state.bookTitle,
+                    chapterTitle: state.chapters[Int(para.chapter)].title,
+                    chapterNumber: Int(para.chapter) + 1,
+                    chapterCount: state.chapters.count
+                )
+            )
+        }
+        nowPlaying?.setPlaying(snapshot.status == .playing)
+        routeGuard?.setPlaying(snapshot.status == .playing)
+        refreshElapsed()
+        tickElapsedTimer(playing: snapshot.status == .playing)
+    }
+
+    private func refreshElapsed() {
+        if let times = bridge?.nowPlayingTimes {
+            nowPlaying?.update(times: times)
+        }
+    }
+
+    private func tickElapsedTimer(playing: Bool) {
+        if playing, elapsedTimer == nil {
+            elapsedTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) {
+                [weak self] _ in
+                // Foreground drift refresh only — the system
+                // extrapolates elapsed between pushes via the rate, so
+                // the lock screen needs no timer of its own.
+                Task { @MainActor in
+                    self?.refreshElapsed()
+                }
+            }
+        } else if !playing, let elapsedTimer {
+            elapsedTimer.invalidate()
+            self.elapsedTimer = nil
+        }
+    }
+
+    private func handle(_ event: AudioInterruption) {
+        switch event {
+        case .began:
+            wasPlayingBeforeInterruption = bridge?.snapshot.status == .playing
+            bridge?.userPause()
+        case let .ended(shouldResume):
+            if shouldResume, wasPlayingBeforeInterruption {
+                bridge?.userPlay()
+            }
+            wasPlayingBeforeInterruption = false
+        }
+    }
+
+    /// The scene-phase flush — positions already persist on every
+    /// kernel move; this is the backgrounding belt-and-braces write.
+    func flushPosition() {
+        guard let bookId = state.bookId, let position = bridge?.position else { return }
+        store.save(storageKey: positionStorageKey(bookId: bookId), StoredPosition(position))
+    }
+
+    deinit {
+        elapsedTimer?.invalidate()
+    }
+
     /// Enabled-state derivation — bounds facts of the snapshot, nothing
     /// more.
     private func deriveTransport() {
@@ -151,10 +296,12 @@ final class ReaderViewModel: ObservableObject {
             let para = state.active,
             state.chapters.indices.contains(Int(para.chapter))
         else {
-            state.transport = TransportUiState(canPlayPause: state.audioPresent)
+            state.transport = TransportUiState(
+                canPlayPause: state.audioPresent || state.fillingSession
+            )
             return
         }
-        let audio = state.audioPresent
+        let audio = state.audioPresent || state.fillingSession
         let lastChapter = state.chapters.count - 1
         let lastParagraph = UInt32(max(state.chapters[lastChapter].paragraphs.count - 1, 0))
         state.transport = TransportUiState(
@@ -199,6 +346,15 @@ final class ReaderViewModel: ObservableObject {
     }
 
     func play() {
+        bridge?.userPlay()
+    }
+
+    /// The resume affordance: restart the filling job (the app's
+    /// retry/resubmit), then play — the parked machine re-issues the
+    /// load and the now-live hold waits the segment out through the
+    /// store.
+    func resumePreparingAudio() {
+        onResumePreparing?()
         bridge?.userPlay()
     }
 

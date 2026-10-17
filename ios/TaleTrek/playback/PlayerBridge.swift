@@ -52,6 +52,15 @@ final class PlayerBridge {
     /// Durable-position changes, deduped — one report per actual move.
     var onPositionChanged: ((FfiPosition?) -> Void)?
 
+    /// The audio-stall signal (progressive books): `true` when the
+    /// armed load exhausted into the typed not-ready (job dead + the
+    /// filling book's segment never landed), `false` when it clears.
+    /// The reader renders the resume affordance on it.
+    var onStallChanged: ((Bool) -> Void)?
+
+    /// Whether the live load is stalled — the resume affordance's fact.
+    private(set) var stalled = false
+
     init(kernel: TrekPlayer, port: AudioPort, session: PlaybackSession = AudioSession()) {
         self.kernel = kernel
         self.port = port
@@ -104,6 +113,13 @@ final class PlayerBridge {
         kernel.position()
     }
 
+    /// The Now Playing currency straight from the engine — the armed
+    /// segment's duration + audio-time elapsed, `nil` when nothing is
+    /// armed. Render facts; the lock screen is their only consumer.
+    var nowPlayingTimes: SegmentTimes? {
+        port.nowPlayingTimes()
+    }
+
     // --- engine reports in (the sink side) --------------------------------
 
     private func dispatch(_ event: FfiPlayerEvent) {
@@ -144,6 +160,10 @@ final class PlayerBridge {
 extension PlayerBridge: EngineEventSink {
     func onReady(key: String) {
         pendingKey = nil
+        if stalled {
+            stalled = false
+            onStallChanged?(false)
+        }
     }
 
     func onSegmentDrained(key: String) {
@@ -153,6 +173,43 @@ extension PlayerBridge: EngineEventSink {
 
     func onSegmentFailed(key: String, error: String) {
         pendingKey = nil
+        if error == SegmentNotReady.errorMarker {
+            // The filling book's job died with the armed segment
+            // unlanded. NEVER the kernel's skip path — the machine
+            // parks paused (its own sanctioned transition, ordering the
+            // stop) and the reader surfaces the resume affordance; a
+            // resumed job + play re-loads through the store.
+            stalled = true
+            onStallChanged?(true)
+            dispatch(.pause)
+            return
+        }
         dispatch(.segmentFailed(key: key, error: error))
+    }
+}
+
+/// The lock screen may command the bridge exactly as the transport bar
+/// does — the same user events, the kernel's same transitions (a
+/// remote chapter press is indistinguishable from an in-app tap, the
+/// task-006 criterion).
+extension PlayerBridge: RemoteCommandTarget {
+    var isPlaying: Bool {
+        snapshot.status == .playing
+    }
+
+    func play() {
+        userPlay()
+    }
+
+    func pause() {
+        userPause()
+    }
+
+    func nextChapter() {
+        userNextChapter()
+    }
+
+    func prevChapter() {
+        userPrevChapter()
     }
 }

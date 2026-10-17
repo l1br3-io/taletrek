@@ -27,7 +27,7 @@ pub use book::{
     open_book, read_segment, read_segment_progressive, set_segment_store, FfiBook, FfiChapter,
     FfiParagraph, FfiSegmentStatus,
 };
-pub use decode::{decode_segment, FfiDecodedAudio};
+pub use decode::{decode_segment, decode_segment_bytes, FfiDecodedAudio};
 pub use error::FfiError;
 pub use export::export_merged_audio;
 pub use pipeline::{
