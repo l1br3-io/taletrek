@@ -64,3 +64,4 @@ ios/TaleTrek.xcodeproj/xcuserdata/
 ios/DerivedData/
 SPEC*.md
 /plans/
+.zcode/plans
